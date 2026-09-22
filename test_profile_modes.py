@@ -14,6 +14,25 @@ class ProfileModesTest(unittest.TestCase):
     setUp = test_forge.ForgeTest.setUp
     tearDown = test_forge.ForgeTest.tearDown
 
+    def test_manual_yaml_free_price_saves_pool_before_native_refresh(self):
+        from profile_modes import is_free_model
+        (self.agent/'models.yml').write_text('''providers:
+  manual:
+    models:
+      - id: sample-free
+        name: Sample Free
+        cost: {input: 0, output: 0.0, cacheRead: 0}
+''')
+        self.assertEqual(self.app.state['catalog'], {})
+        model = self.app.mode_catalog()['manual/sample-free']
+        self.assertTrue(is_free_model(model))
+        pools = {'free-good': ['manual/sample-free'], 'free-fast': []}
+        self.app.save_pools({'revision': self.app.pools_revision(), 'pools': pools})
+        self.assertEqual(self.app.pools(), pools)
+        for key in ('input', 'output'):
+            with self.subTest(boolean_price=key):
+                self.assertFalse(is_free_model({**model, 'cost': {**model['cost'], key: False}}))
+
     def test_bridge_free_label_is_accepted_by_shared_pools(self):
         from profile_modes import validate_pools, is_free_model
         model = {'id': 'big-pickle', 'name': '[FREE] Big Pickle', 'cost': {'input': 0, 'output': 0}}

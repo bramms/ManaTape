@@ -2,6 +2,15 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const op=require('./static/operator-core.js');
 const now=Date.UTC(2026,8,19,12),report={at:now/1000,limits:[]};
+test('CUT labels preserve Contributor, versions and namespaces when catalog names omit them',()=>{
+ const cases=[
+  ['big-pickle','[FREE] Big Pickle','[FREE] Big Pickle'],
+  ['muse-spark-1.3-contributor-free','Muse Spark 1.3 (Free)','muse-spark-1.3-contributor-free'],
+  ['muse-spark-1.3','Muse Spark','muse-spark-1.3'],
+  ['lab/model-v2','Model v2','lab/model-v2'],
+ ];
+ for(const [id,name,expected] of cases)assert.equal(op.displayModelName(id,name),expected);
+});
 test('pace compares used share with elapsed share, not remaining share',()=>{
  const l={window:'7 days',remaining:80,resets:now+3.5*864e5};
  const q=op.pace(l,report,now);assert.equal(q.kind,'reserve');assert.equal(q.delta,-30);assert.equal(q.lasts,true);

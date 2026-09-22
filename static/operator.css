@@ -65,7 +65,8 @@
 /* The vacant tape bed is a real insertion target, not a one-character button. */
 .desktop-graph .reserve-drop{width:auto;min-width:0;height:38px;min-height:38px;display:flex;align-items:center;gap:7px;justify-content:flex-start;padding:0 9px;border:1px dashed transparent;border-radius:1px;background:none;box-shadow:none;color:var(--quiet);font:15px ui-monospace,monospace;text-align:left}
 /* Keep the append target reachable while long tracks scroll horizontally. */
-.desktop-graph .reserve-drop{position:sticky;right:0;z-index:3;min-width:76px;background:var(--well);border-color:var(--edge)}
+.desktop-graph .reserve-drop{position:sticky;left:114px;right:0;z-index:3;min-width:76px;background:var(--well);border-color:var(--edge)}
+.desktop-graph .role-name,.desktop-graph .graph-head>span:first-child{position:sticky;left:0;z-index:4;background:var(--deck);box-shadow:2px 0 0 var(--edge)}
 .reserve-drop small{font:9px ui-monospace,monospace;opacity:.65}.reserve-drop:after{content:'';height:2px;flex:1;background:var(--edge);opacity:.35}
 .desktop-graph .reserve-drop:hover,.desktop-graph .reserve-drop:focus-visible,.cut-dragging .reserve-drop{border-color:var(--edge);background:color-mix(in srgb,var(--tape),var(--well) 65%);box-shadow:inset 0 1px 3px var(--shade)}
 .cut-dragging .reserve-drop.cut-drop-target{background:var(--chosen-lo);border-color:var(--accent);outline:1px solid var(--accent)!important;outline-offset:-1px}
@@ -151,9 +152,9 @@
  .micro .mw-label,.micro .mw-reset,.micro .mw-pace,.micro .mw-forecast{font-size:10px}
  .window{padding-bottom:78px}
  .operator-dock .profile-actions{position:fixed!important;left:16px;right:16px;bottom:calc(8px + env(safe-area-inset-bottom))!important;width:auto!important;z-index:65;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;background:linear-gradient(150deg,var(--face-hi),var(--face-lo));border:1px solid var(--edge-lit);border-radius:7px;box-shadow:0 3px 9px var(--shade),inset 0 1px var(--shine)}
- .operator-dock .profile-actions .tool{min-height:34px;font-size:12px!important;padding:7px 10px!important}
- .operator-dock .profile-actions .icon-only{width:36px}
- .cuts-drawer{bottom:68px}
+ .operator-dock .profile-actions .tool{min-height:44px;font-size:11px!important;padding:7px 8px!important}
+ .operator-dock .profile-actions .icon-only{width:44px}.operator-dock .profile-actions{left:10px;right:10px;gap:6px;padding:6px}.operator-dock .action-scope{font-size:10px;max-width:65px}
+ .cuts-drawer{bottom:78px}
 }
 
 /* HEALTH is a readable resource overlay, independent of the primary/GPU edge. */
@@ -170,12 +171,12 @@
 .demo-banner a{color:var(--accent)}
 
 /* Small transport keys attached to the selected CUT, not a dialog of commands. */
-.picker.cut-tools{display:flex;flex-direction:row;align-items:center;gap:5px;width:max-content;max-width:calc(100vw - 24px);padding:5px;border:1px solid var(--edge-lit);border-bottom:2px solid var(--key-lip);border-radius:5px;background:var(--well);box-shadow:0 3px 6px var(--shade),inset 0 1px var(--shine);overflow:visible;max-height:none;--picker-docked:0}
+.picker.cut-tools{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;gap:5px;width:max-content;max-width:calc(100vw - 24px);padding:5px;border:1px solid var(--edge-lit);border-bottom:2px solid var(--key-lip);border-radius:5px;background:var(--well);box-shadow:0 3px 6px var(--shade),inset 0 1px var(--shine);overflow:visible;max-height:none;--picker-docked:0}
 .cut-tools .cut-key{display:flex;align-items:center;gap:6px;min-height:34px;padding:6px 9px;color:var(--ink);font:10px ui-monospace,monospace;border:1px solid var(--edge-lit);border-bottom-color:var(--key-lip);border-radius:3px;background:linear-gradient(145deg,var(--face-hi),var(--face-lo));box-shadow:0 2px 1px var(--key-lip),0 3px 3px var(--shade)}
-.cut-key b{font-weight:500}.cut-key>span{font-size:15px;color:var(--accent)}.cut-eject>span{color:var(--op-red)}
+.cut-move-keys{display:flex;gap:5px}.cut-key:disabled{opacity:.4;cursor:default}.cut-key b{font-weight:500}.cut-key>span{font-size:15px;color:var(--accent)}.cut-eject>span{color:var(--op-red)}
 .cut-tools .cut-key:active{transform:translateY(1px);background:var(--well);box-shadow:inset 0 1px 3px var(--shade)}
 .cut-tools .cut-key:focus-visible{outline:0;box-shadow:inset 0 -2px var(--accent),0 2px 1px var(--key-lip)}
-.cut-tools .cut-tools-close{padding:5px;min-width:26px;font-size:16px;background:none;border-color:transparent;box-shadow:none;color:var(--quiet)}
+.cut-tools .cut-tools-close{padding:5px;min-width:32px;font-size:16px;background:none;border-color:transparent;box-shadow:none;color:var(--quiet)}
 .quality-readout,.quality-basis{display:block}.quality-readout{font:9px/1.5 ui-monospace,monospace;color:var(--ink)}.quality-readout:before{content:'';display:inline-block;width:4px;height:4px;margin-right:5px;border-radius:50%;background:var(--op-green)}.quality-readout.limited:before{background:var(--op-amber)}.quality-basis{font-size:8px;line-height:1.4}
 /* Each subscription is a separate recessed meter module with a physical edge. */
 .micro .meter-channel,.micro .meter-channel:first-child,.micro .meter-channel:last-child{flex-basis:max(124px,calc(var(--window-count)*96px + 16px));padding:6px 7px;border:1px solid var(--edge);border-top-color:var(--key-lip);border-bottom-color:var(--shine);border-radius:4px;background:var(--lcd);box-shadow:inset 0 1px 3px var(--shade),0 1px var(--shine);gap:6px;color:var(--lcd-ink)}
@@ -193,26 +194,51 @@
 .node-name:focus-visible,.tree-line>button[data-edit]:focus-visible{outline:0!important;box-shadow:inset 0 -2px var(--accent)!important}
 @media(forced-colors:active){.node-name:focus-visible,.tree-line>button[data-edit]:focus-visible{outline:2px solid Highlight!important}}
 
-/* Replacement CUTS share the montage dimensions, materials and compact controls. */
+/* Editors are interchangeable trays; CUT identity and controls stay the same. */
 .mode-panel{padding:10px 12px;border-radius:6px;border-top-color:var(--edge);border-bottom-color:var(--shine);box-shadow:inset 0 2px 4px var(--shade),0 1px var(--shine)}
-.mode-panel-head{gap:10px;font:10px/1.4 ui-monospace,monospace;min-width:0}
+.edit-tray:focus{outline:none}.edit-tray:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.mode-panel-head{gap:10px;font:10px/1.4 ui-monospace,monospace;min-width:0;flex-wrap:wrap}
 .mode-panel-head>b{font:10px ui-monospace,monospace;letter-spacing:.5px;color:var(--ink)}
 .mode-panel-head label{min-width:0}.mode-panel-head #mode-scope{min-width:0;max-width:260px;font:11px ui-monospace,monospace}
+.tray-scope{font:10px/1.5 ui-monospace,monospace;color:var(--quiet)}
+.edit-tray-head .tray-close{margin-left:auto;flex:0 0 32px}
 #forge-direct .mode-panel .mode-explainer{margin:8px 0;font:10px/1.5 ui-monospace,monospace}
 .mode-panel .alternative-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(0,var(--clip-width,180px)));gap:5px 2px;min-width:0}
 .alternative-cut{cursor:grab;scroll-margin-block:140px}.alternative-cut .alternative-label{cursor:grab;font-family:ui-monospace,monospace}
 .alternative-order{font:8px ui-monospace,monospace;color:var(--quiet);margin-right:5px}
 .alternative-cut .effort-select{font:8px/13px ui-monospace,monospace;min-height:14px;padding-top:0;padding-bottom:0;max-width:56px}
 .mode-panel-foot{align-items:center;padding-top:7px}.mode-panel-foot small{font:9px/1.5 ui-monospace,monospace;color:var(--muted)}
+.tray-toggle{min-height:30px;height:30px;padding:4px 9px;font:10px ui-monospace,monospace;white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
+.tray-toggle:before{content:'';display:block;width:4px;height:4px;border-radius:1px;background:var(--quiet);opacity:.6}
+.tray-toggle[aria-expanded=true]{background:var(--well);box-shadow:var(--inset)}
+.tray-toggle[aria-expanded=true]:before{background:var(--orange);opacity:1}
+.action-scope{font:10px ui-monospace,monospace;color:var(--quiet);max-width:105px;line-height:1.4}
+.cut-placement{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;margin:8px 0;background:var(--well);border:1px solid var(--edge);border-left:3px solid var(--accent);border-radius:5px;font:11px/1.5 ui-monospace,monospace}.cut-placement span{min-width:0;overflow-wrap:anywhere}.cut-placement .tool{min-height:44px;flex-shrink:0}
+.cut-title{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cut-meta{font-family:ui-monospace,monospace}.cut-provider{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.collection-cut .cut-title{font:500 11px/1.4 ui-monospace,monospace}.collection-cut .cut-meta{display:flex;align-items:center;gap:4px;font-size:10px;min-width:0}
+.collection-cut .cut-free{position:static;font-size:8px;line-height:11px}
+.catalog-selection{display:none}
 @container forge (max-width:900px){
  .mode-panel .alternative-list{grid-template-columns:minmax(0,1fr);gap:5px}
- .mode-panel .alternative-cut{height:56px;padding:5px 7px!important;justify-content:center;gap:4px}
- .alternative-cut .alternative-label{font-size:11px;line-height:16px;min-height:20px}.alternative-cut .node-meta{height:20px;min-height:20px}
- .alternative-cut .provider-code{font-size:9px}.alternative-cut .effort-select{font-size:10px;min-height:22px}.alternative-cut .slot-actions{width:28px;min-height:24px}
+ .mode-panel .node.cut-surface{position:relative;height:auto;min-height:56px;padding:5px 118px 5px 7px!important;display:flex;flex-direction:column;justify-content:center}
+ .mode-panel .node-name,.mode-panel .alternative-label{font:500 12px/16px ui-monospace,monospace;min-height:44px;width:100%;height:auto;padding:0 0 20px!important;text-align:left;white-space:normal;overflow-wrap:anywhere}
+ .mode-panel .node-name .cut-title{white-space:normal;overflow:visible;text-overflow:clip}
+ .mode-panel .node-meta{position:static;display:contents}
+ .mode-panel .cut-provider{position:absolute;bottom:7px;left:24px;max-width:calc(100% - 190px);font:10px/14px ui-monospace,monospace;pointer-events:none}
+ .mode-panel .tape-health{position:absolute;bottom:8px;left:8px;pointer-events:none}
+ .mode-panel .node .cut-free{top:auto;bottom:7px;right:119px;font-size:8px;line-height:11px}
+ .mode-panel .effort-control{position:absolute;right:50px;top:6px;width:64px;max-width:64px;height:44px}
+ .mode-panel .effort-rotor{display:none}#forge-direct .mode-panel .effort-control .effort-select{font-size:10px;min-height:44px;height:44px;max-height:none;width:64px;max-width:64px}
+ .mode-panel .slot-actions{position:absolute;right:4px;top:6px;width:44px;min-width:44px;height:44px;min-height:44px;font-size:18px}
+ .mode-panel .reserve-drop{min-height:44px!important}
+ .mode-panel-head>.tool,.mode-panel-foot>.tool{min-height:44px}
+ .edit-tray-head .tray-close{flex-basis:44px}
 }
 @container forge (max-width:720px){
- .mode-panel{padding:5px}.mode-panel-head{gap:7px}.mode-panel-head>b{flex:1}.mode-panel-head label{order:2;flex:1 1 100%}.mode-panel-head #mode-scope{flex:1;max-width:none}.mode-panel-head>.icon-only{margin-left:0}.mode-panel-head>.tool:not(.icon-only){order:3}
- .mode-panel-foot{gap:9px}.mode-panel-foot>.tool{min-height:34px}
+ .mode-panel{padding:6px}.mode-panel-head{gap:7px}.mode-panel-head>b{flex:1}.mode-panel-head label{order:2;flex:1 1 100%}.mode-panel-head #mode-scope{flex:1;max-width:none;min-height:44px}
+ .mode-panel-head>.tool:not(.icon-only){order:3}.tray-scope{flex-basis:100%;order:2}
+ .mode-panel-foot{gap:9px}.tray-toggle{min-height:44px;height:44px;font-size:11px}
 }
 
 /* The circuit selector and its CUTS key form one fixed transport module. */
@@ -227,9 +253,9 @@
 .transport-bar .tariff-timeline{grid-column:2!important;grid-row:1!important;max-width:none;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
 @container forge (max-width:600px){
  .transport-bar .profile-mode-bar{grid-template-columns:minmax(0,1fr)!important;gap:8px!important}
- .mode-control-bank{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:36px 14px;gap:4px 10px}
+ .mode-control-bank{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:44px 14px;gap:4px 10px}
  .mode-control-bank .mode-shuttle-label{min-width:0}.mode-control-bank .mode-shuttle-label small{font-size:8px}
- .transport-bar .mode-control-bank .mode-tools{grid-column:2;grid-row:1}.mode-control-bank .mode-tools .tool{padding-inline:6px;font-size:9px}
+ .transport-bar .mode-control-bank .mode-tools{grid-column:2;grid-row:1}.mode-control-bank .mode-tools .tool{padding-inline:8px;font-size:11px;min-height:44px;height:44px}
  .mode-control-bank .mode-save-note{grid-column:1/-1;grid-row:2}
  .transport-bar .tariff-timeline{grid-column:1!important;grid-row:2!important}
 }
@@ -298,7 +324,16 @@
 .analysis-screen:has(.scope-empty) .scope-grid{border:0;background:none}
 .analysis-screen:has(.scope-empty) .scope-empty{inset:20% 8%}
 @container analysis-main (max-width:650px){.analysis-main .cut-ledger>header,.analysis-main .ledger-cut{grid-template-columns:minmax(0,1fr) 55px 100px;gap:8px}.analysis-main .cut-ledger>header>span:last-child,.analysis-main .ledger-cut>span:last-child{display:none}}
-@container forge (max-width:600px){.analysis-main{display:contents}.analysis-main .cut-ledger,.analysis-main .pagination{width:100%;order:3}.analysis-main .cut-ledger>header,.analysis-main .ledger-cut{grid-template-columns:minmax(0,1fr) 47px 88px;gap:7px}}
+@container forge (max-width:600px){
+ .analysis-layout{display:flex;flex-direction:column}.analysis-main{display:contents}
+ .catalog-surface .surface-controls,.catalog-surface .analysis-source-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0;padding:6px 0}.catalog-surface .op-selector{min-width:0;max-width:none;width:100%;gap:4px}.catalog-surface .selector-content{min-width:0;flex:1}.catalog-surface .selector-content select{font-size:10px;min-height:44px}.catalog-surface .surface-controls>.tool{grid-column:1/-1;justify-self:end;min-height:44px}.catalog-surface .analysis-source-controls>.search{grid-column:1/-1;width:100%;max-width:none;min-height:44px}.catalog-surface .analysis-source-controls>.search input{font-size:16px}.catalog-selection{align-items:flex-start;flex-wrap:wrap}.catalog-selection .tool{margin-left:auto}
+ .analysis-layout .analysis-screen{order:2;width:100%}.analysis-main .cut-ledger{width:100%;order:0;margin-top:0}.analysis-main .pagination{width:100%;order:1}
+ .analysis-inspector{display:none}.catalog-selection{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:8px 0;font:11px/1.5 ui-monospace,monospace}.catalog-selection>span{min-width:0;overflow-wrap:anywhere}.catalog-selection .tool{min-height:44px;flex-shrink:0}
+ .analysis-main .cut-ledger>header,.analysis-main .ledger-cut{grid-template-columns:minmax(0,1fr) 47px 88px;gap:7px}
+ .cut-bin{grid-template-columns:minmax(0,1fr)!important}.collection-cut{min-height:56px}.collection-cut .cut-title{font-size:12px}.collection-cut .cut-meta{font-size:10px}.collection-cut .cut-free{font-size:8px}
+ .picker.cut-tools{gap:6px;padding:7px}.cut-tools .cut-key{min-height:44px;font-size:11px;padding:7px 9px}.cut-tools .cut-tools-close{min-width:44px;margin-left:auto}.cut-move-keys{gap:6px}
+ .tree-line small{font-size:10px}.tree-line strong{font-size:12px}
+}
 
 /* The top edge resizes the collection without touching profile drafts. */
 .cuts-drawer{height:var(--cuts-height,min(290px,43vh));max-height:calc(100dvh - 60px);padding-top:22px}
@@ -314,14 +349,29 @@
 .pool-card:disabled{cursor:default;opacity:.6}.pool-card.armed{outline:2px solid var(--accent)}
 .pool-block .node-name{font-family:ui-monospace,monospace}.pool-count{font:9px ui-monospace,monospace;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pool-editor{margin-bottom:12px}.pool-editor .mode-panel-head{flex-wrap:wrap}
-.pool-line{margin-top:12px;min-width:0}.pool-line>strong{display:block;font:11px ui-monospace,monospace;margin-bottom:6px}
+.pool-tabs{display:flex;gap:4px;margin:10px 0 6px;padding:4px;width:max-content;max-width:100%;background:var(--well);border:1px solid var(--edge);border-radius:5px;box-shadow:var(--inset)}.pool-tab{min-height:32px;font:10px ui-monospace,monospace}.pool-tab[aria-pressed=true]{background:var(--chosen-lo);box-shadow:inset 0 -2px var(--accent);border-color:var(--edge)}.pool-line{margin-top:6px;min-width:0}.pool-line>strong{display:block;font:11px ui-monospace,monospace;margin-bottom:6px}
 .pool-editor .node{height:38px;min-width:0}.pool-editor .reserve-drop{position:static;grid-column:auto;min-height:38px}
 .pool-mobile{min-height:56px;margin:5px 0;padding:6px!important}
-@container forge (max-width:900px){.pool-editor .node{height:56px}.pool-editor .node-name{font-size:11px;line-height:20px}.pool-editor .slot-actions{min-width:28px;min-height:24px}.pool-editor .node-meta{height:22px}.pool-editor .effort-select{min-height:22px}.pool-editor .reserve-drop{min-height:42px}}
-@container forge (max-width:400px){.pool-shelf{gap:6px}.pool-bank{width:100%}.pool-bank .pool-card{flex:1}.pool-editor .mode-panel-head>b{flex-basis:100%}}
+
+@container forge (max-width:600px){.pool-shelf{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.pool-bank{width:auto}.pool-bank .pool-card{width:100%;min-height:56px}.pool-shelf>small{font-size:10px;line-height:1.5}.pool-shelf>.tray-toggle{justify-self:start}.pool-editor .mode-panel-head>b{flex:1 1 120px}}
 /* Shared pool editing uses the existing CUT surface, with its own save scope. */
 .pool-editor .mode-panel-head{justify-content:flex-start;gap:6px}.pool-editor .mode-panel-head>b{margin-right:auto}
 #forge-direct .pool-editor .reserve-drop{position:static;grid-column:auto;width:100%;min-width:76px;max-width:none;min-height:38px;font:11px ui-monospace,monospace;white-space:nowrap;display:flex;align-items:center;justify-content:center;padding:6px}
+
+/* Mobile montage starts with the tape; quota detail is one explicit disclosure. */
+.mobile-meter-key{display:none}.scale-key{font:9px ui-monospace,monospace;padding:5px;min-height:30px;white-space:nowrap}
+@container forge (max-width:600px){
+ .mobile-meter-key{display:inline-flex;margin:3px 0 10px}.meter-bank[data-mobile-expanded=false]{display:none}
+ .operator-dock .dock-context:has(#operator-role){flex:1 1 100%;min-width:0;gap:8px;padding-top:3px}
+ .dock-context:has(#operator-role)>span{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;flex:1}
+ .dock-context .dock-role-label{min-width:0;flex:1}.dock-context .dock-role-label select{width:100%;max-width:100%;min-height:44px}
+ .dock-context #quality-status{flex:0 1 135px;max-width:135px;font-size:9px}.dock-context .quality-basis{display:none}
+ .pool-tabs{width:100%}.pool-tab{min-height:44px;flex:1;font-size:11px;padding-inline:5px}
+ .pool-mobile{padding:6px 52px 6px 24px!important;position:relative}.pool-mobile .node-name{min-height:23px;font-size:12px}.pool-mobile .pool-count{font-size:10px}
+ .pool-mobile .slot-actions{position:absolute;right:4px;top:6px;width:44px;min-width:44px;min-height:44px;height:44px;font-size:18px}
+ .window:has(.cut-tools) .operator-dock .profile-actions.dirty{visibility:visible}
+ .scale-key{min-width:44px;min-height:44px}.bridge-switch{min-width:0}
+}
 
 /* Project selection shares the existing responsive control dock. */
 .project-control{display:flex;flex-direction:column;gap:4px;min-width:120px;max-width:230px}.project-control small{font-size:10px}.project-control select{max-width:100%;min-height:36px}

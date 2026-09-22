@@ -2,6 +2,11 @@
 const ManaOperator=(()=>{
  const clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,v));
  const normalize=s=>String(s||'').toLowerCase().split('/').at(-1).replace(/:free$/,'').replace(/[._]/g,'-');
+ function displayModelName(modelId,catalogName){
+  const id=String(modelId??''),name=String(catalogName??''),words=value=>value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+  // A friendly label must retain the full version, variant and namespace.
+  return name&&(' '+words(name)+' ').includes(' '+words(id)+' ')?name:id;
+ }
  function isPaidDeepSeek(route,model){const raw=String(route).replace(/:(off|minimal|low|medium|high|xhigh|max|auto)$/,'');return /^deepseek(?:[-_.:]|$)/i.test(raw.split('/').at(-1))&&!isFreeModel(model);}
  function isFreeModel(m){const c=m?.cost;return Number.isFinite(c?.input)&&Number.isFinite(c?.output)&&c.input===0&&c.output===0&&!c.cacheRead&&!c.cacheWrite&&/(^|[\s:/_()\[\]-])free($|[\s:/_()\[\]-])/i.test(m.id+' '+m.name);}
  function transferCut(source,target,from,to,sameTrack){
@@ -94,6 +99,6 @@ const ManaOperator=(()=>{
   if(!weights||Object.keys(weights).some(k=>!Number.isFinite(record.scores[k])))return null;
   const total=Object.values(weights).reduce((a,b)=>a+b,0);return total?Object.entries(weights).reduce((n,[k,w])=>n+record.scores[k]*w,0)/total:null;
  }
- return {normalize,isFreeModel,isPaidDeepSeek,transferCut,profileName,duration,pace,applies,health,promote,quality,evidence,score};
+ return {normalize,displayModelName,isFreeModel,isPaidDeepSeek,transferCut,profileName,duration,pace,applies,health,promote,quality,evidence,score};
 })();
 if(typeof module!=='undefined')module.exports=ManaOperator;

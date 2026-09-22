@@ -60,3 +60,20 @@ test('replacement surface enters once; edits, picker typing and preview refresh 
  render(false);render(true);assert.equal(panels.at(-1).animations.length,1,'reopening animates');
  motionPreference.matches=true;render(false);render(true);assert.equal(panels.at(-1).animations.length,0,'reduced motion is respected');
 });
+
+
+test('background repaint does not restart a CUT transform, but a changed projection does',()=>{
+ const {runInNewContext}=require('node:vm'),{readFileSync}=require('node:fs');
+ const context={window:{},innerHeight:900,matchMedia:()=>({matches:false,addEventListener(){}})};
+ runInNewContext(readFileSync(require.resolve('./static/tape.js'),'utf8'),context);
+ const tape=context.window.ForgeTape;let left=10,animations=0;
+ const clip={dataset:{clipKey:'role|one|a'},getBoundingClientRect:()=>({left,top:100,width:100,height:38,bottom:138}),animate:()=>{animations++;}};
+ const root={dataset:{tapeContext:'profiles|one'},querySelector:()=>null,querySelectorAll:selector=>selector==='[data-clip-key]'?[clip]:[]};
+ const frame={profile:'one',view:'profiles',draft:'same',projection:'same',dirty:true};
+ tape.after(root,{context:root.dataset.tapeContext,clips:new Map()},frame);
+ const duringMotion=tape.before(root);left=50;
+ tape.after(root,duringMotion,{...frame});assert.equal(animations,0,'transient animation coordinates are not a new edit');
+ const beforeProjection=tape.before(root);left=90;
+ tape.after(root,beforeProjection,{...frame,projection:'compiled replacement'});
+ assert.equal(animations,1,'async replacement projection is a real montage change');
+});

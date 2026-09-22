@@ -158,14 +158,15 @@ select option,select optgroup{background-color:var(--native-bg);color:var(--nati
 .node.primary .effort-select{background-color:var(--chosen-lo)}
 @supports(appearance:base-select){
  #forge-direct select,select::picker(select){appearance:base-select}
- select::picker(select){background:var(--well);color:var(--ink);border:1px solid var(--edge-lit);border-radius:12px;padding:5px;box-shadow:7px 9px 22px var(--shade);max-height:min(380px,65dvh);max-width:calc(100vw - 24px);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
- select option{background:transparent;color:var(--ink);padding:8px 12px;min-height:36px;border-radius:7px;gap:10px}
- select option:checked{background:var(--chosen-hi);color:var(--ink)}
+ select::picker(select){background:var(--well);color:var(--ink);border:1px solid var(--edge-lit);border-radius:5px;padding:6px;box-shadow:0 3px 6px var(--shade),inset 0 1px var(--shine);max-height:min(380px,65dvh);max-width:calc(100vw - 24px);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+ select option{background:linear-gradient(145deg,var(--face-hi),var(--face-lo));color:var(--ink);padding:8px 10px;margin:3px 0;min-height:36px;border:1px solid var(--edge-lit);border-bottom-color:var(--key-lip);border-radius:3px;box-shadow:0 1px 2px var(--shade);gap:8px}
+ select option:checked{background:var(--chosen-hi);color:var(--ink);box-shadow:inset 2px 0 var(--accent)}
  select option:hover,select option:focus{background:var(--face-hi);outline-color:var(--accent)}
  select option:focus-visible{outline:none;box-shadow:inset 2px 0 0 var(--accent);background:var(--chosen-hi)}
  select::picker-icon{color:var(--accent);font-size:10px}
  .effort-select::picker-icon{display:none}
  .effort-select::picker(select){min-width:130px}
+ @media(pointer:coarse){select option{min-height:44px}}
 }
 .picker{animation:none;position:fixed;width:480px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:16px;display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;box-shadow:9px 12px 28px var(--shade),-2px -2px 9px var(--shine)}
 .picker-top{margin-bottom:12px;flex-shrink:0}

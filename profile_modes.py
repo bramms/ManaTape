@@ -41,7 +41,7 @@ def raw_route(value):
 
 def is_free_model(model):
     cost = model.get('cost') or {}
-    return (all(type(cost.get(k)) in (int, float) and cost[k] == 0 for k in ('input', 'output'))
+    return (all(isinstance(cost.get(k), (int, float)) and not isinstance(cost[k], bool) and cost[k] == 0 for k in ('input', 'output'))
             and not cost.get('cacheRead') and not cost.get('cacheWrite')
             and bool(re.search(r'(^|[\s:/_()\[\]-])free($|[\s:/_()\[\]-])', (model.get('id') or '') + ' ' + (model.get('name') or ''), re.I)))
 
