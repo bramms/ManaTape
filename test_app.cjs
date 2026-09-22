@@ -234,3 +234,46 @@ test('rerender restores the same LCD dial rather than switching foreground to ba
   assert.equal(context.focusSelector(control),`[data-lcd-colour="history"][data-lcd-part="${part}"]`);
  }
 });
+
+function drawerHarness(preferred=500){
+ const events={},properties={},attrs={},captures=new Set(),stored=[];
+ const surface={left:34,right:1246,top:400},state={drawerHeight:preferred};
+ const drawer={style:{},getBoundingClientRect:()=>({height:parseFloat(properties['--cuts-height'])}),querySelector:key=>({offsetHeight:key==='.drawer-head'?40:50})};
+ const grip={id:'cuts-resize',parentElement:drawer,focus:()=>{},closest:()=>grip,setAttribute:(key,value)=>{attrs[key]=value;}};
+ const context={state,root:{style:{setProperty:(key,value)=>{properties[key]=value;}},
+  addEventListener:(key,handler)=>{events[key]=handler;},setPointerCapture:id=>captures.add(id),
+  hasPointerCapture:id=>captures.has(id),releasePointerCapture:id=>captures.delete(id)},
+  win:{querySelector:key=>key==='.cuts-drawer'?drawer:key==='#cuts-resize'?grip:{getBoundingClientRect:()=>surface}},
+  window:{innerWidth:1280,innerHeight:900,addEventListener:()=>{}},getComputedStyle:()=>({bottom:'12px'}),
+  render:()=>{},localStorage:{setItem:(_key,value)=>stored.push(JSON.parse(value))}};
+ const start=source.indexOf(' let drawerGesture=null;'),end=source.indexOf('\n function placeCut(',start);
+ runInNewContext(source.slice(start,end)+'\n'+appFunction('storeOperator'),context);
+ context.resizeDrawer(state.drawerHeight);
+ const event=(pointerId,clientY)=>({pointerId,clientY,button:0,target:grip,preventDefault:()=>{}});
+ return {context,state,surface,drawer,grip,properties,attrs,stored,events,event};
+}
+
+test('CUTS keeps its chosen height across opening positions and temporary viewport limits',()=>{
+ const h=drawerHarness();
+ assert.equal(h.attrs['aria-valuenow'],500);assert.equal(h.drawer.style.left,'34px');assert.equal(h.drawer.style.right,'34px');
+ h.surface.top=-1200;h.context.resizeDrawer(h.state.drawerHeight);
+ assert.equal(h.attrs['aria-valuenow'],500,'page scroll must not affect drawer height');
+ h.context.window.innerHeight=420;h.context.resizeDrawer(h.state.drawerHeight);
+ assert.equal(h.attrs['aria-valuenow'],360);assert.equal(h.state.drawerHeight,500,'clamping is temporary');
+ h.context.window.innerHeight=900;h.context.resizeDrawer(h.state.drawerHeight);
+ assert.equal(h.attrs['aria-valuenow'],500);
+});
+
+test('CUTS resize starts at the visible edge, commits locally, and Escape restores the previous preference',()=>{
+ const h=drawerHarness(800);h.context.window.innerHeight=500;h.context.resizeDrawer(h.state.drawerHeight);
+ h.events.pointerdown(h.event(1,60));h.events.pointermove(h.event(1,100));
+ assert.equal(h.attrs['aria-valuenow'],400,'drag must start from the clamped 440px edge, not the hidden 800px preference');
+ h.events.pointerdown(h.event(2,100));h.events.pointermove(h.event(2,180));
+ assert.equal(h.attrs['aria-valuenow'],400,'a second pointer must not replace the active resize');
+ h.events.keydown({key:'Escape',preventDefault:()=>{}});
+ assert.equal(h.state.drawerHeight,800);assert.equal(h.attrs['aria-valuenow'],440);assert.equal(h.stored.length,0);
+ h.events.pointerdown(h.event(1,60));h.events.pointermove(h.event(1,100));h.events.pointerup(h.event(1,100));
+ assert.equal(h.stored.at(-1).drawerHeight,400);
+ h.events.keydown({key:'ArrowDown',target:h.grip,preventDefault:()=>{}});
+ assert.equal(h.attrs['aria-valuenow'],368);assert.equal(h.stored.at(-1).drawerHeight,368);
+});

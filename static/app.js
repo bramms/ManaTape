@@ -244,7 +244,7 @@
  function poolActionContext(){return state.view==='profiles'&&state.poolPanel;}
  function profileActions(){
   const pool=poolActionContext(),h=editHistory.available(pool?'@free-pools':state.profile),dirty=pool?poolsDirty():state.changes,scope=pool?'FREE пули':state.view==='profiles'&&state.modePanel?'Заміни · профіль':'Профіль',saveBlocked=!pool&&(activePlan()?.pending||activePlan()?.error||activePlan()?.data?.issues?.length||source.modeConflicts?.length);
-  return `<span class="profile-actions editor-actions ${dirty||state.saving?'dirty':''}" data-edit-scope="${pool?'pool':'profile'}" aria-label="Збереження: ${scope}"><span class="action-scope">${scope}</span><span class="edit-history">${tool('↶',pool?'pool-undo':'undo','icon-only','aria-label="Скасувати зміну: '+scope+'" title="Скасувати · ⌘/Ctrl Z" '+(!h.undo||state.saving?'disabled':''))}${tool('↷',pool?'pool-redo':'redo','icon-only','aria-label="Повторити зміну: '+scope+'" title="Повторити · ⌘/Ctrl Shift Z" '+(!h.redo||state.saving?'disabled':''))}</span>${tool(state.saving?'Збереження…':dirty?pool?'Зберегти пули':'Зберегти · '+state.changes:pool?'Пули збережено':'Збережено',pool?'pool-save':'save',dirty?'primary':'saved-key',!dirty||state.saving||saveBlocked?'disabled':'')}</span>`;
+  return `<span class="profile-actions editor-actions ${dirty||state.saving?'dirty':''}" data-edit-scope="${pool?'pool':'profile'}" aria-label="Збереження: ${scope}">${scope==='Профіль'?'':`<span class="action-scope">${scope}</span>`}<span class="edit-history">${tool('↶',pool?'pool-undo':'undo','icon-only','aria-label="Скасувати зміну: '+scope+'" title="Скасувати · ⌘/Ctrl Z" '+(!h.undo||state.saving?'disabled':''))}${tool('↷',pool?'pool-redo':'redo','icon-only','aria-label="Повторити зміну: '+scope+'" title="Повторити · ⌘/Ctrl Shift Z" '+(!h.redo||state.saving?'disabled':''))}</span>${tool(state.saving?'Збереження…':dirty?pool?'Зберегти пули':'Зберегти · '+state.changes:pool?'Пули збережено':'Збережено',pool?'pool-save':'save',dirty?'primary':'saved-key',!dirty||state.saving||saveBlocked?'disabled':'')}</span>`;
  }
 
 
@@ -651,24 +651,29 @@
   return `<section id="cuts-collection" class="cuts-drawer ${win.querySelector('.cuts-drawer')?'':'entering'}" aria-label="Колекція CUTS"><div class="drawer-grip" id="cuts-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="cuts-collection" aria-label="Висота колекції CUTS" title="Тягни вгору або вниз, щоб змінити висоту · ↑ / ↓"></div><div class="drawer-head"><div><b>КОЛЕКЦІЯ CUTS</b><small>${target?'Місце: '+target.role+' · '+(target.index===0?'основна':'резерв '+target.index):(win.clientWidth<=700?'Обери CUT → торкнись місця на доріжці':'Перетягни CUT на доріжку або вибери CUT і місце')}</small></div>${tool('×','cuts-close','icon-only','aria-label="Закрити колекцію"')}</div><div class="drawer-controls">${opSelect('cut-provider','Провайдер',state.cutProvider,opProviderItems())}${opSwitch('free','FREE CUTS',state.freeCuts)}${opSelect('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames)])}<label class="search"><input id="cut-query" aria-label="Пошук у колекції" placeholder="Знайти CUT…" value="${esc(state.cutQuery)}"></label><span class="drawer-count">${cuts.length} CUTS</span></div><div class="drawer-results" data-filter-key="${esc(JSON.stringify([state.cutProvider,state.cutHealth,state.freeCuts,state.cutQuery]))}"><div class="cut-bin">${shown.map(m=>{const route=m.provider+'/'+m.id;return `<button type="button" class="collection-cut cut-surface ${state.armedCut===route?'armed':''}" data-cut="${esc(route)}" data-health-route="${esc(route)}" aria-label="${esc(cutTitle(route)+' · '+route)}" title="${esc(route)}"><span class="cut-hole" aria-hidden="true"></span><strong class="cut-title">${esc(cutTitle(route))}</strong><small class="cut-meta">${cutIdentity(route)}</small></button>`;}).join('')||'<p class="empty-state">Немає CUTS за цими фільтрами.</p>'}</div>${cuts.length>shown.length?tool('Ще '+Math.min(60,cuts.length-shown.length),'cuts-more'):''}</div></section>`;
  }
  let drawerGesture=null;
- function resizeDrawer(height){
+ function resizeDrawer(height,remember=false){
   const drawer=win.querySelector('.cuts-drawer'),grip=win.querySelector('#cuts-resize');if(!drawer||!grip)return;
-  const max=Math.max(160,window.innerHeight-parseFloat(getComputedStyle(drawer).bottom)-48);
+  const surface=win.querySelector('.operator-surface').getBoundingClientRect();
+  drawer.style.left=Math.max(8,surface.left)+'px';drawer.style.right=Math.max(8,window.innerWidth-surface.right)+'px';
+  const max=Math.max(160,window.innerHeight-(parseFloat(getComputedStyle(drawer).bottom)||0)-48);
   const min=Math.min(max,Math.ceil(drawer.querySelector('.drawer-head').offsetHeight+drawer.querySelector('.drawer-controls').offsetHeight+120));
-  height=Math.round(Math.max(min,Math.min(max,Number.isFinite(height)?height:drawer.getBoundingClientRect().height)));
-  state.drawerHeight=height;root.style.setProperty('--cuts-height',height+'px');
+  const preferred=Number.isFinite(height)?height:Math.min(290,window.innerHeight*.43);
+  height=Math.round(Math.max(min,Math.min(max,preferred)));
+  // A temporary viewport limit must not replace the user's chosen height.
+  if(remember||!Number.isFinite(state.drawerHeight))state.drawerHeight=remember?height:preferred;
+  root.style.setProperty('--cuts-height',height+'px');
   grip.setAttribute('aria-valuemin',min);grip.setAttribute('aria-valuemax',max);grip.setAttribute('aria-valuenow',height);grip.setAttribute('aria-valuetext',height+' пікселів');
  }
  function finishDrawerResize(cancel=false){
   const g=drawerGesture;if(!g)return;drawerGesture=null;
-  if(cancel)resizeDrawer(g.height);else storeOperator();
+  if(cancel){state.drawerHeight=g.preferred;resizeDrawer(state.drawerHeight);}else storeOperator();
   if(root.hasPointerCapture(g.pointer))root.releasePointerCapture(g.pointer);render();
  }
  root.addEventListener('pointerdown',e=>{
-  const grip=e.target.closest('#cuts-resize');if(!grip||e.button!==0)return;
-  e.preventDefault();grip.focus({preventScroll:true});drawerGesture={pointer:e.pointerId,y:e.clientY,height:state.drawerHeight};root.setPointerCapture(e.pointerId);
+  const grip=e.target.closest('#cuts-resize');if(!grip||e.button!==0||drawerGesture)return;
+  e.preventDefault();grip.focus({preventScroll:true});drawerGesture={pointer:e.pointerId,y:e.clientY,height:grip.parentElement.getBoundingClientRect().height,preferred:state.drawerHeight};root.setPointerCapture(e.pointerId);
  });
- root.addEventListener('pointermove',e=>{const g=drawerGesture;if(g?.pointer!==e.pointerId)return;e.preventDefault();resizeDrawer(g.height+g.y-e.clientY);});
+ root.addEventListener('pointermove',e=>{const g=drawerGesture;if(g?.pointer!==e.pointerId)return;e.preventDefault();resizeDrawer(g.height+g.y-e.clientY,true);});
  root.addEventListener('pointerup',e=>{if(drawerGesture?.pointer===e.pointerId)finishDrawerResize();});
  root.addEventListener('pointercancel',()=>finishDrawerResize(true));
  root.addEventListener('lostpointercapture',()=>finishDrawerResize(true));
@@ -676,7 +681,7 @@
  root.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&drawerGesture){e.preventDefault();finishDrawerResize(true);return;}
   if(e.target.id!=='cuts-resize'||!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;
-  e.preventDefault();resizeDrawer(e.key==='Home'?0:e.key==='End'?window.innerHeight:state.drawerHeight+(e.key==='ArrowUp'?32:-32));storeOperator();
+  e.preventDefault();resizeDrawer(e.key==='Home'?0:e.key==='End'?window.innerHeight:e.target.parentElement.getBoundingClientRect().height+(e.key==='ArrowUp'?32:-32),true);storeOperator();
  });
  function placeCut(route,target){if(!poolName(route)&&!collectionModels().some(m=>m.provider+'/'+m.id===route))return;commitCut(route,{...target,profile:state.profile,expected:chain(target.role,target.group||'role')[target.index]??null});}
  function commitCut(route,target){
@@ -788,7 +793,7 @@
   ${source.demo?'<div class="demo-banner" role="status">DEMO · ізольовані тестові профілі. Реальні рахунки не підключені.</div>':''}${operatorDock()}${state.view==='profiles'&&reports.length?`${tool('Ліміти · '+reports.length,'meters-mobile','tray-toggle mobile-meter-key',`aria-expanded="${!!state.mobileMeters}" aria-controls="meter-bank"`)}<div class="meter-bank" id="meter-bank" data-mobile-expanded="${!!state.mobileMeters}">${opQuota()}</div>`:''}
   ${state.error&&state.modal!=='conflict'?`<div class="error-banner" role="alert">${esc(state.error)} ${tool('×','clear-error','icon-only','aria-label="Закрити повідомлення"')}</div>`:''}
   ${source.refresh.error?`<div class="error-banner">${esc(source.refresh.error)}</div>`:''}
-  <main class="content operator-surface" data-surface="${state.view}">${state.view==='dashboard'?historySurface():state.view==='profiles'?`<div class="transport-bar">${catalog.some(m=>deepseek(m.provider+'/'+m.id))||modeOff()?modeBar():''}</div>`+profileView():operatorCatalog()}${cutsTray()}</main>
+  <main class="content operator-surface" data-surface="${state.view}">${state.view==='dashboard'?historySurface():state.view==='profiles'?`<div class="transport-bar">${catalog.some(m=>deepseek(m.provider+'/'+m.id))||modeOff()?modeBar():''}</div>`+profileView():operatorCatalog()}</main>${cutsTray()}
   <footer class="bottom"><span>${roleKeys.length} ролей · ${profileKeys.length} профілів · ${dirty.length?dirty.length+' із чернетками':'усе збережено'}</span><span>${state.view==='dashboard'?'Ліміти · 5 хв / каталог · 15 хв':'Зміни для нових запусків OMP'}</span></footer>${pickerMarkup()}${modalMarkup()}${state.toast?`<div class="toast" role="status">${esc(state.toast)}</div>`:''}`;
   win.dataset.tapeContext=state.view+'|'+state.profile+(state.view==='profiles'&&win.clientWidth<=900?'|'+state.role:'');
   ForgeTape.fit(win);resizeDrawer(state.drawerHeight);decorateHealth();
