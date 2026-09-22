@@ -1,0 +1,15 @@
+[Unit]
+Description=Mana Tape — панель OMP
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Apps/ManaTape
+ExecStart=%h/Apps/ManaTape/.venv/bin/python %h/Apps/ManaTape/server.py --config %h/.config/mana-tape/installation.yml
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

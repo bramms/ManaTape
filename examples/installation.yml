@@ -1,0 +1,18 @@
+# Зберігайте власну копію поза репозиторієм.
+# Відносні шляхи рахуються від каталогу цього YAML. ~ та $ENV підтримуються.
+port: 19421
+state: ~/.local/share/mana-tape
+agent: ~/.omp/agent
+omp: omp
+projects:
+  - id: main
+    name: Мій проєкт
+    path: ~/Projects/my-project
+    # agent: ~/.omp/profiles/other/agent
+    # ui:
+    #   roleLabels:
+    #     researcher: Дослідження
+    #   localProviders: [my-local]
+  # - id: second
+  #   name: Другий проєкт
+  #   path: ~/Projects/second-project

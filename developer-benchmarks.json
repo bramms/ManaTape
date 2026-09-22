@@ -1,0 +1,95 @@
+[
+  {
+    "id": "LFM2.5-2.6B",
+    "baseId": "liquid/lfm-2.5-2.6b",
+    "source": "Розробник",
+    "kind": "developer",
+    "publisher": "Liquid AI",
+    "release": "2026-09-19",
+    "dateKind": "Перевірено",
+    "scores": {
+      "LiveCodeBench v6": 59.41,
+      "IFBench": 59.17,
+      "BFCL v4": 56.88,
+      "ToolSandbox": 77.83,
+      "AIME 2025": 51.87
+    },
+    "url": "https://huggingface.co/LiquidAI/LFM2.5-2.6B",
+    "dataUrl": "https://huggingface.co/LiquidAI/LFM2.5-2.6B/blob/main/README.md",
+    "note": "Заявлено розробником у картці моделі. Умови та агентна обв’язка — за посиланням; у незалежний бал ролі не входить."
+  },
+  {
+    "id": "Laguna XS.2",
+    "baseId": "poolside/laguna-xs.2",
+    "source": "Розробник",
+    "kind": "developer",
+    "publisher": "Poolside",
+    "release": "2026-09-19",
+    "dateKind": "Перевірено",
+    "scores": {
+      "SWE-bench Verified": 69.9,
+      "SWE-bench Multilingual": 57.7,
+      "SWE-bench Pro (Public)": 46.3,
+      "Terminal-Bench 2.0": 35.7
+    },
+    "url": "https://huggingface.co/poolside/Laguna-XS.2",
+    "dataUrl": "https://huggingface.co/poolside/Laguna-XS.2/blob/main/README.md",
+    "note": "Заявлено розробником у картці моделі. Умови та агентна обв’язка — за посиланням; у незалежний бал ролі не входить."
+  },
+  {
+    "id": "Laguna XS 2.1",
+    "baseId": "poolside/laguna-xs-2.1",
+    "source": "Розробник",
+    "kind": "developer",
+    "publisher": "Poolside",
+    "release": "2026-09-19",
+    "dateKind": "Перевірено",
+    "scores": {
+      "SWE-bench Verified": 70.9,
+      "SWE-bench Multilingual": 63.1,
+      "SWE-bench Pro (Public)": 47.6,
+      "Terminal-Bench 2.0": 37.5
+    },
+    "url": "https://huggingface.co/poolside/Laguna-XS-2.1",
+    "dataUrl": "https://huggingface.co/poolside/Laguna-XS-2.1/blob/main/README.md",
+    "note": "Заявлено розробником у картці моделі. Умови та агентна обв’язка — за посиланням; у незалежний бал ролі не входить."
+  },
+  {
+    "id": "Laguna S 2.1",
+    "baseId": "poolside/laguna-s-2.1",
+    "source": "Розробник",
+    "kind": "developer",
+    "publisher": "Poolside",
+    "release": "2026-09-19",
+    "dateKind": "Перевірено",
+    "scores": {
+      "Terminal-Bench 2.1": 70.2,
+      "SWE-bench Multilingual": 78.5,
+      "SWE-bench Pro (Public)": 59.4,
+      "DeepSWE": 40.4,
+      "SWE Atlas (Codebase QnA)": 46.2,
+      "Toolathlon Verified": 49.7
+    },
+    "url": "https://huggingface.co/poolside/Laguna-S-2.1",
+    "dataUrl": "https://huggingface.co/poolside/Laguna-S-2.1/blob/main/README.md",
+    "note": "Заявлено розробником у картці моделі. Умови та агентна обв’язка — за посиланням; у незалежний бал ролі не входить."
+  },
+  {
+    "id": "Trinity-Large Preview",
+    "baseId": "arcee-ai/trinity-large-preview",
+    "source": "Розробник",
+    "kind": "developer",
+    "publisher": "Arcee AI",
+    "release": "2026-09-19",
+    "dateKind": "Перевірено",
+    "scores": {
+      "MMLU": 87.2,
+      "MMLU-Pro": 75.2,
+      "GPQA-Diamond": 63.3,
+      "AIME 2025": 24.0
+    },
+    "url": "https://huggingface.co/arcee-ai/Trinity-Large-Preview",
+    "dataUrl": "https://huggingface.co/arcee-ai/Trinity-Large-Preview/blob/main/README.md",
+    "note": "Заявлено розробником у картці моделі. Умови та агентна обв’язка — за посиланням; у незалежний бал ролі не входить."
+  }
+]

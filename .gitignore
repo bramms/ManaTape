@@ -1,0 +1,23 @@
+# Приватний стан, ключі, середовища й локальні конфігурації.
+state/
+.state/
+.dev/
+.venv/
+venv/
+service.env
+installation.yml
+ssh.json
+!examples/installation.yml
+!examples/ssh.json
+*.env
+*.key
+*.pem
+local-token
+__pycache__/
+*.py[cod]
+.DS_Store
+._*
+*.incoming
+*.jsonl
+*-stderr.txt
+/reviews/

@@ -1,0 +1,7 @@
+{
+  "host": "my-server",
+  "state": "/home/your-user/.local/share/mana-tape/main",
+  "remote_port": 19421,
+  "port": 19423,
+  "commandcode": false
+}
