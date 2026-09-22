@@ -7,8 +7,8 @@
  try {const res=await fetch(endpoint('/api/state'));source=await res.json();if(!res.ok)throw Error(source.error);}catch(e){win.innerHTML='<div class="startup">Немає зв’язку із сервером.<br>Перевір підключення і <button id="retry-load">спробуй знову</button>.</div>';document.getElementById('retry-load').onclick=()=>location.reload();return;}
 
  const labels=source.ui?.roleLabels||{};
- const providerNames={'opencode-free':'OpenCode Free','commandcode':'CommandCode','opencode-go':'OpenCode Go','openai-codex':'Codex','google-antigravity':'Antigravity','anthropic':'Anthropic','deepseek':'DeepSeek API'};
- const codes={'opencode-free':'FREE','openrouter':'OR','commandcode':'CC','opencode-go':'GO','openai-codex':'CX','google-antigravity':'AG','anthropic':'AN','deepseek':'DS'};
+ const providerNames={'opencode-free':'OpenCode Free','commandcode':'CommandCode','opencode-go':'OpenCode Go','openai-codex':'Codex','google-antigravity':'Antigravity','anthropic':'Anthropic','deepseek':'DeepSeek API',...(source.ui?.providerLabels||{})};
+ const codes={'opencode-free':'FREE','openrouter':'OR','commandcode':'CC','opencode-go':'GO','openai-codex':'CX','google-antigravity':'AG','anthropic':'AN','deepseek':'DS',...(source.ui?.providerCodes||{})};
  const providerCode=id=>codes[id]||String(id||'?').slice(0,4).toUpperCase();
  const prettyProfile=s=>s==='standard'?'Standard':s;
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
