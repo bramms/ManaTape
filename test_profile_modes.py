@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import test_forge
-from server import Forge, Problem, digest, merge, yaml_load, atomic
+from server import Forge, Problem, digest, merge, yaml_load, yaml_dump, atomic
 from profile_modes import compile_profile, route_statuses, is_deepseek, validate_settings
 
 
@@ -89,6 +89,73 @@ class ProfileModesTest(unittest.TestCase):
         self.app = Forge(self.project,self.agent,self.root/'state','/does-not-exist')
         self.assertEqual(self.app.pools(),self.pools)
         self.assertEqual(self.app.profiles()[1]['high']['modelRoles']['task'],'mana-pool/free-good')
+
+    def test_singleton_agent_alias_keeps_full_role_retry_chain_in_both_modes(self):
+        models = {r: {'id': r.split('/')[1], 'input': ['text']} for r in
+                  ('demo/deepseek-v4', 'demo/first', 'demo/second', 'demo/extra')}
+        pools = {'free-good': ['demo/first', 'demo/second']}
+        for original in ('@researcher', ['@researcher']):
+            for primary in ('mana-pool/free-good', 'demo/deepseek-v4'):
+                for mode in ('deepseek', 'no-deepseek'):
+                    with self.subTest(original=original, primary=primary, mode=mode):
+                        normal = {'modelRoles': {'researcher': primary},
+                                  'retry': {'fallbackChains': {'researcher': ['demo/extra']}},
+                                  'task': {'agentModelOverrides': {'helper': original}}}
+                        settings = {'mode': mode, 'alternatives': ['mana-pool/free-good'], 'overrides': {}}
+                        plan = compile_profile(normal, settings, models, {}, pools)
+                        self.assertFalse(plan['issues'])
+                        native = plan['effective']
+                        self.assertEqual(native['task']['agentModelOverrides']['helper'], original)
+                        expanded = primary.startswith('mana-pool/') or mode == 'no-deepseek'
+                        self.assertEqual(native['modelRoles']['researcher'], 'demo/first' if expanded else primary)
+                        self.assertEqual(native['retry']['fallbackChains']['researcher'],
+                                         ['demo/second', 'demo/extra'] if expanded else ['demo/extra'])
+                        view = plan['views']['vibe']['helper']
+                        self.assertEqual(view['routes'], [native['modelRoles']['researcher']])
+                        self.assertEqual(view['linkedRole'], 'researcher')
+                        self.assertFalse(view['substituted'])
+
+    def test_singleton_alias_pool_save_restart_and_legacy_views_stay_read_only(self):
+        base = self.app.read(self.app.path('standard'))
+        base['task']['agentModelOverrides']['task'] = '@task'
+        self.app.path('standard').write_text(yaml_dump(base))
+        self.init_pools()
+        settings = {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}
+        self.save_mode('high', settings, [
+            {'path': ['modelRoles', 'task'], 'value': 'mana-pool/free-good'},
+            {'path': ['retry', 'fallbackChains', 'task'], 'value': ['demo/four']}])
+        self.pools['free-good'] = ['demo/c:free:low', 'demo/a:free']
+        self.app.save_pools({'revision': self.app.pools_revision(), 'pools': self.pools})
+        self.app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
+        native = self.native('high')
+        self.assertEqual(native['task']['agentModelOverrides']['task'], '@task')
+        self.assertEqual(native['modelRoles']['task'], 'demo/c:free:low')
+        self.assertEqual(native['retry']['fallbackChains']['task'], ['demo/a:free', 'demo/four'])
+        # Older versions did not save views for every configured agent. Reading
+        # their state must neither migrate nor recompile the native files.
+        self.app.mode_state['profiles']['high']['views']['vibe'].pop('task')
+        before = {n: self.app.path(n).read_bytes() for n in ('standard', 'high')}
+        metadata = copy.deepcopy(self.app.mode_state)
+        self.assertNotIn('task', self.app.snapshot()['profileModes']['high']['views']['vibe'])
+        preview = self.app.preview_profile({'profile': 'high', 'revision': self.app.revision('high'),
+                                            'modeSettings': settings, 'changes': []})
+        self.assertEqual(preview['views']['vibe']['task']['linkedRole'], 'task')
+        self.assertEqual(preview['views']['vibe']['task']['routes'], ['demo/c:free:low'])
+        self.assertEqual(self.app.mode_state, metadata)
+        self.assertEqual({n: self.app.path(n).read_bytes() for n in before}, before)
+
+    def test_singleton_alias_without_explicit_role_is_left_for_omp(self):
+        for original in ('@builtin', ['@builtin']):
+            normal = {'task': {'agentModelOverrides': {'helper': original}}}
+            for mode in ('deepseek', 'no-deepseek'):
+                with self.subTest(original=original, mode=mode):
+                    plan = compile_profile(normal, {'mode': mode, 'alternatives': [], 'overrides': {}}, {}, {})
+                    self.assertFalse(plan['issues'])
+                    self.assertEqual(plan['effective'], normal)
+                    view = plan['views']['vibe']['helper']
+                    self.assertTrue(view['unresolved'])
+                    self.assertEqual(view['linkedRole'], 'builtin')
+                    self.assertEqual(view['routes'], ['@builtin'])
 
     def test_pool_save_rejects_paid_nested_empty_used_overflow_and_stale_without_writes(self):
         self.init_pools()

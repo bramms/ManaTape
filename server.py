@@ -462,7 +462,7 @@ class Forge:
                             continue
                         valid_route(v)
                     if keys[0] == 'task' and not value:
-                        raise Problem('Vibe потребує хоча б одного кандидата')
+                        raise Problem('Агент потребує хоча б одного кандидата')
             target = data
             for key in keys[:-1]:
                 target = target.setdefault(key, {})

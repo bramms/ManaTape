@@ -223,6 +223,18 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
             effective.setdefault('retry', {}).setdefault('fallbackChains', {})[role] = result[1:]
     for worker, original in normal.get('task', {}).get('agentModelOverrides', {}).items():
         values = [original] if isinstance(original, str) else list(original)
+        if len(values) == 1 and values[0].startswith('@'):
+            # OMP inherits the role's retry chain only for a singleton alias.
+            # Expanding its primary pool here would replace that inherited tail.
+            alias, key = values[0], 'vibe:'+worker
+            primary = resolve(alias, effective)
+            views['vibe'][worker] = {
+                'routes': [primary],
+                'refs': [{'kind': 'base', 'index': 0, 'route': resolve(alias, normal), 'key': key}],
+                'paused': [], 'original': resolve(alias, normal), 'substituted': False,
+                'alias': alias, 'linkedRole': alias[1:], 'unresolved': alias[1:] not in roles,
+            }
+            continue
         result, view = project(values, 'vibe:'+worker, 'vibe')
         views['vibe'][worker] = view
         if off or any(pool_name(resolve(v, normal)) is not None for v in values):

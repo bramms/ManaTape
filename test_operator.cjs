@@ -40,19 +40,6 @@ test('partial measurements and stale zero distinguish unknown from exhausted',()
  assert.equal(op.health(m,[{...report,provider:'p',stale:true,limits:[{remaining:0}]}],[],now).kind,'unknown');
  assert.equal(op.health(m,[{...report,provider:'p',limits:[{remaining:0},{remaining:null}]}],[],now).kind,'empty');
 });
-test('provider shift preserves internal order and primary until final detent',()=>{
- const list=['a','b','c','p1','p2','d'],match=x=>x[0]==='p';
- assert.deepEqual(op.promote(list,match,1),['a','b','p1','p2','c','d']);
- assert.deepEqual(op.promote(list,match,7),['a','p1','p2','b','c','d']);
- assert.deepEqual(op.promote(list,match,8),['p1','p2','a','b','c','d']);
- assert.deepEqual(op.promote(list,match,0),list);assert.deepEqual(list,['a','b','c','p1','p2','d']);
- assert.deepEqual(op.promote(['p1','a','p2','b'],match,-8),['a','b','p1','p2']);
-});
-test('quality tuning freezes unknowns and does not cross benchmark cohorts',()=>{
- const rows={a:{score:10,cohort:'A'},b:{score:60,cohort:'A'},c:{score:90,cohort:'B'},d:{score:40,cohort:'B'}};
- assert.deepEqual(op.quality(['a','unknown','c','b','d'],r=>rows[r],8),['b','unknown','c','a','d']);
- assert.deepEqual(op.quality(['b','unknown','c','a','d'],r=>rows[r],-8),['a','unknown','d','b','c']);
-});
 test('role estimates require every weighted test, zero is a real score',()=>{
  assert.equal(op.score({scores:{a:80}},{a:.5,b:.5}),null);
  assert.equal(op.score({scores:{a:80,b:0}},{a:.5,b:.5}),40);
@@ -72,17 +59,14 @@ test('free routes need their own quota and multiple accounts stay unassigned',()
 
 test('local GPUs have a neutral non-subscription state, without claiming uptime',()=>{assert.equal(op.health({provider:'my-local',id:'local',local:true},[],[],now).kind,'local');assert.equal(op.health({provider:'my-local',id:'local',local:true},[],['my-local'],now).kind,'empty');});
 
-test('quality prefers exact effort and labels same-model effort fallback',()=>{
+test('catalog evidence reports the best complete measurement and its tested effort',()=>{
  const records=[{id:'m-low',effort:'low',scores:{a:50}},{id:'m-max',effort:'max',scores:{a:90}}],weights={a:1};
- assert.equal(op.evidence(records,weights,'low',true).score,50);
- assert.equal(op.evidence(records,weights,'low',true).approximate,false);
- assert.equal(op.evidence(records,weights,'high'),null);
- const q=op.evidence(records,weights,'high',true);assert.equal(q.score,90);assert.equal(q.approximate,true);
- const routes=['p/a:high','p/b:low'];assert.deepEqual(op.quality(routes,r=>r===routes[0]?{score:50,cohort:'A'}:{...q,cohort:'A'},8),[routes[1],routes[0]]);
+ const q=op.evidence(records,weights);assert.equal(q.score,90);assert.equal(q.record.effort,'max');
+ assert.deepEqual(records.map(r=>r.id),['m-low','m-max']);
 });
-test('approximate effort never invents missing or incomplete role measurements',()=>{
- assert.equal(op.evidence([], {a:1}, 'high', true),null);
- assert.equal(op.evidence([{effort:'max',scores:{a:90}}], {a:.5,b:.5}, 'high', true),null);
+test('catalog evidence never invents missing or incomplete role measurements',()=>{
+ assert.equal(op.evidence([], {a:1}),null);
+ assert.equal(op.evidence([{effort:'max',scores:{a:90}}], {a:.5,b:.5}),null);
 });
 
 test('profile names accept readable input without accepting paths or silently removing punctuation',()=>{

@@ -50,7 +50,7 @@ test('pending writes block polling until every request settles, including a fail
  const responses=[];let scheduled=0;
  const context={activeWrites:0,writeEpoch:0,source:{csrf:'test'},state:{},endpoint:x=>x,
   document:{hidden:false,documentElement:{dataset:{}},activeElement:null},win:{querySelector:()=>null},
-  composing:false,pointerHeld:false,nativeSelectBusy:false,drag:null,encoderGesture:null,cutGesture:null,drawerGesture:null,
+  composing:false,pointerHeld:false,nativeSelectBusy:false,drag:null,cutGesture:null,drawerGesture:null,
   fetch:()=>new Promise(resolve=>responses.push(resolve)),scheduleBackgroundWork:()=>scheduled++};
  runInNewContext(appFunction('api')+'\n'+appFunction('interactionBusy'),context);
  const first=context.api('/api/favs',{}),second=context.api('/api/favs',{});
@@ -90,7 +90,7 @@ test('a committed select or idle CUT toolbar receives preview without allowing b
   const result={key:'current',data:{routes:['new']}},pendingModeResults=new Map([['standard',result]]);
   const state={profile:'standard',modePlans:{standard:{key:'current',pending:true}},picker:surface==='toolbar'?{actionsOnly:true}:null};
   const context={state,pendingModeResults,pendingRender:false,backgroundRefreshPending:true,backgroundReloading:false,backgroundTimer:null,
-   composing:false,pointerHeld:surface==='toolbar',nativeSelectBusy:false,activeWrites:0,drag:null,encoderGesture:null,cutGesture:null,drawerGesture:null,
+   composing:false,pointerHeld:surface==='toolbar',nativeSelectBusy:false,activeWrites:0,drag:null,cutGesture:null,drawerGesture:null,
    document:{hidden:false,documentElement:{dataset:{}},activeElement:{matches:selector=>surface==='select'&&(selector==='select'||selector===':open'&&open)}},
    CSS:{supports:()=>true},win:{querySelector:()=>null},setTimeout:()=>0,clearTimeout:()=>{},
    render:()=>paints++,pollState:()=>assert.fail('background polling must remain deferred')};
@@ -136,4 +136,101 @@ test('save replaces a queued preview even when a changed token requires another 
  runInNewContext(appFunction('save')+'\n'+appFunction('flushBackgroundWork'),context);
  await context.save();context.flushBackgroundWork();
  assert.equal(state.modePlans.standard.data,fresh);assert.equal(pendingModeResults.size,0);assert.equal(state.saving,false);
+});
+
+test('linked agents show role inheritance instead of pretending a primary pool is a startup list',()=>{
+ const profile={modelRoles:{reader:'mana-pool/free-fast'},retry:{modelFallback:true},task:{agentModelOverrides:{reviewer:'@reader',scout:['@reader'],external:'@advisor',task:['@reader','p/backup']}}};
+ const context={p:()=>profile,roleKeys:['reader'],esc:s=>s,tool:()=>'',poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined};
+ runInNewContext(['agentValues','agentLink','agentTier','agentName','agentLinkedTrack'].map(appFunction).join('\n'),context);
+ for(const worker of ['reviewer','scout'])for(const mobile of [false,true]){
+  const html=context.agentLinkedTrack(worker,mobile);
+  assert.match(html,/Успадковує @reader/);assert.match(html,/Основна й резерви ролі/);
+  assert.match(html,/data-agent-role="reader"/);assert.doesNotMatch(html,/FREE FAST|data-edit=|16 CUTS/);
+ }
+ assert.equal(context.agentLink('task'),'');assert.match(context.agentName('task'),/Vibe GOOD/);
+ assert.match(context.agentName('sonic'),/Vibe FAST/);assert.doesNotMatch(context.agentName('reviewer'),/Vibe/);
+ const unknown=context.agentLinkedTrack('external');assert.match(unknown,/Модель і резерви визначає OMP/);assert.doesNotMatch(unknown,/data-agent-role=/);
+ profile.retry.modelFallback=false;assert.match(context.agentLinkedTrack('scout'),/резерви вимкнено/);
+});
+
+test('editing a role copies only explicit agent tails and keeps singleton inheritance intact',()=>{
+ const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/b']}},task:{agentModelOverrides:{one:'@reader',two:['@reader'],custom:['@reader','p/c'],other:['p/x','p/y']}}};
+ const context={p:()=>profile,state:{syncVibe:true},modeView:()=>null};
+ runInNewContext(['workers','agentValues','agentLink','vibeAlias','oldSetChain','setChain'].map(appFunction).join('\n'),context);
+ context.setChain('reader',['p/new','p/next']);
+ assert.equal(profile.task.agentModelOverrides.one,'@reader');assert.deepEqual(profile.task.agentModelOverrides.two,['@reader']);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['@reader','p/next']);assert.deepEqual(profile.task.agentModelOverrides.other,['p/x','p/y']);
+ context.state.syncVibe=false;context.setChain('reader',['p/later','p/last']);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['@reader','p/next']);
+});
+
+test('copying an inherited agent preserves normal routes and DeepSeek settings as one undoable edit',()=>{
+ const {ForgeHistory}=require('./static/tape.js'),history=new ForgeHistory();
+ const profile={modelRoles:{reader:'p/deepseek'},retry:{fallbackChains:{reader:['mana-pool/free-fast','p/extra']}},task:{agentModelOverrides:{custom:'@reader'}},forgeMode:{mode:'no-deepseek',overrides:{'role:reader':['p/replacement']}}};
+ const baseline=structuredClone(profile),context={p:()=>profile,state:{poolPanel:true},roleKeys:['reader'],copy:structuredClone,CSS:{escape:s=>s},
+  source:{freePools:{'free-fast':['p/free1','p/free2']}},poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined,
+  modeOff:()=>true,modeView:()=>({}),diff:()=>[],chain:()=>['p/replacement','mana-pool/free-fast','p/extra'],modeSettings:()=>profile.forgeMode,render:()=>history.observe('one',profile,true,baseline),win:{querySelectorAll:()=>[]},scrollToControl:()=>{},notify:()=>assert.fail('valid conversion must work')};
+ history.observe('one',profile,false);
+ runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),context);
+ context.copyAgentRole('custom');
+ assert.equal(context.state.poolPanel,false,'conversion must activate the profile Undo/Save scope');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['p/deepseek','mana-pool/free-fast','p/extra']);
+ assert.deepEqual(profile.modelRoles,baseline.modelRoles);assert.deepEqual(profile.retry,baseline.retry);
+ assert.deepEqual(profile.forgeMode.overrides['vibe:custom'],['p/replacement']);
+ assert.notEqual(profile.forgeMode.overrides['vibe:custom'],profile.forgeMode.overrides['role:reader']);
+ assert.deepEqual(history.step('one',-1),baseline);assert.equal(history.step('one',-1),null);
+});
+
+test('copying an agent refuses to silently add default fallbacks or truncate a long role',()=>{
+ for(const long of [false,true]){
+  const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:long?Array.from({length:30},(_,i)=>'p/'+i):[],default:['p/default']}},task:{agentModelOverrides:{custom:'@reader'}}};
+  const notices=[],before=JSON.stringify(profile),context={p:()=>profile,state:{},roleKeys:['reader'],modeOff:()=>false,chain:()=>[profile.modelRoles.reader,...profile.retry.fallbackChains.reader],poolName:()=>undefined,notify:s=>notices.push(s)};
+  runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),context);
+  context.copyAgentRole('custom');assert.equal(JSON.stringify(profile),before);assert.equal(notices.length,1);
+  assert.match(notices[0],long?/30 CUTS/:/default/);
+ }
+});
+
+test('agent conversion waits for OFF preview and rejects an OFF singleton with default fallbacks',()=>{
+ const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/deepseek'],default:['p/default']}},task:{agentModelOverrides:{custom:'@reader'}}};
+ let pending=true;const notices=[],before=JSON.stringify(profile),context={p:()=>profile,state:{profile:'one'},roleKeys:['reader'],modeOff:()=>true,
+  modeView:()=>({}),diff:()=>[{}],activePlan:()=>pending?{pending:true}:{data:{}},chain:()=>['p/a'],poolName:()=>undefined,notify:s=>notices.push(s)};
+ runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),context);
+ context.copyAgentRole('custom');assert.match(notices.pop(),/Дочекайся/);
+ pending=false;context.copyAgentRole('custom');assert.match(notices.pop(),/default/);assert.equal(JSON.stringify(profile),before);
+});
+
+test('quota display stays compact, keeps complete family labels and gives each account a stable LCD control',()=>{
+ const ManaDisplay=require('./static/display.js');
+ let reports=[{provider:'google-antigravity',account:4,limits:['Anthropic','Claude','Google','OpenAI'].map(label=>({label:label+' 7 day',window:'7 day',remaining:50}))},
+  {provider:'commandcode',account:5,limits:[]},{provider:'google-antigravity',account:6,limits:[]}];
+ const context={state:{meters:'full'},usageReports:()=>reports,providerName:id=>id,esc:String,ManaDisplay,
+  op:{pace:()=>({kind:'unknown'})},timeLabel:()=>'',reportAge:()=>'',opPaceText:()=>'',opForecast:()=>'',resetTitle:()=>'',resetCountdown:()=>'',num:String};
+ runInNewContext(appFunction('limitLabel')+'\n'+appFunction('opQuota'),context);
+ assert.equal(context.limitLabel({label:'Claude & GPT shared · 7 day',window:'7 day'}),'Claude & GPT shared · 7 днів');
+ const markup=context.opQuota();
+ assert.match(markup,/class="meter-bridge micro"/);assert.doesNotMatch(markup,/scale-key|data-op-switch="meters"|\bFULL\b/);
+ for(const family of ['Anthropic','Claude','Google','OpenAI'])assert.ok(markup.includes(`<span class="mw-label">${family} · 7 днів</span>`));
+ const ids=html=>[...html.matchAll(/data-lcd-screen="([^"]+)"/g)].map(match=>match[1]);
+ assert.deepEqual(ids(markup),['quota:google-antigravity:1','quota:commandcode:1','quota:google-antigravity:2']);
+ for(const id of ids(markup))assert.ok(markup.includes(`data-lcd-colour="${id}"`),'each LCD has its own control');
+ reports=[{provider:'other',account:1,limits:[]},...reports.map((report,i)=>({...report,account:i+2}))];
+ assert.deepEqual(ids(context.opQuota()).filter(id=>!id.startsWith('quota:other:')),ids(markup),'an unrelated provider cannot change existing LCD preferences');
+});
+
+test('operator preferences no longer persist the removed meter scale',()=>{
+ let saved;
+ const context={state:{meters:'full',health:false,drawerHeight:280},localStorage:{setItem:(key,value)=>{assert.equal(key,'mana-operator');saved=JSON.parse(value);}}};
+ runInNewContext(appFunction('storeOperator'),context);context.storeOperator();
+ assert.deepEqual(saved,{health:false,drawerHeight:280});
+});
+
+test('rerender restores the same LCD dial rather than switching foreground to background',()=>{
+ const context={CSS:{escape:s=>s}};
+ runInNewContext(appFunction('focusSelector'),context);
+ for(const part of ['background','foreground']){
+  const attrs={'data-lcd-colour':'history','data-lcd-part':part};
+  const control={matches:()=>false,closest:()=>null,hasAttribute:key=>Object.hasOwn(attrs,key),getAttribute:key=>attrs[key]};
+  assert.equal(context.focusSelector(control),`[data-lcd-colour="history"][data-lcd-part="${part}"]`);
+ }
 });
