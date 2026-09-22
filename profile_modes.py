@@ -51,7 +51,7 @@ def is_deepseek(value, models):
     return bool(re.match(r'deepseek(?:[-_.:]|$)', model)) and not is_free_model(models.get(raw_route(value), {}))
 
 
-def validate_settings(value, roles, models, workers=("task", "sonic")):
+def validate_settings(value, roles, models, workers=()):
     if not isinstance(value, dict) or value.get('mode') not in ('deepseek', 'no-deepseek'):
         raise ValueError('Невідомий режим профілю')
     lists = {'profile': value.get('alternatives', [])}
@@ -85,7 +85,7 @@ def route_statuses(models, managed):
     return out
 
 
-def compile_profile(normal, settings, models, statuses, pools=None):
+def compile_profile(normal, settings, models, statuses, pools=None, vision_roles=('vision',)):
     off = settings['mode'] == 'no-deepseek'
     effective = copy.deepcopy(normal)
     roles = normal.get('modelRoles', {})
@@ -104,7 +104,7 @@ def compile_profile(normal, settings, models, statuses, pools=None):
             reason = 'Пул '+name.upper().replace('-', ' ')+' порожній або невідомий'
         elif any(raw_route(r).split('/')[0] in disabled for r in routes):
             reason = 'Пул містить вимкненого провайдера'
-        elif key.startswith('role:vision') and any('image' not in models.get(raw_route(r), {}).get('input', []) for r in routes):
+        elif key in {'role:'+role for role in vision_roles} and any('image' not in models.get(raw_route(r), {}).get('input', []) for r in routes):
             reason = 'Усі CUTS пулу на доріжці зору мають підтримувати зображення'
         if reason:
             issues.append({'key': key, 'message': reason})
@@ -127,7 +127,7 @@ def compile_profile(normal, settings, models, statuses, pools=None):
                     reason = availability['reason']
                 elif not model:
                     reason = 'Модель відсутня в каталозі'
-                elif key.startswith('role:vision') and 'image' not in model.get('input', []):
+                elif key in {'role:'+role for role in vision_roles} and 'image' not in model.get('input', []):
                     reason = 'Для цієї ролі потрібен зір'
                 effort = EFFORT.search(value)
                 if not reason and effort and model and model.get('thinking') and effort[1] not in model['thinking']:
@@ -192,7 +192,7 @@ def compile_profile(normal, settings, models, statuses, pools=None):
                 availability = statuses.get(raw, {})
                 reason = ('Провайдер вимкнений у профілі' if raw.split('/')[0] in disabled else
                     availability.get('reason', 'Модель недоступна') if availability.get('status') == 'blocked' else
-                    'Для цієї ролі потрібен зір' if key.startswith('role:vision') and 'image' not in model.get('input', []) else '')
+                    'Для цієї ролі потрібен зір' if key in {'role:'+role for role in vision_roles} and 'image' not in model.get('input', []) else '')
                 if reason:
                     skipped.append({'key': key, 'route': identity, 'reason': reason})
                     continue
@@ -222,8 +222,6 @@ def compile_profile(normal, settings, models, statuses, pools=None):
             effective['modelRoles'][role] = result[0]
             effective.setdefault('retry', {}).setdefault('fallbackChains', {})[role] = result[1:]
     for worker, original in normal.get('task', {}).get('agentModelOverrides', {}).items():
-        if worker not in ('task', 'sonic'):
-            continue
         values = [original] if isinstance(original, str) else list(original)
         result, view = project(values, 'vibe:'+worker, 'vibe')
         views['vibe'][worker] = view

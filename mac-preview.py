@@ -30,7 +30,6 @@ def sync_commandcode(stop, args):
                 '--format', 'json', '--web-timeout', '15'], capture_output=True, text=True, timeout=45, check=True)
             report = commandcode_report(json.loads(result.stdout))
             # SSH carries this allowlisted snapshot only, never the original CLI payload or cookies.
-            import shlex
             subprocess.run([*SSH, args.host, command],
                 input=json.dumps(report), text=True, capture_output=True, timeout=20, check=True)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

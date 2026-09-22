@@ -116,6 +116,8 @@ class Forge:
         self.ui = {}
         self.project_id = "default"
         self.projects = []
+        self.agent_peers = [self]
+        self.provider_store = None
         self.legacy_drafts = False
         self.native_env = {**os.environ, "PI_CODING_AGENT_DIR": str(self.agent.resolve())}
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -137,7 +139,20 @@ class Forge:
         from insights import Insights
         self.insights = Insights(self)
 
+    @property
+    def managed(self):
+        return self.provider_store['managed'] if self.provider_store is not None else self.state['managed']
+
+    @managed.setter
+    def managed(self, value):
+        if self.provider_store is not None:
+            self.provider_store['managed'] = value
+        self.state['managed'] = value
+
     def persist(self):
+        if self.provider_store is not None:
+            atomic(self.provider_store['path'], json.dumps(self.managed, ensure_ascii=False).encode())
+            self.state['managed'] = copy.deepcopy(self.managed)
         atomic(self.state_file, json.dumps(self.state, ensure_ascii=False).encode())
 
     def path(self, profile):
@@ -263,8 +278,8 @@ class Forge:
             settings = validate_settings(body.get('modeSettings', self.mode_settings(name, full, models)), roles, models, full.get('task', {}).get('agentModelOverrides', {}))
         except ValueError as e:
             raise Problem(str(e)) from e
-        statuses = route_statuses(models, self.state['managed'])
-        plan = compile_profile(full, settings, models, statuses, self.pools())
+        statuses = route_statuses(models, self.managed)
+        plan = compile_profile(full, settings, models, statuses, self.pools(), self.ui.get('visionRoles', ['vision']))
         token = fingerprint({'revision': self.revision(name), 'normal': data, 'settings': settings, 'effective': plan['effective']})
         public = {k: plain(v) for k, v in plan.items() if k != 'effective'}
         public.update({'token': token, 'settings': settings, 'statuses': {r: statuses.get(r, {'status': 'unknown', 'reason': 'Немає даних'}) for r in {route(v) for v in settings['alternatives'] + [x for a in settings['overrides'].values() for x in a]}}, 'tariff': tariff_status()})
@@ -318,7 +333,7 @@ class Forge:
                     profile_catalog.pop(raw, None)
                 else:
                     profile_catalog[raw] = {**profile_catalog.get(raw, {}), **model}
-            projection = compile_profile(full, settings, profile_catalog, statuses, pools)
+            projection = compile_profile(full, settings, profile_catalog, statuses, pools, self.ui.get('visionRoles', ['vision']))
             if projection['issues']:
                 raise Problem('Неможливо зберегти робочий режим '+n+': '+projection['issues'][0]['message'], 422)
             projections[n] = projection
@@ -331,8 +346,8 @@ class Forge:
             wanted_default = desired.get('retry', {}).get('fallbackChains', {}).get('default', [])
             if wanted_default != inherited.get('retry', {}).get('fallbackChains', {}).get('default', []):
                 output.setdefault('retry', {}).setdefault('fallbackChains', {})['default'] = copy.deepcopy(wanted_default)
-            for role, model in desired['modelRoles'].items():
-                if inherited['modelRoles'].get(role) != model:
+            for role, model in desired.get('modelRoles', {}).items():
+                if inherited.get('modelRoles', {}).get(role) != model:
                     output.setdefault('modelRoles', {})[role] = model
                 wanted = desired.get('retry', {}).get('fallbackChains', {}).get(role, desired.get('retry', {}).get('fallbackChains', {}).get('default', []))
                 actual = inherited.get('retry', {}).get('fallbackChains', {}).get(role, inherited.get('retry', {}).get('fallbackChains', {}).get('default', []))
@@ -503,7 +518,7 @@ class Forge:
                     if self.mode_conflicts():
                         raise Problem('Профіль змінено поза Mana Tape. Онови дані перед копіюванням.', 409)
                     settings = self.mode_settings(name, data, self.mode_catalog())
-                    statuses = route_statuses(self.mode_catalog(), self.state['managed'])
+                    statuses = route_statuses(self.mode_catalog(), self.managed)
                     # Creation participates in the mode journal; no orphan YAML on failure.
                     self.commit_mode({'name': new_name, 'normal': data, 'settings': settings, 'statuses': statuses, 'new': True})
                 else:
@@ -597,11 +612,11 @@ class Forge:
                 models.setdefault(r, {'provider': provider, 'id': mid, 'name': mid, 'source': 'reference'})
             available = set(self.state['available'])
             registry = self.registry().get('providers', {})
-            provider_ids = sorted({m['provider'] for m in models.values()} | set(registry) | set(self.state['managed']))
+            provider_ids = sorted({m['provider'] for m in models.values()} | set(registry) | set(self.managed))
             providers = []
             for provider in provider_ids:
                 config = registry.get(provider, {})
-                managed = self.state['managed'].get(provider, {})
+                managed = self.managed.get(provider, {})
                 providers.append({'id': provider, 'custom': provider in registry, 'managed': bool(managed),
                     'name': managed.get('name', provider), 'api': config.get('api', ''),
                     'url': self.safe_url(config.get('baseUrl', '')), 'discovery': config.get('discovery', {}).get('type', ''),
@@ -643,6 +658,13 @@ class Forge:
         except ValueError:
             return ''
 
+    def registry_refs(self):
+        refs = {}
+        for peer in self.agent_peers:
+            for route, profiles in peer.refs().items():
+                refs.setdefault(route, set()).update(peer.project_id+"/"+name for name in profiles)
+        return refs
+
     def provider_save(self, body):
         with self.lock:
             pid = body.get('id', '')
@@ -655,18 +677,18 @@ class Forge:
             data = self.registry()
             providers = data.setdefault('providers', {})
             exists = pid in providers
-            renewing = self.state['managed'].get(pid, {}).get('expired', False)
-            if not exists and not renewing and (pid in self.state['managed'] or any(m['provider'] == pid for m in self.cached()[0].values())):
+            renewing = self.managed.get(pid, {}).get('expired', False)
+            if not exists and not renewing and (pid in self.managed or any(m['provider'] == pid for m in self.cached()[0].values())):
                 raise Problem('Цей ID уже належить провайдеру OMP; використай інший')
             if body.get('action') == 'delete':
                 if not exists:
                     raise Problem('Вбудований провайдер можна лише вимкнути у профілі')
-                uses = sorted({p for r, profiles in self.refs().items() if r.startswith(pid + '/') for p in profiles})
+                uses = sorted({p for r, profiles in self.registry_refs().items() if r.startswith(pid + '/') for p in profiles})
                 if uses:
                     raise Problem('Спочатку заміни моделі у профілях: ' + ', '.join(uses), 409)
                 providers.pop(pid)
                 self.replace_yaml(path, data, current_hash)
-                self.state['managed'].pop(pid, None)
+                self.managed.pop(pid, None)
                 self.state['available'] = [r for r in self.state['available'] if not r.startswith(pid + '/')]
                 self.persist()
                 return {'ok': True}
@@ -725,11 +747,11 @@ class Forge:
             days = body.get('days', 0)
             if not isinstance(days, int) or days not in (-1, 0, 1, 7, 30):
                 raise Problem('Некоректний термін')
-            previous_meta = self.state['managed'].get(pid)
+            previous_meta = self.managed.get(pid)
             deadline = (previous_meta or {}).get('expires', 0) if days == -1 else time.time() + days * 86400 if days else 0
             if deadline and deadline <= time.time():
                 raise Problem('Термін минув; обери новий термін дії')
-            self.state['managed'][pid] = {'name': str(body.get('name') or pid)[:80],
+            self.managed[pid] = {'name': str(body.get('name') or pid)[:80],
                 'expires': deadline, 'expired': False,
                 'fingerprint': fingerprint(config)}
             # Persist expiry before publishing the provider, so a crash cannot lose its deadline.
@@ -738,23 +760,23 @@ class Forge:
                 self.replace_yaml(path, data, current_hash)
             except Exception:
                 if previous_meta is None:
-                    self.state['managed'].pop(pid, None)
+                    self.managed.pop(pid, None)
                 else:
-                    self.state['managed'][pid] = previous_meta
+                    self.managed[pid] = previous_meta
                 self.persist()
                 raise
             return {'ok': True}
 
     def expire(self):
         with self.lock:
-            previous_meta = copy.deepcopy(self.state['managed'])
+            previous_meta = copy.deepcopy(self.managed)
             previous_available = self.state['available'][:]
             path = self.agent / 'models.yml'
             raw = path.read_bytes() if path.exists() else b''
             data = yaml_load(raw) if raw else {'providers': {}}
-            refs = self.refs()
+            refs = self.registry_refs()
             changed = False
-            for pid, meta in self.state['managed'].items():
+            for pid, meta in self.managed.items():
                 if meta.get('expires', 0) and time.time() >= meta['expires'] and not meta.get('expired'):
                     config = data.get('providers', {}).get(pid)
                     if config is None:
@@ -774,7 +796,7 @@ class Forge:
                 try:
                     self.replace_yaml(path, data, digest(raw))
                 except Exception:
-                    self.state['managed'] = previous_meta
+                    self.managed = previous_meta
                     self.state['available'] = previous_available
                     raise
             self.persist()
@@ -1017,10 +1039,28 @@ def load_installation(config_path):
         # Registry writes for projects sharing an OMP agent use the same lock.
         app.lock = locks.setdefault(agent, threading.RLock())
         apps[pid] = app
+    stores = {}
+    for agent in locks:
+        shared_path = state_root / 'registries' / digest(str(agent).encode())[:16] / 'providers.json'
+        if shared_path.exists():
+            managed = json.loads(shared_path.read_text())
+        else:
+            managed = {}
+            for app in apps.values():
+                if app.agent != agent:
+                    continue
+                for pid, meta in app.managed.items():
+                    if pid in managed and managed[pid] != meta:
+                        raise ValueError('Конфлікт старих метаданих спільного провайдера: '+pid)
+                    managed[pid] = copy.deepcopy(meta)
+            atomic(shared_path, json.dumps(managed, ensure_ascii=False).encode())
+        stores[agent] = {'path': shared_path, 'managed': managed}
     menu = [{'id': e['id'], 'name': str(e.get('name', e['id']))} for e in entries]
     first = next(iter(apps.values()))
     for app in apps.values():
         app.projects = menu
+        app.provider_store = stores[app.agent]
+        app.agent_peers = [peer for peer in apps.values() if peer.agent == app.agent]
         app.csrf, app.local_token = first.csrf, first.local_token
         atomic(app.state_dir / 'local-token', first.local_token.encode())
     return cfg, apps

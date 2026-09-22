@@ -213,7 +213,7 @@
 }
 @container forge (max-width:360px){.tree-line{grid-template-columns:14px minmax(0,1fr) 64px 44px}}
 
-/* Keep long role labels readable without clipping. */
+/* Readable scales and contained role labels, including long custom role IDs. */
 .role-code{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .control-rack .tariff-summary{font-size:11px;margin-bottom:20px}
 .control-rack .tariff-scale-note,.control-rack .tariff-now-label,.control-rack .tariff-ticks>span,.control-rack .tariff-ticks small,.control-rack .tariff-caption{font-size:10px;line-height:12px}
