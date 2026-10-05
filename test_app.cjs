@@ -14,8 +14,8 @@ function appFunction(name){
 }
 
 function roleContext(context){
- Object.assign(context,{builtinRoles:context.builtinRoles||[],catalogMap:context.catalogMap||new Map(),poolName:context.poolName||(()=>undefined),split:context.split||(raw=>({raw}))});
- runInNewContext(['roleInfo','roleFallbacks'].map(appFunction).join('\n'),context);
+ Object.assign(context,{builtinRoles:context.builtinRoles||[],builtinAgents:context.builtinAgents||[],catalogMap:context.catalogMap||new Map(),poolName:context.poolName||(()=>undefined),split:context.split||(raw=>({raw}))});
+ runInNewContext(['roleInfo','roleFallbacks','agentInfo'].map(appFunction).join('\n'),context);
  return context;
 }
 
@@ -146,7 +146,7 @@ test('save replaces a queued preview even when a changed token requires another 
 
 test('linked agents show role inheritance instead of pretending a primary pool is a startup list',()=>{
  const profile={modelRoles:{reader:'mana-pool/free-fast'},retry:{modelFallback:true},task:{agentModelOverrides:{reviewer:'@reader',scout:['@reader'],external:'@advisor',task:['@reader','p/backup']}}};
- const context={p:()=>profile,roleKeys:['reader'],esc:s=>s,tool:()=>'',poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined};
+ const context=roleContext({p:()=>profile,roleKeys:['reader'],esc:s=>s,tool:()=>'',poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined});
  runInNewContext(['agentValues','agentLink','agentTier','agentName','agentLinkedTrack'].map(appFunction).join('\n'),context);
  for(const worker of ['reviewer','scout'])for(const mobile of [false,true]){
   const html=context.agentLinkedTrack(worker,mobile);
@@ -328,4 +328,35 @@ test('role pickers enforce native model capabilities, including grounded web cha
  assert.equal(context.acceptsRoleModel('web','role',{kind:'chat',webSearch:{}}),true);
  assert.equal(context.acceptsRoleModel('web','role',{kind:'search'}),true);
  assert.equal(context.acceptsRoleModel('judge','role',{kind:'tiny'}),true);
+});
+
+test('built-in agents display native defaults without materializing override lists',()=>{
+ const builtinAgents=[{id:'scout',model:'@smol',description:'Read only'},{id:'security-reviewer',model:null},{id:'task',model:'@task'}];
+ const profile={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{custom:['p/unknown']}}},before=JSON.stringify(profile);
+ const context=roleContext({builtinAgents,p:()=>profile,roleKeys:['smol','task'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
+ runInNewContext(['workers','agentValues','agentTier','agentName','automaticSlot','agentDefaultTrack','baseChain','vibeAlias','oldSetChain'].map(appFunction).join('\n'),context);
+ assert.deepEqual(Array.from(context.workers()),['scout','security-reviewer','task','custom']);
+ for(const mobile of [false,true]){
+  const html=context.agentDefaultTrack('scout',mobile);
+  assert.match(html,/Типово в OMP/);assert.match(html,/data-group="vibe"/);assert.match(html,/Обрати CUT для агента: scout/);assert.match(html,/data-agent-role="smol"/);
+  assert.doesNotMatch(context.agentDefaultTrack('security-reviewer',mobile),/data-agent-role=/);
+ }
+ assert.equal(JSON.stringify(profile),before);assert.equal(context.baseChain('scout','vibe').length,0);
+ context.oldSetChain('scout',['p/own'],'vibe');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.scout),['p/own']);
+ assert.equal(profile.modelRoles.smol,'p/fast');assert.equal(profile.task.agentModelOverrides.task,undefined);
+});
+
+test('resetting a built-in agent emits removal and supports Undo and preset inheritance',()=>{
+ const baseline={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{scout:['p/own']}},forgeMode:{overrides:{'vibe:scout':['p/alt']}}};
+ const profile=structuredClone(baseline),context=roleContext({builtinAgents:[{id:'scout',model:'@smol'}],state:{profile:'standard'},p:()=>profile,
+  original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>profile.forgeMode,copy:structuredClone,render:()=>{},renderCache:null});
+ runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
+ const {ForgeHistory}=require('./static/tape.js'),history=new ForgeHistory();history.observe('standard',profile,false);
+ context.resetAgent('scout');history.observe('standard',profile,true,baseline);
+ assert.equal(profile.task.agentModelOverrides.scout,undefined);assert.equal(profile.modelRoles.smol,'p/fast');
+ assert.ok(context.diff('standard').some(c=>c.remove&&c.path.join('.')==='task.agentModelOverrides.scout'));
+ assert.deepEqual(history.step('standard',-1),baseline);
+ context.state.profile='preset';profile.task.agentModelOverrides.scout=['p/preset'];context.resetAgent('scout');
+ assert.deepEqual(profile.task.agentModelOverrides.scout,['p/own']);
 });

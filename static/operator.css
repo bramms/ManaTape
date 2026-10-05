@@ -447,3 +447,10 @@
 .role-reset{align-self:flex-start;margin-bottom:6px}
 
 .tree-line.no-thinking{grid-template-columns:20px minmax(0,1fr) 34px}
+.agent-default-detail{grid-column:3/-1;display:flex;align-items:center;gap:12px;min-width:0;color:var(--muted);font-size:10px;padding:4px 12px}
+.agent-default-detail span{overflow-wrap:anywhere}
+.agent-default-link{font-size:10px;white-space:nowrap}
+.desktop-graph .agent-default .role-code{overflow-wrap:anywhere;white-space:normal}
+.desktop-graph .agent-reset{grid-column:6/span 2;align-self:center;font-size:10px;min-height:38px}
+.mobile-vibe .agent-default-detail{display:flex;flex-wrap:wrap;padding:8px 0}
+.mobile-vibe .agent-default-link,.mobile-vibe .agent-reset{min-height:44px}

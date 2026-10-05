@@ -134,6 +134,66 @@ class Projects(unittest.TestCase):
         self.assertNotIn('modelRoles', state['base'])
         self.assertEqual(app.path('standard').read_bytes(), before)
 
+    def test_builtin_agents_are_metadata_without_native_overrides(self):
+        app = self.apps['one']
+        app.path('standard').write_text('modelRoles:\n  smol: test/fast\n')
+        before = app.path('standard').read_bytes()
+        state = app.snapshot()
+        self.assertEqual({a['id']:a['model'] for a in state['builtinAgents']}, {
+            'scout':'@smol', 'reviewer':'@slow', 'security-reviewer':None,
+            'task':'@task', 'sonic':'@smol'})
+        self.assertNotIn('task', state['base'])
+        self.assertEqual(app.path('standard').read_bytes(), before)
+
+    def test_builtin_agents_can_be_assigned_and_reset_without_changing_roles(self):
+        from omp_roles import BUILTIN_AGENTS
+        app = self.apps['one']
+        for worker in BUILTIN_AGENTS:
+            with self.subTest(worker=worker):
+                app.path('standard').write_text('# Keep agent comment\nmodelRoles:\n  smol: test/fast\n')
+                body = {'profile':'standard', 'revision':app.revision('standard'),
+                        'changes':[{'path':['task','agentModelOverrides',worker], 'value':['test/own-model']}]}
+                if worker != 'scout':
+                    body['modeSettings'] = {'mode':'deepseek','alternatives':[],'overrides':{}}
+                    body['previewToken'] = app.preview_profile(body)['token']
+                app.save_profile(body)
+                data = app.read(app.path('standard'))
+                self.assertEqual(data['task']['agentModelOverrides'], {worker:['test/own-model']})
+                self.assertEqual(data['modelRoles'], {'smol':'test/fast'})
+                self.assertIn('# Keep agent comment', app.path('standard').read_text())
+                body.update(revision=app.revision('standard'), changes=[{'path':['task','agentModelOverrides',worker], 'remove':True}])
+                if 'modeSettings' in body:
+                    body['previewToken'] = app.preview_profile(body)['token']
+                app.save_profile(body)
+                self.assertEqual(app.read(app.path('standard'))['task']['agentModelOverrides'], {})
+                # Mode records are isolated too; reset all between subtests.
+                app.mode_state['profiles'].clear()
+                app.mode_file.unlink(missing_ok=True)
+
+    def test_builtin_agent_rejects_unknown_agents_and_non_chat_models(self):
+        app = self.apps['one']
+        app.path('standard').write_text('{}\n')
+        app.state['catalog'] = {'test/voice': {'id':'voice','kind':'tts'}}
+        before = app.path('standard').read_bytes()
+        for worker, value in [('unconfigured',['test/model']), ('scout',['test/voice']), ('sonic',[])]:
+            with self.subTest(worker=worker), self.assertRaises(Problem):
+                app.save_profile({'profile':'standard','revision':app.revision('standard'),
+                                  'changes':[{'path':['task','agentModelOverrides',worker],'value':value}]})
+            self.assertEqual(app.path('standard').read_bytes(), before)
+
+    def test_builtin_agent_alias_to_unassigned_role_stays_native(self):
+        app = self.apps['one']
+        app.path('standard').write_text('theme:\n  dark: titanium\n')
+        body = {'profile':'standard','revision':app.revision('standard'),
+                'changes':[{'path':['task','agentModelOverrides','reviewer'],'value':['@slow']}],
+                'modeSettings':{'mode':'deepseek','alternatives':[],'overrides':{}}}
+        body['previewToken'] = app.preview_profile(body)['token']
+        app.save_profile(body)
+        data = app.read(app.path('standard'))
+        self.assertEqual(data['task']['agentModelOverrides']['reviewer'], ['@slow'])
+        self.assertNotIn('modelRoles', data)
+        self.assertNotIn('retry', data)
+
     def test_unassigned_builtin_roles_can_be_saved_and_reset(self):
         from omp_roles import BUILTIN_ROLES
         app = self.apps['one']

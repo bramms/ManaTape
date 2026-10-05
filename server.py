@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 from profile_modes import compile_profile, default_settings, route_statuses, tariff_status, validate_settings, validate_pools, pool_name, POOL_NAMES
-from omp_roles import BUILTIN_ROLES, accepts_model, fallback_chain
+from omp_roles import BUILTIN_ROLES, BUILTIN_AGENTS, accepts_model, fallback_chain
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
@@ -439,7 +439,7 @@ class Forge:
 
     def patch_profile(self, data, changes, roles, name):
         base, _ = self.profiles()
-        workers = set(merge(base, data).get('task', {}).get('agentModelOverrides', {}))
+        workers = set(BUILTIN_AGENTS) | set(merge(base, data).get('task', {}).get('agentModelOverrides', {}))
         models = self.mode_catalog()
         for change in changes:
             keys, value = change.get('path'), change.get('value')
@@ -466,13 +466,16 @@ class Forge:
                         valid_route(v)
                         if keys[0] == 'retry':
                             self.validate_role_route(keys[2], v, models)
+                        elif keys[0] == 'task':
+                            self.validate_role_route('task', v, models)
                     if keys[0] == 'task' and not value:
                         raise Problem('Агент потребує хоча б одного кандидата')
             target = data
             for key in keys[:-1]:
                 target = target.setdefault(key, {})
             if change.get('remove'):
-                if name == 'standard' and not (keys[0] in ('modelRoles', 'retry') and keys[-1] in BUILTIN_ROLES):
+                builtin = (keys[0] in ('modelRoles', 'retry') and keys[-1] in BUILTIN_ROLES) or (keys[0] == 'task' and keys[-1] in BUILTIN_AGENTS)
+                if name == 'standard' and not builtin:
                     raise Problem('Standard не має батьківського профілю')
                 target.pop(keys[-1], None)
             else:
@@ -654,6 +657,7 @@ class Forge:
             return {'source': str(self.project), 'projectId': self.project_id, 'projects': self.projects,
                 'ui': self.ui, 'legacyDrafts': self.legacy_drafts, 'demo': self.demo, 'base': relevant(base),
                 'builtinRoles': list(BUILTIN_ROLES.values()),
+                'builtinAgents': list(BUILTIN_AGENTS.values()),
                 'presets': {k: relevant(v) for k, v in ps.items() if k != 'standard'},
                 'revisions': {k: self.revision(k) for k in ps},
                 'freePools': self.pools(), 'poolsRevision': self.pools_revision(),

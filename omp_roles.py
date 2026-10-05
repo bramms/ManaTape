@@ -17,6 +17,19 @@ BUILTIN_ROLES = {
     )
 }
 
+# Bundled definitions from src/task/agents.ts and src/prompts/agents/*.md.
+# These are display metadata, never task.agentModelOverrides assignments.
+BUILTIN_AGENTS = {
+    agent: {'id': agent, 'model': model, 'description': description}
+    for agent, model, description in (
+        ('scout', '@smol', 'Швидке дослідження коду · лише читання'),
+        ('reviewer', '@slow', 'Перевірка змін і пошук помилок'),
+        ('security-reviewer', None, 'Пошук вразливостей · лише читання'),
+        ('task', '@task', 'Універсальний виконавець делегованих завдань'),
+        ('sonic', '@smol', 'Механічні зміни та збір даних'),
+    )
+}
+
 
 def accepts_model(role, model):
     info = BUILTIN_ROLES.get(role)
