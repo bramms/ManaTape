@@ -437,3 +437,13 @@
  #forge-direct .operator-dock .dock-selector option:checked{background:var(--chosen-lo);color:var(--accent)}
  #forge-direct .operator-dock .dock-selector option:hover{background:var(--chosen-hi)}
 }
+
+/* Unassigned built-in roles expose OMP defaults without creating a CUT. */
+.automatic-role .node-name{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;width:100%;height:100%;gap:1px;white-space:normal}
+.automatic-role .node-name strong{font:inherit}
+.automatic-role .node-name small{font-size:9px;line-height:11px;color:var(--quiet)}
+.tree-line.automatic-role{grid-template-columns:minmax(0,1fr)}
+.tree-line.automatic-role .node-name{min-height:44px}
+.role-reset{align-self:flex-start;margin-bottom:6px}
+
+.tree-line.no-thinking{grid-template-columns:20px minmax(0,1fr) 34px}

@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from profile_modes import compile_profile, default_settings, route_statuses, tariff_status, validate_settings, validate_pools, pool_name, POOL_NAMES
+from omp_roles import BUILTIN_ROLES, accepts_model, fallback_chain
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
@@ -24,7 +25,7 @@ from ruamel.yaml import YAML
 
 EFFORT = re.compile(r':(off|minimal|low|medium|high|xhigh|max|auto)$')
 ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
-MODEL_FIELDS = ('id', 'name', 'reasoning', 'thinking', 'input', 'contextWindow', 'maxTokens', 'cost')
+MODEL_FIELDS = ('id', 'name', 'kind', 'webSearch', 'reasoning', 'thinking', 'input', 'contextWindow', 'maxTokens', 'cost')
 
 
 class Problem(Exception):
@@ -267,7 +268,7 @@ class Forge:
             raise Problem('Файл змінено поза Mana Tape: '+', '.join(conflicts)+'. Збереження режимів зупинене, щоб не затерти ці зміни.', 409)
         base, ps = self.profiles()
         data = copy.deepcopy(ps[name])
-        roles = set(merge(base, data).get('modelRoles', {}))
+        roles = set(BUILTIN_ROLES) | set(merge(base, data).get('modelRoles', {}))
         changes = body.get('changes', [])
         if not isinstance(changes, list) or len(changes) > 150:
             raise Problem('Забагато змін')
@@ -315,7 +316,7 @@ class Forge:
             + list(full.get('modelRoles', {}).values()) + [r for values in full.get('retry', {}).get('fallbackChains', {}).values() for r in values]
             + [r for values in full.get('task', {}).get('agentModelOverrides', {}).values() for r in ([values] if isinstance(values, str) else values) if not r.startswith('@')])
         references = {route(member) for ref in references for member in (pools.get(pool_name(ref), []) if pool_name(ref) is not None else [ref])}
-        frozen_catalog = prepared.get('catalog', {r: {k: copy.deepcopy(models[r].get(k)) for k in ('id', 'name', 'cost', 'input', 'thinking')} if r in models else None for r in references})
+        frozen_catalog = prepared.get('catalog', {r: {k: copy.deepcopy(models[r].get(k)) for k in ('id', 'name', 'kind', 'webSearch', 'cost', 'input', 'thinking')} if r in models else None for r in references})
         if not prepared.get('poolsOnly'):
             records[name] = {**(prior or {}), 'normal': yaml_dump(prepared['normal']), 'settings': settings,
                 'statuses': {r: v for r, v in prepared['statuses'].items() if r in references},
@@ -349,8 +350,8 @@ class Forge:
             for role, model in desired.get('modelRoles', {}).items():
                 if inherited.get('modelRoles', {}).get(role) != model:
                     output.setdefault('modelRoles', {})[role] = model
-                wanted = desired.get('retry', {}).get('fallbackChains', {}).get(role, desired.get('retry', {}).get('fallbackChains', {}).get('default', []))
-                actual = inherited.get('retry', {}).get('fallbackChains', {}).get(role, inherited.get('retry', {}).get('fallbackChains', {}).get('default', []))
+                wanted = fallback_chain(desired, role)
+                actual = fallback_chain(inherited, role)
                 if wanted != actual:
                     output.setdefault('retry', {}).setdefault('fallbackChains', {})[role] = copy.deepcopy(wanted)
             for worker, values in desired.get('task', {}).get('agentModelOverrides', {}).items():
@@ -439,6 +440,7 @@ class Forge:
     def patch_profile(self, data, changes, roles, name):
         base, _ = self.profiles()
         workers = set(merge(base, data).get('task', {}).get('agentModelOverrides', {}))
+        models = self.mode_catalog()
         for change in changes:
             keys, value = change.get('path'), change.get('value')
             allowed = (isinstance(keys, list) and (
@@ -451,6 +453,7 @@ class Forge:
             if not change.get('remove'):
                 if keys[0] == 'modelRoles':
                     valid_route(value)
+                    self.validate_role_route(keys[1], value, models)
                 elif keys == ['disabledProviders']:
                     if not isinstance(value, list) or len(value) > 200 or any(not isinstance(v, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}', v) for v in value):
                         raise Problem('Некоректний список провайдерів')
@@ -461,17 +464,31 @@ class Forge:
                         if keys[0] == 'task' and isinstance(v, str) and v.startswith('@') and v[1:] in roles:
                             continue
                         valid_route(v)
+                        if keys[0] == 'retry':
+                            self.validate_role_route(keys[2], v, models)
                     if keys[0] == 'task' and not value:
                         raise Problem('Агент потребує хоча б одного кандидата')
             target = data
             for key in keys[:-1]:
                 target = target.setdefault(key, {})
             if change.get('remove'):
-                if name == 'standard':
+                if name == 'standard' and not (keys[0] in ('modelRoles', 'retry') and keys[-1] in BUILTIN_ROLES):
                     raise Problem('Standard не має батьківського профілю')
                 target.pop(keys[-1], None)
             else:
                 target[keys[-1]] = copy.deepcopy(value)
+
+    def validate_role_route(self, role, value, models):
+        if pool_name(value) is not None:
+            candidates = self.pools().get(pool_name(value), [])
+        else:
+            candidates = [value]
+        for candidate in candidates:
+            model = models.get(route(candidate))
+            if model and not accepts_model(role, model):
+                raise Problem('CUT не підтримує роль '+role, 422)
+            if not BUILTIN_ROLES.get(role, {}).get('thinking', True) and EFFORT.search(candidate):
+                raise Problem('Ця роль не використовує thinking: '+role, 422)
 
     def save_profile(self, body):
         if 'modeSettings' in body:
@@ -491,7 +508,7 @@ class Forge:
             original_hash = digest(raw)
             data = yaml_load(raw)
             base = yaml_load(base_raw)
-            roles = set(merge(base, data).get('modelRoles', {}))
+            roles = set(BUILTIN_ROLES) | set(merge(base, data).get('modelRoles', {}))
             changes = body.get('changes')
             if not isinstance(changes, list) or not 1 <= len(changes) <= 150:
                 raise Problem('Немає змін або забагато змін')
@@ -636,6 +653,7 @@ class Forge:
                 return plain({k: p[k] for k in ('modelRoles', 'retry', 'task', 'disabledProviders') if k in p})
             return {'source': str(self.project), 'projectId': self.project_id, 'projects': self.projects,
                 'ui': self.ui, 'legacyDrafts': self.legacy_drafts, 'demo': self.demo, 'base': relevant(base),
+                'builtinRoles': list(BUILTIN_ROLES.values()),
                 'presets': {k: relevant(v) for k, v in ps.items() if k != 'standard'},
                 'revisions': {k: self.revision(k) for k in ps},
                 'freePools': self.pools(), 'poolsRevision': self.pools_revision(),
@@ -813,7 +831,7 @@ class Forge:
                 cached_before, before_stamps = self.cached()
                 known_before = set(self.state.get('known', set(cached_before) | set(self.state['catalog'])))
             # No prompt, no inference, no project extensions or active sessions touched.
-            command = [self.omp, 'models', 'refresh', '--json', '--no-extensions']
+            command = [self.omp, 'models', 'refresh', '--kind', 'all', '--json', '--no-extensions']
             # Discovery stays disabled; load only this explicitly installed bridge.
             extension = self.agent / 'extensions' / 'opencode-free.js'
             if not self.demo and extension.is_file():

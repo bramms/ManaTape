@@ -2,6 +2,7 @@
 import copy
 import re
 from datetime import datetime, timedelta, timezone
+from omp_roles import accepts_model, fallback_chain
 
 EFFORT = re.compile(r':(off|minimal|low|medium|high|xhigh|max|auto)$')
 POOL_NAMES = ('free-good', 'free-fast')
@@ -127,6 +128,8 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
                     reason = availability['reason']
                 elif not model:
                     reason = 'Модель відсутня в каталозі'
+                elif key.startswith('role:') and not accepts_model(key[5:], model):
+                    reason = 'CUT не підтримує цю роль'
                 elif key in {'role:'+role for role in vision_roles} and 'image' not in model.get('input', []):
                     reason = 'Для цієї ролі потрібен зір'
                 effort = EFFORT.search(value)
@@ -215,7 +218,7 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
         return unique, view
 
     for role, primary in roles.items():
-        values = [primary, *normal.get('retry', {}).get('fallbackChains', {}).get(role, normal.get('retry', {}).get('fallbackChains', {}).get('default', []))]
+        values = [primary, *fallback_chain(normal, role)]
         result, view = project(values, 'role:'+role, 'role')
         views['role'][role] = view
         if (off or any(pool_name(resolve(v, normal)) is not None for v in values)) and result:

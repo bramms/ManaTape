@@ -123,6 +123,57 @@ class Projects(unittest.TestCase):
         self.assertEqual(app.read(app.path('standard'))['task']['agentModelOverrides']['custom-worker'], ['custom/model-b'])
         app.save_pools({'revision':app.pools_revision(),'pools':{'free-good':[],'free-fast':[]}})
 
+    def test_builtin_role_metadata_does_not_materialize_assignments(self):
+        app = self.apps['one']
+        app.path('standard').write_text('# Keep this comment\n{}\n')
+        before = app.path('standard').read_bytes()
+        state = app.snapshot()
+        self.assertEqual({r['id'] for r in state['builtinRoles']}, {
+            'default', 'smol', 'slow', 'vision', 'plan', 'commit', 'tiny',
+            'memory', 'task', 'advisor', 'image', 'web', 'speech', 'dictation', 'judge'})
+        self.assertNotIn('modelRoles', state['base'])
+        self.assertEqual(app.path('standard').read_bytes(), before)
+
+    def test_unassigned_builtin_roles_can_be_saved_and_reset(self):
+        from omp_roles import BUILTIN_ROLES
+        app = self.apps['one']
+        app.path('standard').write_text('# Keep this comment\ntheme:\n  dark: titanium\n')
+        for role, info in BUILTIN_ROLES.items():
+            with self.subTest(role=role):
+                model = {'id': 'candidate', 'provider': 'test', 'kind': info['kinds'][0]}
+                app.state['catalog'] = {'test/candidate': model}
+                body = {'profile':'standard', 'revision':app.revision('standard'),
+                        'changes':[{'path':['modelRoles',role], 'value':'test/candidate'}],
+                        'modeSettings':{'mode':'deepseek','alternatives':[],'overrides':{}}}
+                body['previewToken'] = app.preview_profile(body)['token']
+                app.save_profile(body)
+                data = app.read(app.path('standard'))
+                self.assertEqual(data['modelRoles'], {role:'test/candidate'})
+                self.assertNotIn('retry', data)
+                self.assertIn('# Keep this comment', app.path('standard').read_text())
+                body.update(revision=app.revision('standard'), changes=[{'path':['modelRoles',role], 'remove':True}])
+                body['previewToken'] = app.preview_profile(body)['token']
+                app.save_profile(body)
+                self.assertEqual(app.read(app.path('standard'))['modelRoles'], {})
+
+    def test_builtin_role_kind_and_custom_role_validation_keep_files_unchanged(self):
+        app = self.apps['one']
+        app.path('standard').write_text('{}\n')
+        app.state['catalog'] = {'test/chat': {'id':'chat','kind':'chat'}}
+        before = app.path('standard').read_bytes()
+        for role, selector in [('speech','test/chat'), ('web','test/chat'), ('unconfigured','test/chat'), ('judge','test/chat:high')]:
+            with self.subTest(role=role), self.assertRaises(Problem):
+                app.save_profile({'profile':'standard','revision':app.revision('standard'),
+                                  'changes':[{'path':['modelRoles',role],'value':selector}]})
+            self.assertEqual(app.path('standard').read_bytes(), before)
+
+    def test_kind_role_does_not_receive_default_chat_fallbacks(self):
+        from profile_modes import compile_profile
+        normal = {'modelRoles':{'speech':'test/voice'}, 'retry':{'fallbackChains':{'default':['test/chat']}}}
+        result = compile_profile(normal, {'mode':'deepseek','alternatives':[],'overrides':{}}, {}, {})
+        self.assertEqual(result['views']['role']['speech']['routes'], ['test/voice'])
+        self.assertEqual(result['effective'], normal)
+
     def test_ssh_commandcode_publisher_uses_configured_host_and_state(self):
         import importlib.util
         from types import SimpleNamespace

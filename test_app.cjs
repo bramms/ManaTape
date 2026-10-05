@@ -13,6 +13,12 @@ function appFunction(name){
  return source.slice(start,end);
 }
 
+function roleContext(context){
+ Object.assign(context,{builtinRoles:context.builtinRoles||[],catalogMap:context.catalogMap||new Map(),poolName:context.poolName||(()=>undefined),split:context.split||(raw=>({raw}))});
+ runInNewContext(['roleInfo','roleFallbacks'].map(appFunction).join('\n'),context);
+ return context;
+}
+
 test('all search fields propagate clearing and defer result updates during composition',()=>{
  const calls=[],state={picker:{query:'old',limit:80},analyze:'old',page:3};
  const context={state,composing:false,refreshSearch:id=>calls.push(id)};
@@ -111,7 +117,7 @@ test('two CUT moves wait for the new projection and move the same CUT in DeepSee
  const context={state:{profile:'standard',picker:{role:'writer',group:'role',index:0}},
   modeOff:()=>true,diff:()=>[{}],activePlan:()=>plan,modeSettings:()=>settings,modeScope:()=> 'role:writer',
   focusPickerMove:()=>{},split:route=>({raw:route}),render:()=>{plan={pending:true,previous:plan.data};}};
- runInNewContext(['modeView','chain','setChain','pickerActionsPending','movePickerCut'].map(appFunction).join('\n'),context);
+ runInNewContext(['modeView','chain','setChain','pickerActionsPending','movePickerCut'].map(appFunction).join('\n'),roleContext(context));
  context.movePickerCut(1);assert.deepEqual(Array.from(settings.overrides['role:writer']),['p/B','p/A','p/C']);
  context.movePickerCut(1);assert.deepEqual(Array.from(settings.overrides['role:writer']),['p/B','p/A','p/C'],'repeat while pending cannot read the old projection');
  assert.equal(context.state.picker.index,1);
@@ -156,7 +162,7 @@ test('linked agents show role inheritance instead of pretending a primary pool i
 test('editing a role copies only explicit agent tails and keeps singleton inheritance intact',()=>{
  const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/b']}},task:{agentModelOverrides:{one:'@reader',two:['@reader'],custom:['@reader','p/c'],other:['p/x','p/y']}}};
  const context={p:()=>profile,state:{syncVibe:true},modeView:()=>null};
- runInNewContext(['workers','agentValues','agentLink','vibeAlias','oldSetChain','setChain'].map(appFunction).join('\n'),context);
+ runInNewContext(['workers','agentValues','agentLink','vibeAlias','oldSetChain','setChain'].map(appFunction).join('\n'),roleContext(context));
  context.setChain('reader',['p/new','p/next']);
  assert.equal(profile.task.agentModelOverrides.one,'@reader');assert.deepEqual(profile.task.agentModelOverrides.two,['@reader']);
  assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['@reader','p/next']);assert.deepEqual(profile.task.agentModelOverrides.other,['p/x','p/y']);
@@ -171,7 +177,7 @@ test('copying an inherited agent preserves normal routes and DeepSeek settings a
   source:{freePools:{'free-fast':['p/free1','p/free2']}},poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined,
   modeOff:()=>true,modeView:()=>({}),diff:()=>[],chain:()=>['p/replacement','mana-pool/free-fast','p/extra'],modeSettings:()=>profile.forgeMode,render:()=>history.observe('one',profile,true,baseline),win:{querySelectorAll:()=>[]},scrollToControl:()=>{},notify:()=>assert.fail('valid conversion must work')};
  history.observe('one',profile,false);
- runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),context);
+ runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
  context.copyAgentRole('custom');
  assert.equal(context.state.poolPanel,false,'conversion must activate the profile Undo/Save scope');
  assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['p/deepseek','mana-pool/free-fast','p/extra']);
@@ -185,7 +191,7 @@ test('copying an agent refuses to silently add default fallbacks or truncate a l
  for(const long of [false,true]){
   const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:long?Array.from({length:30},(_,i)=>'p/'+i):[],default:['p/default']}},task:{agentModelOverrides:{custom:'@reader'}}};
   const notices=[],before=JSON.stringify(profile),context={p:()=>profile,state:{},roleKeys:['reader'],modeOff:()=>false,chain:()=>[profile.modelRoles.reader,...profile.retry.fallbackChains.reader],poolName:()=>undefined,notify:s=>notices.push(s)};
-  runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),context);
+  runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
   context.copyAgentRole('custom');assert.equal(JSON.stringify(profile),before);assert.equal(notices.length,1);
   assert.match(notices[0],long?/30 CUTS/:/default/);
  }
@@ -195,7 +201,7 @@ test('agent conversion waits for OFF preview and rejects an OFF singleton with d
  const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/deepseek'],default:['p/default']}},task:{agentModelOverrides:{custom:'@reader'}}};
  let pending=true;const notices=[],before=JSON.stringify(profile),context={p:()=>profile,state:{profile:'one'},roleKeys:['reader'],modeOff:()=>true,
   modeView:()=>({}),diff:()=>[{}],activePlan:()=>pending?{pending:true}:{data:{}},chain:()=>['p/a'],poolName:()=>undefined,notify:s=>notices.push(s)};
- runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),context);
+ runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
  context.copyAgentRole('custom');assert.match(notices.pop(),/Дочекайся/);
  pending=false;context.copyAgentRole('custom');assert.match(notices.pop(),/default/);assert.equal(JSON.stringify(profile),before);
 });
@@ -276,4 +282,50 @@ test('CUTS resize starts at the visible edge, commits locally, and Escape restor
  assert.equal(h.stored.at(-1).drawerHeight,400);
  h.events.keydown({key:'ArrowDown',target:h.grip,preventDefault:()=>{}});
  assert.equal(h.attrs['aria-valuenow'],368);assert.equal(h.stored.at(-1).drawerHeight,368);
+});
+
+
+test('built-in roles stay visible with empty assignments without changing drafts',()=>{
+ const builtinRoles=[{id:'default'},{id:'smol'},{id:'image',kinds:['image'],thinking:false,defaultFallbacks:false}];
+ const profile={modelRoles:{},retry:{fallbackChains:{default:['p/chat']}},task:{agentModelOverrides:{}}},before=JSON.stringify(profile);
+ const context=roleContext({builtinRoles,p:()=>profile});
+ runInNewContext(['knownRoleKeys','baseChain','oldSetChain'].map(appFunction).join('\n'),context);
+ assert.deepEqual(Array.from(context.knownRoleKeys(profile)),['default','smol','image']);
+ assert.deepEqual(Array.from(context.baseChain('smol')),[],'an implicit primary is not the first default fallback');
+ assert.equal(JSON.stringify(profile),before,'render metadata must not create assignments');
+ context.oldSetChain('smol',['p/fast']);
+ assert.deepEqual(profile.modelRoles,{smol:'p/fast'});
+ assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'smol'),'first assignment preserves OMP fallback defaults');
+ context.oldSetChain('smol',['p/other',...context.roleFallbacks('smol')]);assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'smol'),'replacing only a primary preserves implicit fallback defaults');
+ delete profile.modelRoles.smol;profile.retry.fallbackChains.smol=['p/spare'];context.oldSetChain('smol',['p/new']);assert.deepEqual(profile.retry.fallbackChains.smol,['p/spare']);
+ context.oldSetChain('image',['p/image']);
+ assert.deepEqual(Array.from(context.baseChain('image')),['p/image'],'image never inherits chat fallbacks');
+ profile.modelRoles.writer='p/writer';
+ assert.deepEqual(Array.from(context.knownRoleKeys(profile)),['default','smol','image','writer']);
+});
+
+test('resetting a built-in role creates removals and Undo restores its assignment',()=>{
+ const {ForgeHistory}=require('./static/tape.js'),history=new ForgeHistory();
+ const baseline={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{smol:['p/spare']}},task:{agentModelOverrides:{}},forgeMode:{mode:'deepseek',alternatives:[],overrides:{}}};
+ const profile=structuredClone(baseline),context=roleContext({builtinRoles:[{id:'smol'}],state:{profile:'standard'},p:()=>profile,
+  original:{standard:baseline},profiles:{standard:profile},copy:structuredClone,modeSettings:()=>profile.forgeMode,renderCache:null,
+  render:()=>history.observe('standard',profile,true,baseline)});
+ runInNewContext(['resetRole','workers','diff'].map(appFunction).join('\n'),context);
+ history.observe('standard',profile,false);context.resetRole('smol');
+ assert.deepEqual(Array.from(context.diff('standard'),v=>JSON.parse(JSON.stringify(v))),[
+  {path:['modelRoles','smol'],remove:true},{path:['retry','fallbackChains','smol'],remove:true}]);
+ assert.deepEqual(history.step('standard',-1),baseline);
+});
+
+test('role pickers enforce native model capabilities, including grounded web chat',()=>{
+ const builtinRoles=[{id:'smol',kinds:['chat']},{id:'image',kinds:['image']},{id:'speech',kinds:['tts']},{id:'web',kinds:['search','chat']},{id:'judge',kinds:['judge','tiny','chat']}];
+ const context=roleContext({builtinRoles});runInNewContext(appFunction('acceptsRoleModel'),context);
+ assert.equal(context.acceptsRoleModel('smol','role',{}),true);
+ assert.equal(context.acceptsRoleModel('image','role',{kind:'chat'}),false);
+ assert.equal(context.acceptsRoleModel('speech','role',{kind:'tts'}),true);
+ assert.equal(context.acceptsRoleModel('speech','role',{kind:'chat'}),false);
+ assert.equal(context.acceptsRoleModel('web','role',{kind:'chat'}),false);
+ assert.equal(context.acceptsRoleModel('web','role',{kind:'chat',webSearch:{}}),true);
+ assert.equal(context.acceptsRoleModel('web','role',{kind:'search'}),true);
+ assert.equal(context.acceptsRoleModel('judge','role',{kind:'tiny'}),true);
 });
