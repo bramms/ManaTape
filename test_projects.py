@@ -139,7 +139,7 @@ class Projects(unittest.TestCase):
         app.path('standard').write_text('modelRoles:\n  smol: test/fast\n')
         before = app.path('standard').read_bytes()
         state = app.snapshot()
-        self.assertEqual({a['id']:a['model'] for a in state['builtinAgents']}, {
+        self.assertEqual({a['id']:a['model'] for a in state['agents']}, {
             'scout':'@smol', 'reviewer':'@slow', 'security-reviewer':None,
             'task':'@task', 'sonic':'@smol'})
         self.assertNotIn('task', state['base'])
@@ -193,6 +193,79 @@ class Projects(unittest.TestCase):
         self.assertEqual(data['task']['agentModelOverrides']['reviewer'], ['@slow'])
         self.assertNotIn('modelRoles', data)
         self.assertNotIn('retry', data)
+
+    def write_agent(self, directory, filename, text):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / filename).write_text(text)
+
+    def test_custom_agents_are_discovered_read_only_with_precedence(self):
+        app = self.apps['one']
+        project_dir = app.project / '.omp/agents'
+        user_dir = app.agent / 'agents'
+        self.write_agent(project_dir, 'designer.md', '---\nname: designer\ndescription: UI designer\n---\nPrompt body\n')
+        self.write_agent(project_dir, 'reviewer.md', '---\nname: reviewer\ndescription: Project reviewer\nmodel: "@slow"\n---\n')
+        self.write_agent(user_dir, 'designer.md', '---\nname: designer\ndescription: User designer\nmodel: p/user\n---\n')
+        self.write_agent(user_dir, 'helper.md', '---\nname: helper\ndescription: Helper\nmodel:\n  - "@smol"\n  - p/own:high\n---\n')
+        self.write_agent(user_dir, 'bad.md', 'no frontmatter\n')
+        self.write_agent(user_dir, 'noname.md', '---\ndescription: nameless\n---\n')
+        self.write_agent(user_dir, 'unsafe.md', '---\nname: ../escape\ndescription: unsafe\n---\n')
+        self.write_agent(user_dir, 'broken.md', '---\nname: [oops\ndescription: x\n---\n')
+        self.write_agent(user_dir, 'notes.txt', '---\nname: ignored\ndescription: x\n---\n')
+        before = sorted((p, p.read_bytes()) for p in list(project_dir.iterdir()) + list(user_dir.iterdir()))
+        state = app.snapshot()
+        agents = {a['id']: a for a in state['agents']}
+        self.assertEqual(list(agents)[:5], ['scout', 'reviewer', 'security-reviewer', 'task', 'sonic'])
+        self.assertEqual({k: v['source'] for k, v in agents.items()}, {
+            'scout': 'builtin', 'reviewer': 'project', 'security-reviewer': 'builtin', 'task': 'builtin',
+            'sonic': 'builtin', 'designer': 'project', 'helper': 'user'})
+        self.assertEqual(agents['designer']['description'], 'UI designer')
+        self.assertIsNone(agents['designer']['model'])
+        self.assertEqual(agents['helper']['model'], ['@smol', 'p/own:high'])
+        self.assertTrue(agents['reviewer']['overrides'])
+        self.assertEqual(agents['reviewer']['model'], '@slow')
+        self.assertFalse(agents['designer']['overrides'])
+        self.assertEqual(len(state['agentWarnings']), 4)
+        self.assertNotIn('ignored', agents)
+        self.assertEqual(set(state['base']['task']['agentModelOverrides']), {'research-team'})
+        self.assertEqual(sorted((p, p.read_bytes()) for p in list(project_dir.iterdir()) + list(user_dir.iterdir())), before)
+        # Other projects do not see this project's agents, only the shared user directory.
+        other = {a['id'] for a in self.apps['two'].snapshot()['agents']}
+        self.assertEqual(other - {'scout', 'reviewer', 'security-reviewer', 'task', 'sonic'}, {'designer', 'helper'})
+        self.assertEqual(next(a for a in self.apps['two'].snapshot()['agents'] if a['id'] == 'designer')['source'], 'user')
+
+    def test_missing_agent_directories_leave_builtin_agents_only(self):
+        state = self.apps['one'].snapshot()
+        self.assertEqual({a['source'] for a in state['agents']}, {'builtin'})
+        self.assertEqual(state['agentWarnings'], [])
+
+    def test_discovered_agents_can_be_assigned_and_removed(self):
+        app = self.apps['one']
+        self.write_agent(app.project / '.omp/agents', 'designer.md', '---\nname: designer\ndescription: UI designer\n---\n')
+        app.path('standard').write_text('# Keep agent comment\nmodelRoles:\n  smol: test/fast\n')
+        body = {'profile': 'standard', 'revision': app.revision('standard'),
+                'changes': [{'path': ['task', 'agentModelOverrides', 'designer'], 'value': ['test/a', 'test/b']}]}
+        app.save_profile(body)
+        data = app.read(app.path('standard'))
+        self.assertEqual(data['task']['agentModelOverrides'], {'designer': ['test/a', 'test/b']})
+        self.assertIn('# Keep agent comment', app.path('standard').read_text())
+        # A preset can hold its own override and a saved profile survives the file disappearing.
+        (app.project / '.omp/agents/designer.md').unlink()
+        state = app.snapshot()
+        self.assertNotIn('designer', {a['id'] for a in state['agents']})
+        self.assertEqual(state['base']['task']['agentModelOverrides']['designer'], ['test/a', 'test/b'])
+        app.save_profile({'profile': 'standard', 'revision': app.revision('standard'),
+                          'changes': [{'path': ['task', 'agentModelOverrides', 'designer'], 'remove': True}]})
+        self.assertNotIn('designer', app.read(app.path('standard')).get('task', {}).get('agentModelOverrides', {}))
+
+    def test_undiscovered_agent_names_are_still_rejected(self):
+        app = self.apps['one']
+        self.write_agent(app.agent / 'agents', 'broken.md', '---\nname: ghost\n---\n')
+        before = app.path('standard').read_bytes()
+        for worker in ('ghost', 'nobody'):
+            with self.subTest(worker=worker), self.assertRaises(Problem):
+                app.save_profile({'profile': 'standard', 'revision': app.revision('standard'),
+                                  'changes': [{'path': ['task', 'agentModelOverrides', worker], 'value': ['test/model']}]})
+            self.assertEqual(app.path('standard').read_bytes(), before)
 
     def test_unassigned_builtin_roles_can_be_saved_and_reset(self):
         from omp_roles import BUILTIN_ROLES

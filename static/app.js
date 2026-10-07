@@ -19,10 +19,15 @@
  const copy=x=>JSON.parse(JSON.stringify(x));
  function merge(a,b){const out=copy(a);for(const [k,v]of Object.entries(b||{})){out[k]=v&&typeof v==='object'&&!Array.isArray(v)?merge(out[k]||{},v):copy(v);}return out;}
  const builtinRoles=source.builtinRoles||[];
- const builtinAgents=source.builtinAgents||[];
- function agentInfo(worker){return builtinAgents.find(a=>a.id===worker);}
+ function knownAgents(){return source.agents||[];}
+ function agentInfo(worker){return knownAgents().find(a=>a.id===worker);}
+ function agentSource(worker){return ({project:'проєкт',user:'користувач'})[agentInfo(worker)?.source]||'';}
+ function shortText(text,max){return text.length>max?text.slice(0,max-1).trimEnd()+'…':text;}
+ function isCustomAgent(info){return !!info?.source&&info.source!=='builtin';}
+ function agentModelText(info,fallback=''){const model=info?.model;if(Array.isArray(model))return model.join(' → ');if(model)return model;return isCustomAgent(info)?'успадковує модель сесії':fallback;}
+ function agentModelAlias(info){return typeof info?.model==='string'&&info.model.startsWith('@')?info.model:'';}
  function resetAgent(worker){
-  if(state.saving||!agentInfo(worker))return;
+  if(state.saving||!Object.hasOwn(p().task.agentModelOverrides||{},worker)&&!agentInfo(worker))return;
   const target=p().task.agentModelOverrides,base=state.profile==='standard'?{}:original.standard.task.agentModelOverrides;
   if(Object.hasOwn(base,worker))target[worker]=copy(base[worker]);else delete target[worker];
   delete modeSettings().overrides['vibe:'+worker];state.picker=null;render();
@@ -90,28 +95,29 @@
  function clipKey(role,r,i,group){return esc(group+'|'+role+'|'+r+'|'+chain(role,group).slice(0,i).filter(v=>v===r).length);}
  function historyStep(direction){if(state.saving)return;const value=editHistory.step(state.profile,direction);if(!value)return;profiles[state.profile]=value;ForgeTape.intent(direction<0?'undo':'edit');state.picker=null;state.opFeedback=direction<0?'Останню дію скасовано.':'Дію повторено.';render();win.querySelector(`[data-action=${direction<0?'undo':'redo'}]`)?.focus({preventScroll:true});}
  function p(){return profiles[state.profile];}
- function workers(profile=p()){return [...new Set([...builtinAgents.map(a=>a.id),...Object.keys(profile?.task?.agentModelOverrides||{})])];}
+ function workers(profile=p()){return [...new Set([...knownAgents().map(a=>a.id),...Object.keys(profile?.task?.agentModelOverrides||{})])];}
  function agentValues(worker,profile=p()){const value=profile.task?.agentModelOverrides?.[worker];return (Array.isArray(value)?value:[value]).filter(Boolean);}
  function agentLink(worker){const values=agentValues(worker);return values.length===1&&values[0].startsWith('@')?values[0]:'';}
  function agentTier(worker){return ({task:'Vibe GOOD',sonic:'Vibe FAST'})[worker]||'';}
- function agentName(worker){return `<span class="role-code">${esc(worker)}${agentTier(worker)?`<small class="agent-tier">${agentTier(worker)}</small>`:''}</span>`;}
+ function agentName(worker){const origin=agentSource(worker);return `<span class="role-code">${esc(worker)}${agentTier(worker)?`<small class="agent-tier">${agentTier(worker)}</small>`:''}${origin?`<small class="agent-tier agent-source">${esc(origin)}${agentInfo(worker)?.overrides?' · замінює штатного':''}</small>`:''}</span>`;}
+ function agentRemove(worker){return !agentInfo(worker)&&Object.hasOwn(p().task.agentModelOverrides||{},worker)?tool('Прибрати','','agent-reset',`data-reset-agent="${esc(worker)}" aria-label="Прибрати перевизначення агента, якого немає у файлах: ${esc(worker)}" title="Агента немає серед штатних і файлів .omp/agents. Перевизначення лишилося в конфігурації."`):'';}
  function agentLinkedTrack(worker,mobile=false){
   const alias=agentLink(worker),[role,effort]=alias.slice(1).split(':'),known=roleKeys.includes(role),retry=p().retry?.modelFallback!==false;
   const detail=known?`Основна${retry?' й резерви ролі':' · резерви вимкнено'}${effort?' · thinking '+effort:''}`:'Модель і резерви визначає OMP';
   const content=`<strong>Успадковує ${esc(alias)}</strong><small>${esc(detail)}</small>${known?'<span class="agent-link-action">До ролі ↗</span>':''}`;
   const link=known?`<button type="button" class="agent-role-link" data-agent-role="${esc(role)}" aria-label="${esc(worker+': '+detail+'. Редагувати роль '+role)}">${content}</button>`:`<div class="agent-role-link unresolved">${content}</div>`;
   const own=known&&!effort?tool('Власний список','','agent-own',`data-agent-copy="${esc(worker)}" aria-label="Створити власний список: ${esc(worker)}" title="Копіювати роль для окремого монтажу агента. Зміни ролі більше не впливатимуть на цей список."`):'';
-  const reset=agentInfo(worker)?tool('Типово в OMP','','agent-reset',`data-reset-agent="${esc(worker)}" aria-label="Повернути типовий вибір OMP для агента: ${esc(worker)}"`):'';
+  const reset=agentInfo(worker)?tool('Типово в OMP','','agent-reset',`data-reset-agent="${esc(worker)}" aria-label="Повернути типовий вибір OMP для агента: ${esc(worker)}"`):agentRemove(worker);
   return mobile?`<div class="mobile-group agent-linked"><div class="vibe-mobile-heading">${agentName(worker)}</div>${link}${own}${reset}</div>`:`<div class="graph-row vibe-row agent-linked"><div class="role-name agent-name" title="${esc(worker)}"><span class="role-index">↳</span>${agentName(worker)}</div>${link}${own}${reset}</div>`;
  }
  function agentListNote(worker){const values=agentValues(worker),alias=vibeAlias(worker),single=values.length===1&&!poolName(values[0]);return `Власний список${alias?' · основна з '+alias:''}${single&&!alias?' · резерви з default':' · CUTS за порядком'}${p().retry?.modelFallback===false?' · резерви вимкнено':''}`;}
  function agentDefaultTrack(worker,mobile=false){
-  const info=agentInfo(worker),alias=info?.model,role=alias?.slice(1),known=roleKeys.includes(role);
-  const detail=`<div class="agent-default-detail"><span>${esc(info?.description||'Модель визначає OMP')}</span>${known?tool('До '+esc(alias)+' ↗','','agent-default-link',`data-agent-role="${esc(role)}" aria-label="${esc(worker+': редагувати роль '+role)}"`):''}</div>`;
+  const info=agentInfo(worker),alias=agentModelAlias(info),role=alias.slice(1).split(':')[0],known=roleKeys.includes(role);
+  const detail=`<div class="agent-default-detail"><span title="${esc(info?.description||'')}">${esc(shortText(info?.description||'Модель визначає OMP',140))}${isCustomAgent(info)?' · '+esc(agentModelText(info)):''}</span>${known?tool('До '+esc(alias.split(':')[0])+' ↗','','agent-default-link',`data-agent-role="${esc(role)}" aria-label="${esc(worker+': редагувати роль '+role)}"`):''}</div>`;
   const label=mobile?`<div class="vibe-mobile-heading">${agentName(worker)}</div>`:`<div class="role-name agent-name" title="${esc(info?.description)}"><span class="role-index">↳</span>${agentName(worker)}</div>`;
   return `<div class="${mobile?'mobile-group':'graph-row vibe-row'} agent-default" data-agent-default="${esc(worker)}">${label}${automaticSlot(worker,mobile,'vibe')}${detail}</div>`;
  }
- function agentSectionHead(){return `<div class="section-line vibe-section"><div><strong>Агенти</strong><span>Прив’язки до ролей або власні списки</span></div><label class="check-field sync-control" title="Після редагування ролі копіює її резерви у власні списки агентів із початковим @role. Успадковані ролі оновлюються завжди. Увімкнення саме по собі не змінює списків."><input type="checkbox" data-sync-vibe ${state.syncVibe?'checked':''}>Копіювати резерви після змін ролей</label></div>`;}
+ function agentSectionHead(){return `<div class="section-line vibe-section"><div><strong>Агенти</strong><span>Прив’язки до ролей або власні списки</span>${source.agentWarnings?.length?`<span class="agent-warning" role="status" title="${esc(source.agentWarnings.join('\n'))}">Пропущено файлів агентів: ${source.agentWarnings.length}</span>`:''}</div><label class="check-field sync-control" title="Після редагування ролі копіює її резерви у власні списки агентів із початковим @role. Успадковані ролі оновлюються завжди. Увімкнення саме по собі не змінює списків."><input type="checkbox" data-sync-vibe ${state.syncVibe?'checked':''}>Копіювати резерви після змін ролей</label></div>`;}
  function focusAgentRole(role){state.role=role;state.picker=null;render();store();const target=narrowSurface()?win.querySelector('#mobile-role'):win.querySelector(`.graph-row:not(.vibe-row) [data-focus-role="${CSS.escape(role)}"]`);target?.focus({preventScroll:true});scrollToControl(target);}
  function copyAgentRole(worker){
   if(state.saving)return;
@@ -268,14 +274,14 @@
   const count=(role,group='role')=>{const base=baseChain(role,group),at=base.findIndex(deepseek),projected=at<0?base:[...base.slice(0,at),...modeList(modeScope(role,group)),...base.slice(at).filter(r=>!deepseek(r))];return Math.max(base.length,new Set(projected.map(r=>split(r).raw)).size,chain(role,group).length);};
   const steps=Math.max(8,1+Math.max(...roleKeys.map(r=>count(r)),...workers().map(r=>count(r,'vibe'))));if(renderCache)renderCache.steps=steps;return steps;
  }
- function automaticSlot(role,mobile=false,group='role'){const agent=group==='vibe',info=agent?agentInfo(role):null;return `<div class="${mobile?'tree-line':'node'} automatic-role" data-edit="${esc(role)}" data-index="0" data-group="${group}"><button type="button" class="node-name" data-edit="${esc(role)}" data-index="0" data-group="${group}" aria-label="${agent?'Обрати CUT для агента':'Обрати основний CUT'}: ${esc(role)}" title="${esc(agent?info?.description+' · '+(info?.model||'Модель визначає OMP'):'Глобальні налаштування й автоматичний вибір OMP')}"><strong>Типово в OMP</strong><small>${esc(agent?info?.model||'Обрати CUT':'Обрати CUT')}</small></button></div>`;}
+ function automaticSlot(role,mobile=false,group='role'){const agent=group==='vibe',info=agent?agentInfo(role):null;return `<div class="${mobile?'tree-line':'node'} automatic-role" data-edit="${esc(role)}" data-index="0" data-group="${group}"><button type="button" class="node-name" data-edit="${esc(role)}" data-index="0" data-group="${group}" aria-label="${agent?'Обрати CUT для агента':'Обрати основний CUT'}: ${esc(role)}" title="${esc(agent?info?.description+' · '+(agentModelText(info)||'Модель визначає OMP'):'Глобальні налаштування й автоматичний вибір OMP')}"><strong>Типово в OMP</strong><small>${esc(agent?(isCustomAgent(info)&&!info.model?'модель сесії':agentModelText(info))||'Обрати CUT':'Обрати CUT')}</small></button></div>`;}
  function graphRow(role,index,group='role'){
   const list=chain(role,group),agent=group==='vibe',automatic=!agent&&!list.length;
   const label=agent?`<div class="role-name agent-name" title="${esc(agentListNote(role))}"><span class="role-index">↳</span>${agentName(role)}</div>`:`<button type="button" class="role-name" data-focus-role="${esc(role)}" title="${esc(role+' · '+(labels[role]||role))}"><span class="role-index">${role===state.role?'▸':'·'}</span><span class="role-code">${esc(role)}</span></button>`;
   return `<div class="graph-row ${agent?'vibe-row':''} ${role===state.role&&!agent?'focused':''}">${label}${modeTag(role,group)}${automatic?automaticSlot(role):list.map((r,i)=>node(role,r,i,list.length,group)).join('')}<button type="button" class="add-node reserve-drop" style="grid-column:span ${stepCount()-Math.max(list.length,automatic?1:0)+1}" data-edit="${esc(role)}" data-index="${list.length}" data-group="${group}" aria-label="Додати ${agent?'кандидата':automatic?'основний CUT':'резерв'}: ${esc(role)}" title="Додати CUT у кінець доріжки"><span>+</span><small>${agent?'кандидат':automatic?'основна':'резерв'}</small></button></div>`;
  }
- function vibeDesktop(){return `<div class="graph">${workers().map((worker,i)=>!agentValues(worker).length&&agentInfo(worker)?agentDefaultTrack(worker):agentLink(worker)?agentLinkedTrack(worker):`<div class="agent-list-note">${esc(worker)} · ${esc(agentListNote(worker))}</div>${graphRow(worker,i,'vibe')}`).join('')}</div>`;}
- function mobileVibe(){return `<section class="mobile-vibe" aria-label="Агенти">${agentSectionHead()}${workers().map(worker=>{if(!agentValues(worker).length&&agentInfo(worker))return agentDefaultTrack(worker,true);if(agentLink(worker))return agentLinkedTrack(worker,true);const list=chain(worker,'vibe');return `<div class="mobile-group"><div class="vibe-mobile-heading">${agentName(worker)}<span>${esc(agentListNote(worker))}</span></div>${list.map((r,i)=>mobileLine(worker,r,i,list.length,'vibe')).join('')}<div class="tree-add">${tool('+ Додати кандидата','', '',`data-edit="${esc(worker)}" data-index="${list.length}" data-group="vibe"`)}</div></div>`;}).join('')}</section>`;}
+ function vibeDesktop(){return `<div class="graph">${workers().map((worker,i)=>!agentValues(worker).length&&agentInfo(worker)?agentDefaultTrack(worker):agentLink(worker)?agentLinkedTrack(worker):`<div class="agent-list-note">${esc(worker)} · ${esc(agentListNote(worker))}${agentInfo(worker)?'':' · немає у файлах агентів'}${agentRemove(worker)}</div>${graphRow(worker,i,'vibe')}`).join('')}</div>`;}
+ function mobileVibe(){return `<section class="mobile-vibe" aria-label="Агенти">${agentSectionHead()}${workers().map(worker=>{if(!agentValues(worker).length&&agentInfo(worker))return agentDefaultTrack(worker,true);if(agentLink(worker))return agentLinkedTrack(worker,true);const list=chain(worker,'vibe');return `<div class="mobile-group"><div class="vibe-mobile-heading">${agentName(worker)}<span>${esc(agentListNote(worker))}${agentInfo(worker)?'':' · немає у файлах агентів'}</span>${agentRemove(worker)}</div>${list.map((r,i)=>mobileLine(worker,r,i,list.length,'vibe')).join('')}<div class="tree-add">${tool('+ Додати кандидата','', '',`data-edit="${esc(worker)}" data-index="${list.length}" data-group="vibe"`)}</div></div>`;}).join('')}</section>`;}
  function poolActionContext(){return state.view==='profiles'&&state.poolPanel;}
  function profileActions(){
   const pool=poolActionContext(),h=editHistory.available(pool?'@free-pools':state.profile),dirty=pool?poolsDirty():state.changes,scope=pool?'FREE пули':state.view==='profiles'&&state.modePanel?'Заміни · профіль':'Профіль',saveBlocked=!pool&&(activePlan()?.pending||activePlan()?.error||activePlan()?.data?.issues?.length||source.modeConflicts?.length);

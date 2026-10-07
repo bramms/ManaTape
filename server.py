@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 from profile_modes import compile_profile, default_settings, route_statuses, tariff_status, validate_settings, validate_pools, pool_name, POOL_NAMES
-from omp_roles import BUILTIN_ROLES, BUILTIN_AGENTS, accepts_model, fallback_chain
+from omp_roles import BUILTIN_ROLES, agent_catalog, accepts_model, fallback_chain
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
@@ -455,9 +455,13 @@ class Forge:
         for expired in sorted(backup_dir.glob(f'*-{path.name}'))[:-20]:
             expired.unlink()
 
+    def agents(self):
+        return agent_catalog(self.project, self.agent)
+
     def patch_profile(self, data, changes, roles, name):
         base, _ = self.profiles()
-        workers = set(BUILTIN_AGENTS) | set(merge(base, data).get('task', {}).get('agentModelOverrides', {}))
+        known_agents, _ = self.agents()
+        workers = set(known_agents) | set(merge(base, data).get('task', {}).get('agentModelOverrides', {}))
         models = self.mode_catalog()
         for change in changes:
             keys, value = change.get('path'), change.get('value')
@@ -492,7 +496,7 @@ class Forge:
             for key in keys[:-1]:
                 target = target.setdefault(key, {})
             if change.get('remove'):
-                builtin = (keys[0] in ('modelRoles', 'retry') and keys[-1] in BUILTIN_ROLES) or (keys[0] == 'task' and keys[-1] in BUILTIN_AGENTS)
+                builtin = (keys[0] in ('modelRoles', 'retry') and keys[-1] in BUILTIN_ROLES) or keys[0] == 'task'
                 if name == 'standard' and not builtin:
                     raise Problem('Standard не має батьківського профілю')
                 target.pop(keys[-1], None)
@@ -670,12 +674,13 @@ class Forge:
                 m['available'] = r in available
                 m['name'] = m.get('name') or m['id']
                 m['usedBy'] = sorted(refs.get(r, set()))
+            agents, agent_warnings = self.agents()
             def relevant(p):
                 return plain({k: p[k] for k in ('modelRoles', 'retry', 'task', 'disabledProviders') if k in p})
             return {'source': str(self.project), 'projectId': self.project_id, 'projects': self.projects,
                 'ui': self.ui, 'legacyDrafts': self.legacy_drafts, 'demo': self.demo, 'base': relevant(base),
                 'builtinRoles': list(BUILTIN_ROLES.values()),
-                'builtinAgents': list(BUILTIN_AGENTS.values()),
+                'agents': list(agents.values()), 'agentWarnings': agent_warnings,
                 'presets': {k: relevant(v) for k, v in ps.items() if k != 'standard'},
                 'revisions': {k: self.revision(k) for k in ps},
                 'freePools': self.pools(), 'poolsRevision': self.pools_revision(),

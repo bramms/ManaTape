@@ -14,8 +14,8 @@ function appFunction(name){
 }
 
 function roleContext(context){
- Object.assign(context,{builtinRoles:context.builtinRoles||[],builtinAgents:context.builtinAgents||[],catalogMap:context.catalogMap||new Map(),poolName:context.poolName||(()=>undefined),split:context.split||(raw=>({raw}))});
- runInNewContext(['roleInfo','roleFallbacks','agentInfo'].map(appFunction).join('\n'),context);
+ Object.assign(context,{builtinRoles:context.builtinRoles||[],source:context.source||{agents:[]},catalogMap:context.catalogMap||new Map(),poolName:context.poolName||(()=>undefined),split:context.split||(raw=>({raw}))});
+ runInNewContext(['roleInfo','roleFallbacks','knownAgents','agentInfo','agentSource','shortText','isCustomAgent','agentModelText','agentModelAlias'].map(appFunction).join('\n'),context);
  return context;
 }
 
@@ -147,7 +147,7 @@ test('save replaces a queued preview even when a changed token requires another 
 test('linked agents show role inheritance instead of pretending a primary pool is a startup list',()=>{
  const profile={modelRoles:{reader:'mana-pool/free-fast'},retry:{modelFallback:true},task:{agentModelOverrides:{reviewer:'@reader',scout:['@reader'],external:'@advisor',task:['@reader','p/backup']}}};
  const context=roleContext({p:()=>profile,roleKeys:['reader'],esc:s=>s,tool:()=>'',poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined});
- runInNewContext(['agentValues','agentLink','agentTier','agentName','agentLinkedTrack'].map(appFunction).join('\n'),context);
+ runInNewContext(['agentValues','agentLink','agentTier','agentName','agentRemove','agentLinkedTrack'].map(appFunction).join('\n'),context);
  for(const worker of ['reviewer','scout'])for(const mobile of [false,true]){
   const html=context.agentLinkedTrack(worker,mobile);
   assert.match(html,/Успадковує @reader/);assert.match(html,/Основна й резерви ролі/);
@@ -333,7 +333,7 @@ test('role pickers enforce native model capabilities, including grounded web cha
 test('built-in agents display native defaults without materializing override lists',()=>{
  const builtinAgents=[{id:'scout',model:'@smol',description:'Read only'},{id:'security-reviewer',model:null},{id:'task',model:'@task'}];
  const profile={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{custom:['p/unknown']}}},before=JSON.stringify(profile);
- const context=roleContext({builtinAgents,p:()=>profile,roleKeys:['smol','task'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
+ const context=roleContext({source:{agents:builtinAgents},p:()=>profile,roleKeys:['smol','task'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
  runInNewContext(['workers','agentValues','agentTier','agentName','automaticSlot','agentDefaultTrack','baseChain','vibeAlias','oldSetChain'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.workers()),['scout','security-reviewer','task','custom']);
  for(const mobile of [false,true]){
@@ -349,7 +349,7 @@ test('built-in agents display native defaults without materializing override lis
 
 test('resetting a built-in agent emits removal and supports Undo and preset inheritance',()=>{
  const baseline={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{scout:['p/own']}},forgeMode:{overrides:{'vibe:scout':['p/alt']}}};
- const profile=structuredClone(baseline),context=roleContext({builtinAgents:[{id:'scout',model:'@smol'}],state:{profile:'standard'},p:()=>profile,
+ const profile=structuredClone(baseline),context=roleContext({source:{agents:[{id:'scout',model:'@smol'}]},state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>profile.forgeMode,copy:structuredClone,render:()=>{},renderCache:null});
  runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
  const {ForgeHistory}=require('./static/tape.js'),history=new ForgeHistory();history.observe('standard',profile,false);
@@ -395,4 +395,36 @@ test('pool picker and tap insertion accept more than 30 FREE CUTS and still reje
  context.setChain('free-good',[...routes,routes[0]],'pool');assert.equal(poolDraft['free-good'].length,40);
  context.setChain('free-good',[...routes,'demo/paid'],'pool');assert.equal(poolDraft['free-good'].length,40);
  assert.equal(notices.length,1);assert.match(notices[0],/FREE CUTS/);
+});
+
+test('custom agents show their source, own model default and remain removable when the file disappears',()=>{
+ const agents=[{id:'scout',model:'@smol',description:'Read only',source:'builtin'},
+  {id:'designer',model:null,description:'UI designer',source:'project'},
+  {id:'helper',model:['@slow','p/own:high'],description:'Helper',source:'user'},
+  {id:'reviewer',model:'@slow',description:'Custom reviewer',source:'project',overrides:true}];
+ const profile={modelRoles:{slow:'p/slow'},retry:{fallbackChains:{}},task:{agentModelOverrides:{gone:['p/old']}}};
+ const context=roleContext({source:{agents},p:()=>profile,roleKeys:['slow','smol'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
+ runInNewContext(['workers','agentValues','agentTier','agentName','agentRemove','automaticSlot','agentDefaultTrack'].map(appFunction).join('\n'),context);
+ assert.deepEqual(Array.from(context.workers()),['scout','designer','helper','reviewer','gone']);
+ assert.match(context.agentName('designer'),/проєкт/);assert.match(context.agentName('helper'),/користувач/);
+ assert.doesNotMatch(context.agentName('scout'),/проєкт|користувач/);assert.match(context.agentName('reviewer'),/замінює штатного/);
+ for(const mobile of [false,true]){
+  const html=context.agentDefaultTrack('designer',mobile);
+  assert.match(html,/UI designer/);assert.match(html,/успадковує модель сесії/);assert.doesNotMatch(html,/data-agent-role=/);
+  const list=context.agentDefaultTrack('helper',mobile);
+  assert.match(list,/@slow → p\/own:high/);assert.doesNotMatch(list,/data-agent-role=/);
+  assert.match(context.agentDefaultTrack('reviewer',mobile),/data-agent-role="slow"/);
+ }
+ assert.match(context.agentRemove('gone'),/data-reset-agent="gone"/);
+ assert.equal(context.agentRemove('designer'),'');
+});
+
+test('removing an orphaned agent override emits a removal',()=>{
+ const baseline={modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{gone:['p/old']}}};
+ const profile=structuredClone(baseline),context=roleContext({source:{agents:[]},state:{profile:'standard'},p:()=>profile,
+  original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>({overrides:{}}),copy:structuredClone,render:()=>{},renderCache:null});
+ runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
+ context.resetAgent('gone');
+ assert.equal(profile.task.agentModelOverrides.gone,undefined);
+ assert.ok(context.diff('standard').some(c=>c.remove&&c.path.join('.')==='task.agentModelOverrides.gone'));
 });

@@ -462,3 +462,7 @@
 .node.cut-is-deleted .node-name{padding-right:64px}
 .tree-line.cut-is-deleted .cut-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
 @container forge (max-width:900px){.mode-panel .node.cut-is-deleted .node-name{padding-right:0!important;padding-top:19px!important}.mode-panel .node.cut-is-deleted .cut-deleted{left:7px;right:auto;top:4px}}
+.agent-source{margin-top:1px;overflow-wrap:anywhere;white-space:normal}
+.agent-warning{margin-left:12px;color:var(--muted);font-size:10px}
+.agent-list-note .agent-reset{grid-column:auto;display:inline-block;min-height:24px;margin-left:8px;font-size:10px}
+.mobile-vibe .vibe-mobile-heading .agent-reset{min-height:44px}
