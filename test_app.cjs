@@ -360,3 +360,39 @@ test('resetting a built-in agent emits removal and supports Undo and preset inhe
  context.state.profile='preset';profile.task.agentModelOverrides.scout=['p/preset'];context.resetAgent('scout');
  assert.deepEqual(profile.task.agentModelOverrides.scout,['p/own']);
 });
+
+test('DELETED is explicit on configured CUTs and never inferred from quotas or missing metadata',()=>{
+ const catalogMap=new Map([
+  ['p/gone:free',{status:'missing'}], ['p/live',{status:'present'}],
+  ['p/offline',{available:false}], ['p/empty',{status:'present',remaining:0}]
+ ]);
+ const context={catalogMap,split:r=>({raw:r.replace(/:high$/,''),provider:'p'}),providerName:()=> 'Provider',providerCode:()=> 'P',esc:s=>s,
+  freeBadge:()=>'<span class="cut-free">FREE</span>',isLocal:()=>false,routeMatches:()=>false};
+ runInNewContext(['deletedCut','cutIdentity','slotClasses'].map(appFunction).join('\n'),context);
+ for(const r of ['p/gone:free','p/gone:free:high']){
+  assert.match(context.cutIdentity(r),/>DELETED</);assert.match(context.cutIdentity(r),/Відсутній у провайдера/);
+  assert.doesNotMatch(context.cutIdentity(r),/cut-free/);assert.match(context.slotClasses(r),/cut-is-deleted/);
+ }
+ for(const r of ['p/live','p/offline','p/empty','p/unknown']){
+  assert.doesNotMatch(context.cutIdentity(r),/DELETED/);assert.doesNotMatch(context.slotClasses(r),/cut-is-deleted/);
+ }
+ catalogMap.get('p/gone:free').status='present';
+ assert.doesNotMatch(context.cutIdentity('p/gone:free'),/DELETED/);
+});
+
+test('pool picker and tap insertion accept more than 30 FREE CUTS and still reject paid routes',()=>{
+ const routes=Array.from({length:40},(_,i)=>'demo/cut-'+i+':free'),poolDraft={'free-good':routes.slice(0,30)},notices=[];
+ const catalogMap=new Map(routes.map(r=>[r,{free:true}]));catalogMap.set('demo/paid',{free:false});
+ const context={state:{profile:'standard'},poolDraft,catalogMap,source:{},
+  split:r=>({raw:r,provider:r.split('/')[0],id:r.split('/')[1]}),ManaOperator:{isFreeModel:m=>m.free===true},
+  chain:role=>[...poolDraft[role]],poolName:()=>null,modeOff:()=>false,routeWarning:()=>false,
+  notify:s=>notices.push(s),narrowSurface:()=>false,short:s=>s,providerName:s=>s,render:()=>{}};
+ roleContext(context);
+  runInNewContext(['acceptsRoleModel','setChain','commitCut'].map(appFunction).join('\n'),context);
+ context.commitCut(routes[30],{role:'free-good',group:'pool',index:30,profile:'standard',expected:null});
+ assert.equal(poolDraft['free-good'].length,31);assert.equal(poolDraft['free-good'][30],routes[30]);
+ context.setChain('free-good',routes,'pool');assert.equal(poolDraft['free-good'].length,40);
+ context.setChain('free-good',[...routes,routes[0]],'pool');assert.equal(poolDraft['free-good'].length,40);
+ context.setChain('free-good',[...routes,'demo/paid'],'pool');assert.equal(poolDraft['free-good'].length,40);
+ assert.equal(notices.length,1);assert.match(notices[0],/FREE CUTS/);
+});

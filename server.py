@@ -26,6 +26,13 @@ from ruamel.yaml import YAML
 EFFORT = re.compile(r':(off|minimal|low|medium|high|xhigh|max|auto)$')
 ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 MODEL_FIELDS = ('id', 'name', 'kind', 'webSearch', 'reasoning', 'thinking', 'input', 'contextWindow', 'maxTokens', 'cost')
+# Exact hosted route, verified against the provider's model page on 2026-09-26.
+VERIFIED_FREE_ROUTES = {
+    'nvidia/deepseek-ai/deepseek-v4.1-flash': (
+        'https://integrate.api.nvidia.com/v1',
+        'https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash'),
+}
+
 
 
 class Problem(Exception):
@@ -245,9 +252,20 @@ class Forge:
         atomic(self.mode_file, json.dumps(self.mode_state, ensure_ascii=False).encode())
         self.mode_journal.unlink()
 
+    def verified_free_models(self, models):
+        providers = self.registry().get('providers', {})
+        for raw, (endpoint, evidence) in VERIFIED_FREE_ROUTES.items():
+            if raw not in models:
+                continue
+            provider = raw.split('/', 1)[0]
+            configured = providers.get(provider, {}).get('baseUrl', endpoint)
+            # A custom endpoint using the same provider name is not this offer.
+            models[raw] = {**models[raw], 'freeEvidence': evidence if isinstance(configured, str) and configured.rstrip('/') == endpoint else None}
+        return models
+
     def mode_catalog(self):
         cached, _ = self.cached()
-        return {**cached, **self.state['catalog']}
+        return self.verified_free_models({**cached, **self.state['catalog']})
 
     def mode_settings(self, name, normal, models):
         record = self.mode_state['profiles'].get(name)
@@ -316,7 +334,7 @@ class Forge:
             + list(full.get('modelRoles', {}).values()) + [r for values in full.get('retry', {}).get('fallbackChains', {}).values() for r in values]
             + [r for values in full.get('task', {}).get('agentModelOverrides', {}).values() for r in ([values] if isinstance(values, str) else values) if not r.startswith('@')])
         references = {route(member) for ref in references for member in (pools.get(pool_name(ref), []) if pool_name(ref) is not None else [ref])}
-        frozen_catalog = prepared.get('catalog', {r: {k: copy.deepcopy(models[r].get(k)) for k in ('id', 'name', 'kind', 'webSearch', 'cost', 'input', 'thinking')} if r in models else None for r in references})
+        frozen_catalog = prepared.get('catalog', {r: {k: copy.deepcopy(models[r].get(k)) for k in ('id', 'name', 'kind', 'webSearch', 'cost', 'input', 'thinking', 'freeEvidence')} if r in models else None for r in references})
         if not prepared.get('poolsOnly'):
             records[name] = {**(prior or {}), 'normal': yaml_dump(prepared['normal']), 'settings': settings,
                 'statuses': {r: v for r, v in prepared['statuses'].items() if r in references},
@@ -625,7 +643,7 @@ class Forge:
         with self.lock:
             base, ps = self.profiles()
             cached, stamps = self.cached()
-            models = {**cached, **self.state['catalog']}
+            models = self.verified_free_models({**cached, **self.state['catalog']})
             refs = self.refs()
             for r in refs:
                 provider, mid = r.split('/', 1)
@@ -823,6 +841,36 @@ class Forge:
                     raise
             self.persist()
 
+    def free_bridge_routes(self, native):
+        """A fresh, complete bridge snapshot proves absence without inference.
+
+        Excluded rows still exist upstream. Partial discovery or an offline
+        extension cache must never turn a configured CUT into DELETED.
+        """
+        if self.demo or not (self.agent / 'extensions' / 'opencode-free.js').is_file():
+            return None
+        home = Path(self.native_env.get('OMP_FREE_HOME') or Path.home() / '.config/omp-free-bridge').expanduser()
+        try:
+            snapshot = json.loads((home / 'catalog.json').read_text())
+            checked, expires = snapshot['checked_at'], snapshot['expires_at']
+            if (snapshot.get('schema') != 1 or snapshot.get('notes') != []
+                    or type(checked) not in (int, float) or type(expires) not in (int, float)
+                    or not checked <= time.time() < expires or not 0 < expires - checked <= 900):
+                return None
+            models, excluded = snapshot['models'], snapshot['excluded']
+            if not isinstance(models, list) or not isinstance(excluded, list):
+                return None
+            if any(not isinstance(m, dict) or not isinstance(m.get('id'), str)
+                   or not m['id'] or m.get('lane') not in ('zen', 'go') for m in models + excluded):
+                return None
+            prefix = 'opencode-free/'
+            allowed = {prefix + m['id'] for m in models}
+            if allowed != {m['provider'] + '/' + m['id'] for m in native if m['provider'] == 'opencode-free'}:
+                return None
+            return allowed | {prefix + m['id'] for m in excluded}
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
     def refresh(self):
         if not self.refresh_lock.acquire(blocking=False):
             return
@@ -848,6 +896,7 @@ class Forge:
             native = data['models']
             if not isinstance(native, list):
                 raise ValueError('models')
+            bridge_routes = self.free_bridge_routes(native)
             with self.lock:
                 cache, stamps = self.cached()
                 old = self.state['catalog']
@@ -865,17 +914,22 @@ class Forge:
                     elif old.get(r, {}).get('newAt'):
                         model['newAt'] = old[r]['newAt']
                     old[r] = model
-                for r in prior - seen:
+                candidates = set(prior)
+                if bridge_routes is not None:
+                    configured = set(self.refs()) | {route(r) for members in self.pools().values() for r in members}
+                    candidates.update(r for r in set(old) | set(cached_before) | configured if r.startswith('opencode-free/'))
+                for r in candidates - seen:
                     pid = r.split('/', 1)[0]
                     stamp = stamps.get(pid, {})
                     # Absence only counts after fresh authoritative discovery; failures retain cache.
-                    if (stamp.get('authoritative') and stamp.get('at', 0) >= start - 2
+                    removed = (r not in bridge_routes if pid == 'opencode-free' and bridge_routes is not None else
+                        stamp.get('authoritative') and stamp.get('at', 0) >= start - 2
                             and stamp.get('at', 0) > before_stamps.get(pid, {}).get('at', 0)
-                            and any(r.startswith(pid + '/') for r in seen)):
+                            and any(r.startswith(pid + '/') for r in seen))
+                    if removed:
                         if old.get(r, {}).get('status') != 'missing':
                             changes.append({'kind': 'missing', 'route': r, 'at': start})
-                        if r in old:
-                            old[r]['status'] = 'missing'
+                        old.setdefault(r, cached_before.get(r, {'provider': pid, 'id': r.split('/', 1)[1], 'source': 'reference'}))['status'] = 'missing'
                 self.state['available'] = sorted(seen)
                 self.state['known'] = sorted(known_before | set(cache) | seen)
                 self.state['changes'] = (self.state['changes'] + changes)[-500:]

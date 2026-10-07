@@ -17,8 +17,8 @@ def validate_pools(value, models):
     if not isinstance(value, dict) or set(value) != set(POOL_NAMES):
         raise ValueError('Потрібні два спільні пули: FREE GOOD і FREE FAST')
     for name, routes in value.items():
-        if not isinstance(routes, list) or len(routes) > 30:
-            raise ValueError('У пулі може бути до 30 CUTS')
+        if not isinstance(routes, list):
+            raise ValueError('Пул має бути списком CUTS')
         seen = set()
         for route in routes:
             if not isinstance(route, str) or len(route) > 300 or not re.fullmatch(r'[^\s\x00-\x1f/]+/[^\s\x00-\x1f]+', route):
@@ -44,7 +44,7 @@ def is_free_model(model):
     cost = model.get('cost') or {}
     return (all(isinstance(cost.get(k), (int, float)) and not isinstance(cost[k], bool) and cost[k] == 0 for k in ('input', 'output'))
             and not cost.get('cacheRead') and not cost.get('cacheWrite')
-            and bool(re.search(r'(^|[\s:/_()\[\]-])free($|[\s:/_()\[\]-])', (model.get('id') or '') + ' ' + (model.get('name') or ''), re.I)))
+            and bool(model.get('freeEvidence') or re.search(r'(^|[\s:/_()\[\]-])free($|[\s:/_()\[\]-])', (model.get('id') or '') + ' ' + (model.get('name') or ''), re.I)))
 
 
 def is_deepseek(value, models):
@@ -202,8 +202,6 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
             seen.add(raw_route(identity)); unique.append(value); refs.append(ref)
         if not unique:
             issues.append({'key': key, 'message': 'Немає доступної основної моделі. Додай альтернативу.'})
-        if len(unique) > (30 if group == 'vibe' else 31):
-            issues.append({'key': key, 'message': 'Ланцюг перевищує '+str(30 if group == 'vibe' else 31)+' CUTS. Скороти доріжку або спільний пул.'})
         native_views[key] = list(zip(unique, refs))
         display, display_refs, displayed_pools = [], [], set()
         for value, ref in zip(unique, refs):
@@ -214,6 +212,9 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
                 displayed_pools.add(marker)
             display.append(ref.get('pool') or resolve(value, effective if group == 'vibe' else normal))
             display_refs.append(ref)
+        # Pool members do not consume additional slots on the logical track.
+        if len(display) > (30 if group == 'vibe' else 31):
+            issues.append({'key': key, 'message': 'Ланцюг перевищує '+str(30 if group == 'vibe' else 31)+' CUTS. Скороти доріжку.'})
         view = {'routes': display, 'refs': display_refs, 'paused': paused, 'original': resolve(values[0], normal) if values else '', 'substituted': off and head_deepseek, 'alias': values[0] if alias else ''}
         return unique, view
 

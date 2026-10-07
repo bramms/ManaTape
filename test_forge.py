@@ -61,6 +61,7 @@ unrelated: {keep: true}
         (self.project / '.omp/presets/high.yml').write_text('# overlay\nmodelRoles:\n  task: demo/two:high\n')
         (self.agent / 'models.yml').write_text('providers: {}\n')
         self.app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
+        self.app.native_env['OMP_FREE_HOME'] = str(self.root / 'free-bridge')
 
     def tearDown(self):
         self.temp.cleanup()
@@ -279,6 +280,61 @@ unrelated: {keep: true}
         with patch('server.subprocess.run',side_effect=refreshed):self.app.refresh()
         self.assertEqual(self.app.state['catalog']['demo/one']['status'],'missing')
         self.assertEqual(self.app.state['changes'][0]['kind'],'missing')
+
+    def test_free_bridge_deleted_routes_require_complete_fresh_evidence(self):
+        extension = self.agent / 'extensions/opencode-free.js'
+        extension.parent.mkdir()
+        extension.write_text('// fixture')
+        home = self.root / 'free-bridge'
+        home.mkdir()
+        missing = 'opencode-free/old-free'
+        never_seen = 'opencode-free/configured-free'
+        self.app.mode_state['pools'] = {'free-good': [never_seen], 'free-fast': []}
+        original_config = self.app.path('standard').read_bytes()
+        original_modes = copy.deepcopy(self.app.mode_state)
+        now = time.time()
+        fresh = {'schema': 1, 'checked_at': now, 'expires_at': now + 900,
+                 'models': [{'lane': 'zen', 'id': 'new-free'}], 'excluded': [], 'notes': []}
+        class Result:
+            returncode, stderr = 0, b''
+            stdout = b'{"models":[{"provider":"opencode-free","id":"new-free"}]}'
+        cases = [
+            ('fresh', fresh, True),
+            ('expired', {**fresh, 'checked_at': now-1800, 'expires_at': now-900}, False),
+            ('partial', {**fresh, 'notes': ['zen: listing unavailable; lane disabled']}, False),
+            ('excluded', {**fresh, 'excluded': [{'lane': 'zen', 'id': 'old-free'},
+                                              {'lane': 'zen', 'id': 'configured-free'}]}, False),
+            ('mismatched', {**fresh, 'models': []}, False),
+            ('malformed', {**fresh, 'models': [None]}, False),
+        ]
+        for name, snapshot, removed in cases:
+            with self.subTest(name=name):
+                (home / 'catalog.json').write_text(json.dumps(snapshot))
+                self.app.state.update(catalog={missing: {'provider': 'opencode-free', 'id': 'old-free', 'status': 'present'}},
+                                      available=[], changes=[])
+                with patch('server.subprocess.run', return_value=Result()):
+                    self.app.refresh()
+                self.assertFalse(self.app.state['error'])
+                self.assertEqual(self.app.state['catalog'][missing]['status'], 'missing' if removed else 'present')
+                self.assertEqual(self.app.state['catalog'].get(never_seen, {}).get('status'), 'missing' if removed else None)
+                self.assertEqual(self.app.path('standard').read_bytes(), original_config)
+                self.assertEqual(self.app.mode_state, original_modes)
+        # A complete empty catalog is different from a failed discovery.
+        (home / 'catalog.json').write_text(json.dumps({**fresh, 'models': []}))
+        Result.stdout = b'{"models":[]}'
+        with patch('server.subprocess.run', return_value=Result()):
+            self.app.refresh()
+        self.assertEqual(self.app.state['catalog'][missing]['status'], 'missing')
+        changes = len(self.app.state['changes'])
+        with patch('server.subprocess.run', return_value=Result()):
+            self.app.refresh()
+        self.assertEqual(len(self.app.state['changes']), changes)
+        # Returning exact IDs clear DELETED on the next successful refresh.
+        (home / 'catalog.json').write_text(json.dumps({**fresh, 'models': [{'lane': 'zen', 'id': 'old-free'}]}))
+        Result.stdout = b'{"models":[{"provider":"opencode-free","id":"old-free"}]}'
+        with patch('server.subprocess.run', return_value=Result()):
+            self.app.refresh()
+        self.assertEqual(self.app.state['catalog'][missing]['status'], 'present')
 
     def test_http_guards_and_round_trip(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.app=self.app

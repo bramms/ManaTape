@@ -41,6 +41,35 @@ class ProfileModesTest(unittest.TestCase):
         self.assertFalse(is_free_model({**model, 'cost': {'input': 0, 'output': 1}}))
         self.assertFalse(is_free_model({**model, 'cost': {}}))
 
+    def test_verified_nvidia_free_route_saves_without_renaming_and_keeps_deepseek_on(self):
+        from profile_modes import is_free_model
+        self.init_modes()
+        raw = 'nvidia/deepseek-ai/deepseek-v4.1-flash'
+        model = {'provider': 'nvidia', 'id': 'deepseek-ai/deepseek-v4.1-flash',
+                 'name': 'DeepSeek V4.1 Flash', 'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0}}
+        self.app.state['catalog'][raw] = model
+        self.assertFalse(is_free_model(model), 'zero alone is not FREE evidence')
+        verified = self.app.mode_catalog()[raw]
+        self.assertTrue(is_free_model(verified))
+        snapshot = next(m for m in self.app.snapshot()['models'] if m['provider'] == 'nvidia')
+        self.assertEqual(snapshot['freeEvidence'], verified['freeEvidence'])
+        pools = {'free-good': [raw], 'free-fast': []}
+        self.app.save_pools({'revision': self.app.pools_revision(), 'pools': pools})
+        self.save_mode('high', self.settings, [{'path': ['modelRoles', 'task'], 'value': raw}])
+        self.assertEqual(self.native('high')['modelRoles']['task'], raw)
+        self.assertEqual(self.app.mode_state['profiles']['high']['catalog'][raw]['freeEvidence'], verified['freeEvidence'])
+        self.assertEqual(model['name'], 'DeepSeek V4.1 Flash')
+        self.assertNotIn('freeEvidence', model, 'the native catalog is not rewritten')
+        for cost in ({}, {'input': 0, 'output': 1}, {'input': 1, 'output': 0},
+                     {'input': 0, 'output': 0, 'cacheRead': 1}, {'input': 0, 'output': 0, 'cacheWrite': 1}):
+            self.assertFalse(is_free_model({**verified, 'cost': cost}))
+        # Neither another model nor another endpoint inherits this evidence.
+        other = 'nvidia/deepseek-ai/deepseek-v4-flash'
+        self.app.state['catalog'][other] = {**model, 'id': 'deepseek-ai/deepseek-v4-flash'}
+        self.assertFalse(is_free_model(self.app.mode_catalog()[other]))
+        (self.agent / 'models.yml').write_text('providers:\n  nvidia:\n    baseUrl: https://example.invalid/v1\n')
+        self.assertFalse(is_free_model(self.app.mode_catalog()[raw]))
+
     def init_modes(self):
         for name in ('standard', 'high'):
             file = self.app.path(name)
@@ -157,17 +186,45 @@ class ProfileModesTest(unittest.TestCase):
                     self.assertEqual(view['linkedRole'], 'builtin')
                     self.assertEqual(view['routes'], ['@builtin'])
 
-    def test_pool_save_rejects_paid_nested_empty_used_overflow_and_stale_without_writes(self):
+    def test_pool_save_rejects_paid_nested_empty_used_and_stale_without_writes(self):
         self.init_pools()
         self.save_mode('high', {'mode':'deepseek','alternatives':[],'overrides':{}}, [
             {'path':['retry','fallbackChains','task'],'value':['mana-pool/free-good', *['demo/long-'+str(i) for i in range(28)]]}])
         before={n:self.app.path(n).read_bytes() for n in ('standard','high')}; metadata=copy.deepcopy(self.app.mode_state)
-        for routes in ([], ['demo/two'], ['mana-pool/free-fast'], ['demo/a:free:max'], ['demo/a:free','demo/b:free','demo/c:free']):
+        for routes in ([], ['demo/two'], ['mana-pool/free-fast'], ['demo/a:free:max']):
             with self.assertRaises(Problem):
                 self.app.save_pools({'revision':self.app.pools_revision(),'pools':{**self.pools,'free-good':routes}})
             self.assertEqual(self.app.mode_state,metadata)
             self.assertEqual({n:self.app.path(n).read_bytes() for n in before},before)
         with self.assertRaises(Problem):self.app.save_pools({'revision':'stale','pools':self.pools})
+
+    def test_large_pool_saves_all_dependents_without_truncation_and_survives_restart(self):
+        self.init_pools()
+        settings = {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}
+        for name in ('standard', 'high'):
+            self.save_mode(name, settings, [
+                {'path': ['modelRoles', 'task'], 'value': 'mana-pool/free-good'},
+                {'path': ['retry', 'fallbackChains', 'task'], 'value': ['mana-pool/free-fast']},
+                {'path': ['task', 'agentModelOverrides', 'task'], 'value': ['@task', 'mana-pool/free-fast']}])
+        routes = ['demo/large-'+str(i)+':free' for i in range(100)]
+        for route in routes:
+            self.app.state['catalog'][route] = {'provider': 'demo', 'id': route.split('/', 1)[1],
+                'name': route, 'input': ['text', 'image'], 'cost': {'input': 0, 'output': 0}}
+        self.pools['free-good'] = routes
+        self.app.save_pools({'revision': self.app.pools_revision(), 'pools': self.pools})
+        expected = routes + self.pools['free-fast']
+        for name in ('standard', 'high'):
+            native = self.native(name)
+            self.assertEqual([native['modelRoles']['task'], *native['retry']['fallbackChains']['task']], expected)
+            self.assertEqual(native['task']['agentModelOverrides']['task'], ['@task', *expected[1:]])
+            self.assertNotIn('mana-pool/', self.app.path(name).read_text())
+        restarted = Forge(self.project, self.agent, self.app.state_dir, '/does-not-exist')
+        self.assertEqual(restarted.pools(), self.pools)
+        self.assertEqual(restarted.mode_conflicts(), [])
+        # A large pool also works as a DeepSeek replacement.
+        normal = {'modelRoles': {'task': 'demo/deepseek-v4'}, 'task': {'agentModelOverrides': {'task': ['@task', 'demo/two']}}}
+        plan = compile_profile(normal, {'mode': 'no-deepseek', 'alternatives': ['mana-pool/free-good'], 'overrides': {}}, self.app.mode_catalog(), {}, self.pools)
+        self.assertEqual(plan['issues'], [])
 
     def test_pool_multi_file_failure_recovers_all_profiles_and_pool_metadata(self):
         self.init_pools()

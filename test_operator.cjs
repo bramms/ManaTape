@@ -107,3 +107,12 @@ test('bracketed FREE editions include Big Pickle but never unknown or paid costs
  assert.equal(op.isFreeModel({...m,cost:{}}),false);
  assert.equal(op.isFreeModel({...m,cost:{input:0,output:1}}),false);
 });
+
+
+test('provider evidence admits the exact zero-cost model without a free suffix',()=>{
+ const route='nvidia/deepseek-ai/deepseek-v4.1-flash',model={id:'deepseek-ai/deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',cost:{input:0,output:0}};
+ assert.equal(op.isFreeModel(model),false);
+ const verified={...model,freeEvidence:'https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash'};
+ assert.equal(op.isFreeModel(verified),true);assert.equal(op.isPaidDeepSeek(route+':high',verified),false);
+ for(const cost of [{},{input:0,output:1},{input:1,output:0},{input:0,output:0,cacheRead:1},{input:0,output:0,cacheWrite:1}])assert.equal(op.isFreeModel({...verified,cost}),false);
+});

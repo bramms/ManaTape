@@ -454,3 +454,11 @@
 .desktop-graph .agent-reset{grid-column:6/span 2;align-self:center;font-size:10px;min-height:38px}
 .mobile-vibe .agent-default-detail{display:flex;flex-wrap:wrap;padding:8px 0}
 .mobile-vibe .agent-default-link,.mobile-vibe .agent-reset{min-height:44px}
+
+/* A removed route stays editable and visible even with HEALTH switched off. */
+.cut-deleted{display:inline-flex;flex:none;align-items:center;justify-content:center;padding:1px 4px;border:1px solid #fff;border-radius:2px;background:#a31919;color:#fff;font:800 10px/14px ui-monospace,monospace;letter-spacing:.5px;white-space:nowrap;text-shadow:none}
+.cut-surface.cut-is-deleted{outline:2px solid #d63838;outline-offset:-2px}
+.node.cut-is-deleted .cut-deleted{position:absolute;right:5px;top:3px;pointer-events:none}
+.node.cut-is-deleted .node-name{padding-right:64px}
+.tree-line.cut-is-deleted .cut-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+@container forge (max-width:900px){.mode-panel .node.cut-is-deleted .node-name{padding-right:0!important;padding-top:19px!important}.mode-panel .node.cut-is-deleted .cut-deleted{left:7px;right:auto;top:4px}}

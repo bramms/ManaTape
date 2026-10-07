@@ -8,7 +8,7 @@ const ManaOperator=(()=>{
   return name&&(' '+words(name)+' ').includes(' '+words(id)+' ')?name:id;
  }
  function isPaidDeepSeek(route,model){const raw=String(route).replace(/:(off|minimal|low|medium|high|xhigh|max|auto)$/,'');return /^deepseek(?:[-_.:]|$)/i.test(raw.split('/').at(-1))&&!isFreeModel(model);}
- function isFreeModel(m){const c=m?.cost;return Number.isFinite(c?.input)&&Number.isFinite(c?.output)&&c.input===0&&c.output===0&&!c.cacheRead&&!c.cacheWrite&&/(^|[\s:/_()\[\]-])free($|[\s:/_()\[\]-])/i.test(m.id+' '+m.name);}
+ function isFreeModel(m){const c=m?.cost;return Number.isFinite(c?.input)&&Number.isFinite(c?.output)&&c.input===0&&c.output===0&&!c.cacheRead&&!c.cacheWrite&&(!!m.freeEvidence||/(^|[\s:/_()\[\]-])free($|[\s:/_()\[\]-])/i.test(m.id+' '+m.name));}
  function transferCut(source,target,from,to,sameTrack){
   const out=[...target],route=source[from];if(route===undefined)return out;
   if(sameTrack)out.splice(from,1);
