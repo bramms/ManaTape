@@ -28,7 +28,7 @@ def validate_pools(value, models):
             if pool_name(route) is not None or not is_free_model(model):
                 raise ValueError('До FREE пулів можна додавати лише підтверджені FREE CUTS')
             effort = EFFORT.search(route)
-            if effort and effort[1] not in model.get('thinking', []) and not (effort[1] == 'off' and model.get('reasoning') is False):
+            if effort and effort[1] != 'off' and effort[1] not in model.get('thinking', []):
                 raise ValueError('CUT не підтримує вибраний thinking')
             if raw in seen:
                 raise ValueError('У пулі є однакові CUTS')
@@ -133,7 +133,7 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
                 elif key in {'role:'+role for role in vision_roles} and 'image' not in model.get('input', []):
                     reason = 'Для цієї ролі потрібен зір'
                 effort = EFFORT.search(value)
-                if not reason and effort and model and model.get('thinking') and effort[1] not in model['thinking']:
+                if not reason and effort and effort[1] != 'off' and model and model.get('thinking') and effort[1] not in model['thinking']:
                     reason = 'Модель не підтримує вибраний thinking'
                 if reason:
                     skipped.append({'key': key, 'route': value, 'reason': reason})

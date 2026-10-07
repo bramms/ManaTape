@@ -11,6 +11,24 @@ from profile_modes import compile_profile, route_statuses, is_deepseek, validate
 
 
 class ProfileModesTest(unittest.TestCase):
+    def test_off_disables_thinking_without_being_an_effort_in_free_pools(self):
+        from profile_modes import validate_pools
+        model = {'id':'model:free', 'reasoning':True, 'thinking':['medium','xhigh'], 'cost':{'input':0,'output':0}}
+        pools = {'free-good':['demo/model:off'], 'free-fast':[]}
+        self.assertEqual(validate_pools(pools, {'demo/model':model}), pools)
+        for effort in ('medium','xhigh'):
+            validate_pools({'free-good':['demo/model:'+effort], 'free-fast':[]}, {'demo/model':model})
+        with self.assertRaises(ValueError):
+            validate_pools({'free-good':['demo/model:high'], 'free-fast':[]}, {'demo/model':model})
+
+    def test_off_remains_an_available_deepseek_replacement(self):
+        model = {'id':'model', 'reasoning':True, 'thinking':['medium','xhigh'], 'input':['text']}
+        normal = {'modelRoles':{'task':'demo/deepseek-v4'}}
+        settings = {'mode':'no-deepseek', 'alternatives':['demo/model:off'], 'overrides':{}}
+        plan = compile_profile(normal, settings, {'demo/model':model}, {})
+        self.assertEqual(plan['effective']['modelRoles']['task'], 'demo/model:off')
+        self.assertEqual(plan['skipped'], [])
+
     setUp = test_forge.ForgeTest.setUp
     tearDown = test_forge.ForgeTest.tearDown
 

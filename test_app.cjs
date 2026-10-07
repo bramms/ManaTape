@@ -428,3 +428,16 @@ test('removing an orphaned agent override emits a removal',()=>{
  assert.equal(profile.task.agentModelOverrides.gone,undefined);
  assert.ok(context.diff('standard').some(c=>c.remove&&c.path.join('.')==='task.agentModelOverrides.gone'));
 });
+
+
+test('off is separate from supported reasoning efforts in every CUT select',()=>{
+ const context={catalogMap:new Map([['p/model',{reasoning:true,thinking:['medium','xhigh']}],['p/duplicate',{thinking:['off','medium']}],['p/plain',{reasoning:false}]])};
+ runInNewContext(appFunction('options'),context);
+ const values=(value,raw)=>Array.from(context.options(value,raw).matchAll(/value="([^" ]*)"/g),m=>m[1]);
+ assert.deepEqual(values('off','p/model'),['','off','medium','xhigh']);
+ assert.match(context.options('off','p/model'),/value="off" selected/);
+ assert.deepEqual(values('','p/duplicate'),['','off','medium']);
+ assert.deepEqual(values('','p/plain'),['','off']);
+ assert.ok(values('','p/unknown').includes('off'));
+ assert.ok(values('high','p/model').includes('high'),'retain a saved unsupported value for manual correction');
+});
