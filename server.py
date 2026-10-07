@@ -16,10 +16,11 @@ import subprocess
 import tempfile
 import threading
 import time
-from profile_modes import compile_profile, default_settings, route_statuses, tariff_status, validate_settings, validate_pools, pool_name, POOL_NAMES
+from profile_modes import compile_profile, default_settings, is_free_model, route_statuses, tariff_status, validate_settings, validate_pools, pool_name, POOL_NAMES
 from omp_roles import BUILTIN_ROLES, agent_catalog, accepts_model, fallback_chain
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
+from urllib.request import Request, urlopen
 
 from ruamel.yaml import YAML
 
@@ -32,6 +33,39 @@ VERIFIED_FREE_ROUTES = {
         'https://integrate.api.nvidia.com/v1',
         'https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash'),
 }
+# Gateways whose OMP catalog keeps a built-in list and never drops withdrawn FREE routes.
+# Their public, keyless model lists prove which FREE routes are still offered.
+PUBLIC_MODEL_LISTS = {
+    # output_modalities=all also lists embedding, rerank and other non-chat models.
+    'openrouter': 'https://openrouter.ai/api/v1/models?output_modalities=all',
+    'kilo': 'https://api.kilo.ai/api/gateway/models',
+}
+
+
+def public_listing(url):
+    req = Request(url, headers={'User-Agent': 'ManaTape/1.0 (catalog check)'})
+    with urlopen(req, timeout=10) as response:
+        return json.loads(response.read(16_000_000))
+
+
+def withdrawn_free_routes(provider, native, listing):
+    """FREE routes OMP still lists for `provider` that its public list no longer offers.
+
+    None when the listing cannot prove absence: malformed, missing most known
+    routes, or without a single known FREE route.
+    """
+    try:
+        listed = {m['id'] for m in listing['data']}
+    except (TypeError, KeyError):
+        return None
+    if not all(isinstance(i, str) and i for i in listed):
+        return None
+    own = [m for m in native if m.get('provider') == provider and isinstance(m.get('id'), str)]
+    known = {m['id'] for m in own}
+    free = {m['id'] for m in own if is_free_model(m) or m['id'].endswith(':free')}
+    if not free & listed or 2 * len(known & listed) < len(known):
+        return None
+    return {provider + '/' + mid for mid in free - listed}
 
 
 
@@ -876,6 +910,19 @@ class Forge:
         except (OSError, ValueError, TypeError, KeyError):
             return None
 
+    def withdrawn_routes(self, native):
+        """Per gateway: withdrawn FREE routes, or None when the public list proves nothing."""
+        result = {}
+        for pid, url in PUBLIC_MODEL_LISTS.items():
+            if self.demo or not any(m.get('provider') == pid for m in native):
+                continue
+            try:
+                listing = public_listing(url)
+            except Exception:
+                listing = None
+            result[pid] = withdrawn_free_routes(pid, native, listing)
+        return result
+
     def refresh(self):
         if not self.refresh_lock.acquire(blocking=False):
             return
@@ -902,9 +949,12 @@ class Forge:
             if not isinstance(native, list):
                 raise ValueError('models')
             bridge_routes = self.free_bridge_routes(native)
+            withdrawn = self.withdrawn_routes(native)
             with self.lock:
                 cache, stamps = self.cached()
                 old = self.state['catalog']
+                was_missing = {r for r, m in old.items() if m.get('status') == 'missing'}
+                was_withdrawn = {r for r, m in old.items() if m.get('withdrawn')}
                 seen = set()
                 changes = []
                 for raw in native:
@@ -919,6 +969,14 @@ class Forge:
                     elif old.get(r, {}).get('newAt'):
                         model['newAt'] = old[r]['newAt']
                     old[r] = model
+                for pid, routes in withdrawn.items():
+                    if routes is None:
+                        # A failed or unconvincing list keeps the last confirmed result.
+                        routes = {r for r in was_withdrawn if r.startswith(pid + '/')}
+                    for r in routes & seen:
+                        if r not in was_missing:
+                            changes.append({'kind': 'missing', 'route': r, 'at': start})
+                        old[r].update(status='missing', withdrawn=True)
                 candidates = set(prior)
                 if bridge_routes is not None:
                     configured = set(self.refs()) | {route(r) for members in self.pools().values() for r in members}

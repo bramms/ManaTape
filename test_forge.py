@@ -11,7 +11,8 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from server import Forge, Handler, Problem, ThreadingHTTPServer, digest, fingerprint, yaml_load
+from profile_modes import route_statuses
+from server import Forge, Handler, Problem, ThreadingHTTPServer, PUBLIC_MODEL_LISTS, digest, fingerprint, withdrawn_free_routes, yaml_load
 
 
 class ForgeTest(unittest.TestCase):
@@ -335,6 +336,40 @@ unrelated: {keep: true}
         with patch('server.subprocess.run', return_value=Result()):
             self.app.refresh()
         self.assertEqual(self.app.state['catalog'][missing]['status'], 'present')
+
+    def test_withdrawn_free_routes_need_a_listing_that_still_offers_free_models(self):
+        native = [{'provider': 'gw', 'id': i, 'cost': {'input': c, 'output': c}} for i, c in
+                  (('live:free', 0), ('gone:free', 0), ('gone-paid', 1), ('a', 1), ('b', 1))]
+        listing = {'data': [{'id': i} for i in ('live:free', 'a', 'b', 'only-upstream')]}
+        self.assertEqual(withdrawn_free_routes('gw', native, listing), {'gw/gone:free'})
+        for proof in (None, {}, {'data': [None]}, {'data': [{'id': 7}]}, {'data': []},
+                      {'data': [{'id': i} for i in ('a', 'b', 'gone-paid')]},  # FREE hidden: proves nothing
+                      {'data': [{'id': 'live:free'}]}):      # partial list
+            with self.subTest(proof=proof):
+                self.assertIsNone(withdrawn_free_routes('gw', native, proof))
+
+    def test_public_listing_marks_withdrawn_free_routes_and_survives_network_errors(self):
+        dead, live = 'openrouter/gone:free', 'openrouter/live:free'
+        self.app.mode_state['pools'] = {'free-good': [dead + ':high'], 'free-fast': []}
+        pools = copy.deepcopy(self.app.mode_state)
+        native = [{'provider': 'openrouter', 'id': i, 'cost': {'input': 0, 'output': 0}} for i in ('live:free', 'gone:free')]
+        class Result:
+            returncode, stderr, stdout = 0, b'', json.dumps({'models': native}).encode()
+        listing = {'data': [{'id': 'live:free'}]}
+        def refresh(answer):
+            with patch('server.subprocess.run', return_value=Result()), \
+                 patch('server.public_listing', side_effect=answer) as fetched:
+                self.app.refresh()
+            self.assertEqual(fetched.call_args.args[0], PUBLIC_MODEL_LISTS['openrouter'])
+            return {r: self.app.state['catalog'][r]['status'] for r in (dead, live)}
+        self.assertEqual(refresh([listing]), {dead: 'missing', live: 'present'})
+        self.assertEqual([c['route'] for c in self.app.state['changes'] if c['kind'] == 'missing'], [dead])
+        self.assertEqual(route_statuses(self.app.mode_catalog(), {})[dead]['status'], 'blocked')
+        self.assertEqual(refresh(OSError('offline')), {dead: 'missing', live: 'present'})
+        self.assertEqual(refresh([{'data': []}]), {dead: 'missing', live: 'present'})
+        self.assertEqual(len([c for c in self.app.state['changes'] if c['kind'] == 'missing']), 1)
+        self.assertEqual(self.app.mode_state, pools)
+        self.assertEqual(refresh([{'data': [{'id': 'live:free'}, {'id': 'gone:free'}]}]), {dead: 'present', live: 'present'})
 
     def test_http_guards_and_round_trip(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.app=self.app
