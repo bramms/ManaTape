@@ -2,11 +2,32 @@
 import copy
 import re
 from datetime import datetime, timedelta, timezone
-from omp_roles import accepts_model, fallback_chain
+from omp_roles import BUILTIN_ROLES, accepts_model, fallback_chain
 
 EFFORT = re.compile(r':(off|minimal|low|medium|high|xhigh|max|auto)$')
+# One provider segment, then the model ID; no whitespace or control characters.
+ROUTE = re.compile(r'[^\s\x00-\x1f/]+/[^\s\x00-\x1f]+')
 POOL_NAMES = ('free-good', 'free-fast')
 POOL_PREFIX = 'mana-pool/'
+
+
+def route_text(value):
+    return isinstance(value, str) and len(value) <= 300 and bool(ROUTE.fullmatch(value))
+
+
+def thinking_efforts(model):
+    """Known thinking efforts of a catalog model, or None when unknown.
+
+    OMP lists them as a list; extensions may register {mode, efforts}. An absent
+    or empty list is unknown, as in the browser: unknown means no check.
+    """
+    value = (model or {}).get('thinking')
+    if isinstance(value, dict):
+        value = value.get('efforts')
+    if isinstance(value, list):
+        efforts = [v for v in value if isinstance(v, str)]
+        return efforts or None
+    return None
 
 
 def pool_name(value):
@@ -21,14 +42,14 @@ def validate_pools(value, models):
             raise ValueError('Пул має бути списком CUTS')
         seen = set()
         for route in routes:
-            if not isinstance(route, str) or len(route) > 300 or not re.fullmatch(r'[^\s\x00-\x1f/]+/[^\s\x00-\x1f]+', route):
+            if not route_text(route):
                 raise ValueError('Некоректний CUT у пулі')
             raw = raw_route(route)
             model = models.get(raw, {})
             if pool_name(route) is not None or not is_free_model(model):
                 raise ValueError('До FREE пулів можна додавати лише підтверджені FREE CUTS')
-            effort = EFFORT.search(route)
-            if effort and effort[1] != 'off' and effort[1] not in model.get('thinking', []):
+            effort, efforts = EFFORT.search(route), thinking_efforts(model)
+            if effort and effort[1] != 'off' and efforts is not None and effort[1] not in efforts:
                 raise ValueError('CUT не підтримує вибраний thinking')
             if raw in seen:
                 raise ValueError('У пулі є однакові CUTS')
@@ -64,14 +85,14 @@ def validate_settings(value, roles, models, workers=()):
         if not isinstance(routes, list) or len(routes) > 12:
             raise ValueError('У списку замін може бути до 12 маршрутів')
         for r in routes:
-            if not isinstance(r, str) or len(r) > 300 or not re.fullmatch(r'[^\s\x00-\x1f/]+/[^\s\x00-\x1f]+', r) or is_deepseek(r, models):
+            if not route_text(r) or is_deepseek(r, models):
                 raise ValueError('Заміна має бути без платного DeepSeek; FREE CUTS дозволені')
         if len(set(routes)) != len(routes):
             raise ValueError('У списку є однакові маршрути')
     return {'mode': value['mode'], 'alternatives': list(lists['profile']), 'overrides': copy.deepcopy(overrides)}
 
 
-def default_settings(models, available, disabled=()):
+def default_settings():
     # The user chooses replacements; subscriptions do not imply role suitability.
     return {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}
 
@@ -116,10 +137,14 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
 
     def alternatives(key, original):
         routes = settings['overrides'].get(key, settings['alternatives'])
+        # OMP roles without thinking (judge, web, image...) never receive an effort suffix.
+        plain_role = key.startswith('role:') and not BUILTIN_ROLES.get(key[5:], {}).get('thinking', True)
         result = []
         for token in routes:
             for value in members(token, key):
                 raw = raw_route(value)
+                if plain_role:
+                    value = raw
                 model, availability = models.get(raw), statuses.get(raw, {'status': 'unknown', 'reason': 'Немає даних'})
                 reason = ''
                 if raw.split('/')[0] in disabled:
@@ -132,8 +157,8 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
                     reason = 'CUT не підтримує цю роль'
                 elif key in {'role:'+role for role in vision_roles} and 'image' not in model.get('input', []):
                     reason = 'Для цієї ролі потрібен зір'
-                effort = EFFORT.search(value)
-                if not reason and effort and effort[1] != 'off' and model and model.get('thinking') and effort[1] not in model['thinking']:
+                effort, efforts = EFFORT.search(value), thinking_efforts(model)
+                if not reason and effort and effort[1] != 'off' and efforts is not None and effort[1] not in efforts:
                     reason = 'Модель не підтримує вибраний thinking'
                 if reason:
                     skipped.append({'key': key, 'route': value, 'reason': reason})
@@ -181,8 +206,9 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
                     paused.append({'index': index, 'route': resolve(value, normal), 'primary': index == 0})
                     continue
                 pairs.append((value, {'kind': 'base', 'index': index, 'route': resolve(value, normal), 'key': key}))
-        if off and not pairs and group == 'vibe':
-            pairs.extend(alternatives(key, values[0] if values else 'DeepSeek'))
+        # A hand-written empty agent list stays empty; skipped replacements are reported once.
+        if off and values and not pairs and not replacements_added and group == 'vibe':
+            pairs.extend(alternatives(key, values[0]))
         unique, refs, seen = [], [], set()
         for value, ref in pairs:
             identity = resolve(value, effective if group == 'vibe' else normal)

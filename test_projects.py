@@ -1,14 +1,14 @@
 """Isolation tests use only disposable OMP fixtures."""
+import gzip
 import http.client
 import json
-import os
 from pathlib import Path
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
-from server import Handler, load_installation, yaml_dump, Problem
+from server import Handler, asset_version, load_installation, yaml_dump, Problem
 
 
 class Projects(unittest.TestCase):
@@ -321,6 +321,63 @@ class Projects(unittest.TestCase):
             args = run.call_args.args[0]
             self.assertEqual(args[-2], 'test-host')
             self.assertIn("'/private state/project/commandcode-usage.json'", args[-1])
+
+    def load_proxy(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('mana_proxy', Path(__file__).parent/'mac-preview.py')
+        proxy = importlib.util.module_from_spec(spec); spec.loader.exec_module(proxy)
+        return proxy
+
+    def test_ssh_commandcode_sync_survives_unexpected_errors(self):
+        from types import SimpleNamespace
+        proxy = self.load_proxy()
+        stop = unittest.mock.Mock()
+        stop.is_set.side_effect = [False, False, True]
+        with patch.object(proxy.Path, 'is_file', return_value=True), \
+             patch.object(proxy, 'commandcode_report', side_effect=AttributeError('schema changed')), \
+             patch.object(proxy.subprocess, 'run') as run, patch('sys.stderr'):
+            run.return_value.stdout = '{}'
+            proxy.sync_commandcode(stop, SimpleNamespace(host='test-host', state='/state'))
+        self.assertEqual(stop.wait.call_count, 2, 'the thread keeps polling after a bad report')
+
+    def test_ssh_proxy_reuses_upstream_and_passes_compression_and_validators(self):
+        proxy = self.load_proxy()
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server.app, server.apps, server.daemon_threads = self.apps['one'], self.apps, True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        front = ThreadingHTTPServer(('127.0.0.1', 0), proxy.Proxy)
+        front.daemon_threads = True
+        front.token, front.tunnel_port, front.remote_port = 'x' * 32, server.server_port, server.server_port
+        front.upstream = proxy.Upstream(server.server_port)
+        self.addCleanup(front.upstream.close)
+        reused, get = [], front.upstream.get
+        def counted():
+            connection, again = get(); reused.append(again); return connection, again
+        front.upstream.get = counted
+        threading.Thread(target=front.serve_forever, daemon=True).start()
+        self.addCleanup(front.server_close); self.addCleanup(front.shutdown)
+        c = http.client.HTTPConnection('127.0.0.1', front.server_port, timeout=30)
+        self.addCleanup(c.close)
+        def call(method, path, body=None, **headers):
+            c.request(method, path, body, headers)
+            response = c.getresponse()
+            return response, response.read()
+        response, raw = call('GET', '/api/state?project=two', **{'Accept-Encoding': 'gzip'})
+        self.assertEqual(response.getheader('Content-Encoding'), 'gzip')
+        state = json.loads(gzip.decompress(raw))
+        self.assertEqual(state['projectId'], 'two')
+        response, raw = call('GET', '/api/state?project=two', **{'If-None-Match': response.getheader('ETag')})
+        self.assertEqual((response.status, raw), (304, b''))
+        icon = (Path(__file__).parent/'static/icon.svg').read_bytes()
+        response, raw = call('GET', '/icon.svg?v=' + asset_version(icon))
+        self.assertIn('immutable', response.getheader('Cache-Control'))
+        self.assertEqual(raw, icon)
+        response, raw = call('POST', '/api/favorites?project=two', json.dumps({'values': ['custom/model-a']}),
+                             **{'Content-Type': 'application/json', 'X-Forge-CSRF': state['csrf']})
+        self.assertEqual((response.status, json.loads(raw)), (200, {'ok': True}))
+        self.assertEqual(self.apps['two'].state['favs'], ['custom/model-a'])
+        self.assertEqual(reused, [False, True, True, True], 'one tunnel connection for the whole burst')
 
     def test_shared_provider_renewal_survives_old_expiry_and_restart(self):
         from server import digest

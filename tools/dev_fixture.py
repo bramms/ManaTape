@@ -43,11 +43,11 @@ def seed():
              agent / 'models.yml': yaml_dump({'providers': providers})}
     for path, content in files.items():
         if not path.exists():
-            path.write_text(content)
+            path.write_text(content, encoding='utf-8')
     snapshot = state / 'state.json'
     if not snapshot.exists():
         catalog = {pid+'/'+m['id']: {**m, 'provider':pid} for pid,cfg in providers.items() for m in cfg['models']}
-        snapshot.write_text(json.dumps(dict(managed={},catalog=catalog,available=list(catalog),changes=[],favs=[],refreshed=0,error='',backups={},attempted=0)))
+        snapshot.write_text(json.dumps(dict(managed={},catalog=catalog,available=list(catalog),changes=[],favs=[],refreshed=0,error='',backups={},attempted=0)), encoding='utf-8')
     return project, agent, state
 
 
@@ -103,11 +103,11 @@ def seed_showcase():
         'task': {'agentModelOverrides': {
             'writing-team': ['@composer', 'mana-pool/free-fast'],
             'library-assistant': ['@curator', 'mana-pool/free-good']}}, 'disabledProviders': []}
-    (project / '.omp/config.yml').write_text('# DEMO: усі моделі та дані синтетичні.\n'+yaml_dump(base))
-    (project / '.omp/presets/without-deepseek.yml').write_text('{}\n')
+    (project / '.omp/config.yml').write_text('# DEMO: усі моделі та дані синтетичні.\n'+yaml_dump(base), encoding='utf-8')
+    (project / '.omp/presets/without-deepseek.yml').write_text('{}\n', encoding='utf-8')
     (project / '.omp/presets/long-tape.yml').write_text(yaml_dump({
-        'retry': {'fallbackChains': {'investigator': alternatives+pools['free-good']+pools['free-fast'][:15]}}}))
-    (agent / 'models.yml').write_text(yaml_dump({'providers': providers}))
+        'retry': {'fallbackChains': {'investigator': alternatives+pools['free-good']+pools['free-fast'][:15]}}}), encoding='utf-8')
+    (agent / 'models.yml').write_text(yaml_dump({'providers': providers}), encoding='utf-8')
     app = Forge(project, agent, state, '/does-not-exist', demo=True)
     app.ui = {'visionRoles': ['storyboarder']}
     app.state.update(catalog=catalog, available=list(catalog), refreshed=now, favs=[*alternatives, pools['free-good'][0]])
@@ -143,15 +143,15 @@ def seed_showcase():
                                    totalRequests=round(total*share), totalCost=round(12*share, 2), failedRequests=failed if i==0 else 0,
                                    avgTokensPerSecond=52+i*11, avgTtft=950-i*120)
                               for i, (route, share) in enumerate(zip(alternatives, [.32, .26, .20, .14, .08]))]}}
-    app.insights.path.write_text(json.dumps(app.insights.data, ensure_ascii=False))
+    app.insights.path.write_text(json.dumps(app.insights.data, ensure_ascii=False), encoding='utf-8')
     config = {'demo': True, 'noRefresh': True, 'omp': '/does-not-exist', 'state': str(root/'runtime'),
               'agent': str(agent), 'projects': [{'id': 'showcase', 'name': 'DEMO · Творча майстерня',
               'path': str(project), 'state': str(state), 'ui': {'visionRoles': ['storyboarder'], 'localProviders': ['demo-local'],
               'roleLabels': dict(composer='Автор', curator='Куратор', investigator='Дослідник', proofreader='Коректор', storyboarder='Розкадрування', **{'quick-notes': 'Швидкі нотатки'}),
               'providerCodes': {'demo-studio': 'STU', 'demo-cloud': 'CLD', 'demo-free': 'FREE', 'demo-deepseek': 'DS', 'demo-local': 'GPU'},
               'providerLabels': {'demo-studio': 'DEMO Studio', 'demo-cloud': 'DEMO Cloud', 'demo-free': 'DEMO Free', 'demo-deepseek': 'DEMO DeepSeek', 'demo-local': 'DEMO Local'}}}]}
-    (root/'installation.yml').write_text(yaml_dump(config))
-    (root/'SHOWCASE_READY').write_text('Synthetic showcase. No native accounts or inference.\n')
+    (root/'installation.yml').write_text(yaml_dump(config), encoding='utf-8')
+    (root/'SHOWCASE_READY').write_text('Synthetic showcase. No native accounts or inference.\n', encoding='utf-8')
     return project, agent, state
 
 

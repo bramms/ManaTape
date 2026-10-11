@@ -125,7 +125,7 @@ def livecode_data(data):
 
 
 def developer_data():
-    records = json.loads((Path(__file__).parent / 'developer-benchmarks.json').read_text())
+    records = json.loads((Path(__file__).parent / 'developer-benchmarks.json').read_text(encoding='utf-8'))
     for record in records:
         if record.get('kind') != 'developer' or not record.get('url', '').startswith('https://huggingface.co/'):
             raise ValueError('Publisher evidence requires provenance')

@@ -56,6 +56,18 @@ class BenchmarkTest(unittest.TestCase):
         self.assertFalse(result['sources']['Arena']['error'])
         self.assertEqual(old['records'],[dict(id='old',source='Artificial Analysis')])
 
+    def test_artificial_analysis_reads_flight_payload_records(self):
+        from insights import artificial_analysis
+        model = {'intelligenceIndex': 61, 'release': {'slug': 'demo-v3'}, 'slug': 'demo-v3-high', 'name': 'Demo V3 (high)',
+                 'effort': {'slug': 'high'}, 'gpqa': 0.725, 'scicode': 1.5}
+        flight = '2:' + json.dumps({'models': [model, {'slug': 'no-index', 'name': 'x'}]}) + '\n'
+        html = ''.join('<script>self.__next_f.push(' + json.dumps([1, part]) + ')</script>' for part in [flight[:40], flight[40:]])
+        with patch('insights.download', return_value=html + 'Intelligence Index v4.0'):
+            rows = artificial_analysis()
+        self.assertEqual([(r['baseId'], r['effort'], r['scores']) for r in rows], [('demo-v3', 'high', {'GPQA': 72.5})])
+        with patch('insights.download', return_value=html), self.assertRaises(ValueError):
+            artificial_analysis()
+
     def test_only_explicit_effort_is_removed_from_external_names(self):
         self.assertEqual(tested_name('demo-v2 (High)'),('demo-v2','high'))
         for name in ['demo-v2-preview','demo-v2-0731','demo-v2-nvfp4','demo-thinking']:

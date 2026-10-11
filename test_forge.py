@@ -1,7 +1,13 @@
 """Run: python -m unittest -v test_forge.py (temporary configs; never real OMP)."""
 import copy
+import errno
+import gzip
+import http.client
+import io
 import json
+import os
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import threading
@@ -12,7 +18,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from profile_modes import route_statuses
-from server import Forge, Handler, Problem, ThreadingHTTPServer, PUBLIC_MODEL_LISTS, digest, fingerprint, withdrawn_free_routes, yaml_load
+from server import (Forge, Handler, Problem, ThreadingHTTPServer, PUBLIC_MODEL_LISTS, digest, fingerprint, log_failure,
+    peer_uid, withdrawn_free_routes, yaml_dump, yaml_load)
 
 
 class ForgeTest(unittest.TestCase):
@@ -416,6 +423,232 @@ unrelated: {keep: true}
             self.assertTrue(all(0<=v<=100 for v in r['scores'].values()))
         self.assertNotIn('domain_reviewer',data['weights'])
         self.assertNotIn('designer',data['weightsAA'])
+
+    def serve(self):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server.app, server.daemon_threads = self.app, True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server.server_port
+
+    def test_backup_rotation_matches_exact_names_and_keeps_restore_target(self):
+        (self.project/'.omp/presets/x-config.yml').write_text('modelRoles:\n  task: demo/two\n')
+        self.save([{'path': ['modelRoles', 'task'], 'value': 'demo/three'}], 'x-config')
+        backups = self.app.state_dir/'backups'
+        restore_target = Path(self.app.state['backups'][str(self.app.path('x-config'))])
+        unrelated = [backups/'1-deleted-config.yml', backups/'2-x-config.yml']
+        for f in unrelated:
+            f.write_text('keep')
+        for i in range(25):
+            (backups/f'{100 + i}-config.yml').write_text('old')
+        referenced = backups/'100-config.yml'
+        self.app.state['backups']['elsewhere'] = str(referenced)
+        self.save([{'path': ['modelRoles', 'smol'], 'value': 'demo/three'}], 'standard')
+        kept = sorted(p.name for p in backups.glob('*-config.yml') if p.name.split('-', 1)[1] == 'config.yml')
+        self.assertEqual(len(kept), 21, 'the newest 20 plus the backup Restore points to')
+        self.assertTrue(referenced.exists() and restore_target.exists() and all(f.exists() for f in unrelated))
+        self.app.profile_action({'action': 'restore', 'profile': 'x-config', 'revision': self.app.revision('x-config')})
+        self.assertEqual(self.app.read(self.app.path('x-config'))['modelRoles']['task'], 'demo/two')
+
+    def test_symlinked_registry_is_refused_and_never_replaced(self):
+        target = self.root/'dotfiles-models.yml'
+        target.write_text('providers: {}\n')
+        (self.agent/'models.yml').unlink()
+        (self.agent/'models.yml').symlink_to(target)
+        with self.assertRaises(Problem) as refused:
+            self.app.provider_save(self.provider())
+        self.assertEqual((refused.exception.status, refused.exception.code), (409, 'symlink'))
+        self.assertTrue((self.agent/'models.yml').is_symlink())
+        self.assertEqual(target.read_text(), 'providers: {}\n')
+        self.assertFalse((self.agent/'forge-keys').exists())
+        # Expiry cannot remove a provider through the link either; it says why.
+        target.write_text(yaml_dump({'providers': {'temporary': {'baseUrl': 'https://api.example.com/v1'}}}))
+        self.app.managed['temporary'] = {'expires': 1, 'expired': False, 'fingerprint': 'x'}
+        self.app.expire()
+        self.assertEqual(self.app.managed['temporary']['expiryReason'], 'symlink')
+        self.assertIn('temporary', target.read_text())
+
+    def test_bad_preset_never_stops_snapshot_expiry_or_refresh(self):
+        presets = self.project/'.omp/presets'
+        (presets/'broken.yml').write_text('modelRoles: [unclosed\n')
+        os.symlink(self.app.path('high'), presets/'linked.yml')
+        snapshot = self.app.snapshot()
+        self.assertEqual(set(snapshot['presets']), {'high'})
+        self.assertEqual(len(snapshot['profileWarnings']), 2)
+        (self.agent/'models.yml').write_text('providers:\n')
+        self.app.managed['gone'] = {'expires': 1, 'expired': False}
+        self.app.expire()
+        self.assertTrue(self.app.managed['gone']['expired'])
+        self.app.state['attempted'] = 0
+        with patch.object(self.app, 'expire', side_effect=OSError(errno.EIO, 'disk')), \
+             patch.object(self.app, 'refresh_async') as refresh, patch('sys.stderr', new=io.StringIO()):
+            self.app.maintain_once()
+        refresh.assert_called_once()
+
+    def test_key_files_follow_their_provider(self):
+        keys = self.agent/'forge-keys'
+        def secrets():
+            return sorted(f.read_text() for f in keys.iterdir())
+        self.app.provider_save(self.provider())
+        self.app.provider_save(self.provider(key='ROTATED'))
+        self.assertEqual(secrets(), ['ROTATED'])
+        self.app.provider_save(self.provider(auth='none', key=''))
+        self.assertEqual(secrets(), [])
+        with patch.object(self.app, 'replace_yaml', side_effect=Problem('Файл уже змінився', 409)), self.assertRaises(Problem):
+            self.app.provider_save(self.provider(key='NOT-SAVED'))
+        self.assertEqual(secrets(), [])
+        own = self.root/'own-key'
+        own.write_text('MINE')
+        self.app.remove_key_files(['!cat ' + str(own)], {'providers': {}})
+        self.assertTrue(own.exists(), 'a key file the owner manages is never removed')
+        self.app.provider_save(self.provider(key='DELETED'))
+        self.app.provider_save(self.provider(action='delete'))
+        self.assertEqual(secrets(), [])
+        self.app.provider_save(self.provider(key='EXPIRED'))
+        self.app.managed['temporary']['expires'] = 1
+        self.app.expire()
+        self.assertEqual(secrets(), [])
+
+    def test_insights_rewritten_only_when_something_changed(self):
+        from insights import BENCHMARK_SCHEMA
+        insights, now = self.app.insights, time.time()
+        insights.data['usage']['at'] = insights.data['stats']['at'] = now
+        insights.data['benchmarks'].update(at=now, schema=BENCHMARK_SCHEMA)
+        insights.path.write_text('{}')
+        with patch.object(insights, 'write') as write, patch.object(insights, 'native', side_effect=AssertionError('not due')):
+            insights.update(); insights.update()
+        write.assert_not_called()
+        insights.data['usage']['at'] = 0
+        with patch.object(insights, 'write') as write, patch.object(insights, 'native', side_effect=ValueError('offline')):
+            insights.update(); insights.update()
+        self.assertEqual(write.call_count, 1, 'the same failure is recorded once')
+
+    def test_snapshot_never_decorates_persisted_catalog(self):
+        self.app.state['catalog'] = {'demo/two': {'provider': 'demo', 'id': 'two', 'cost': {'input': 1, 'output': 1}}}
+        before = json.dumps(self.app.state['catalog'], sort_keys=True)
+        self.app.snapshot()
+        self.assertEqual(json.dumps(self.app.state['catalog'], sort_keys=True), before)
+
+    def test_usage_reports_parse_independently_and_reject_non_numbers(self):
+        from insights import commandcode_report
+        native = {'reports': [
+            {'provider': 'good', 'fetchedAt': 1760000000000, 'limits': [
+                {'id': 'a', 'label': 'A', 'amount': {'usedFraction': 0.25}},
+                {'id': 'n', 'label': 'N', 'amount': {'remainingFraction': float('nan')}},
+                {'id': 'b', 'label': 'B', 'amount': {'remainingFraction': True}}]},
+            {'provider': 'odd', 'fetchedAt': None, 'limits': []}]}
+        from insights import BENCHMARK_SCHEMA
+        self.app.insights.data['benchmarks'].update(at=time.time(), schema=BENCHMARK_SCHEMA)  # no network
+        with patch.object(self.app.insights, 'native', side_effect=lambda args, timeout: native if args[0] == 'usage' else {}):
+            self.app.insights.update()
+        usage = self.app.insights.data['usage']
+        self.assertEqual([r['provider'] for r in usage['reports']], ['good'])
+        self.assertEqual([l['remaining'] for l in usage['reports'][0]['limits']], [75.0, None, None])
+        self.assertTrue(usage['error'])
+        for payload in (['garbage', {'provider': 'commandcode', 'usage': {}}],
+                        [{'provider': 'commandcode', 'usage': {'primary': {'usedPercent': True}}}],
+                        [{'provider': 'commandcode', 'usage': {'primary': {'usedPercent': 5}, 'updatedAt': 17}}]):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                commandcode_report(payload)
+        report = commandcode_report([{'provider': 'commandcode', 'usage': {'primary': {'usedPercent': 10, 'resetsAt': 1760000000}, 'updatedAt': '2026-10-12T00:00:00Z'}}])
+        self.assertIsNone(report['limits'][0]['resets'])
+
+    def test_failure_log_names_type_and_place_but_no_message(self):
+        try:
+            raise OSError(errno.ENOSPC, 'SECRET /private/path')
+        except OSError as error:
+            with patch('sys.stderr', new=io.StringIO()) as stderr:
+                log_failure('test', error)
+        line = stderr.getvalue()
+        self.assertIn('OSError ENOSPC', line)
+        self.assertIn('test_forge.py', line)
+        self.assertNotIn('SECRET', line)
+        self.assertNotIn('/private', line)
+        self.assertEqual(Problem('x', 409, 'mode-conflict', profiles=['high']).body(), {'error': 'x', 'code': 'mode-conflict', 'profiles': ['high']})
+
+    def test_tailscale_identity_requires_tailscaled_or_own_user(self):
+        port = self.serve()
+        self.app.origin, self.app.owner = 'https://panel.test', 'owner@example.test'
+        headers = {'Host': 'panel.test', 'Tailscale-User-Login': self.app.owner}
+        for uid, allowed in ((4242, False), (-1, False), (0, True), (os.getuid(), True), (None, True)):
+            with self.subTest(uid=uid), patch('server.peer_uid', return_value=uid):
+                try:
+                    with urlopen(Request(f'http://127.0.0.1:{port}/api/state', headers=headers)) as response:
+                        status = response.status
+                except HTTPError as error:
+                    status = error.code
+                    error.close()
+                self.assertEqual(status, 200 if allowed else 403)
+        table = self.root/'tcp'
+        table.write_text('  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+            '   0: 0100007F:4B65 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 11 1 0 20 4 30 10 -1\n'
+            '   1: 0100007F:D431 0100007F:4B65 01 00000000:00000000 00:00000000 00000000     0        0 12 1 0 20 4 30 10 -1\n')
+        self.assertEqual(peer_uid(54321, 19301, table), 0, 'the client socket, not the accepted one')
+        self.assertEqual(peer_uid(1, 19301, table), -1)
+        self.assertIsNone(peer_uid(1, 19301, self.root/'no-proc'))
+
+    def test_http_keep_alive_gzip_validators_and_cache_headers(self):
+        port = self.serve()
+        static = Path(__file__).parent/'static'
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=30)
+        self.addCleanup(c.close)
+        def get(path, **headers):
+            c.request('GET', path, headers=headers)
+            response = c.getresponse()
+            return response, response.read()
+        response, raw = get('/api/state', **{'Accept-Encoding': 'gzip'})
+        self.assertEqual((response.getheader('Content-Encoding'), response.getheader('Cache-Control')), ('gzip', 'no-store'))
+        self.assertIn('csrf', json.loads(gzip.decompress(raw)))
+        tag, sock = response.getheader('ETag'), c.sock
+        response, raw = get('/api/state', **{'If-None-Match': tag})
+        self.assertEqual((response.status, raw, response.getheader('ETag')), (304, b'', tag))
+        self.assertIs(c.sock, sock, 'one keep-alive connection')
+        self.save([{'path': ['modelRoles', 'task'], 'value': 'demo/three'}])
+        self.assertEqual(get('/api/state', **{'If-None-Match': tag})[0].status, 200)
+        # The shell pins every local asset to its content; only that exact URL is immutable.
+        response, shell = get('/')
+        self.assertEqual(response.getheader('Cache-Control'), 'no-cache')
+        pinned = re.search(r'href="(/icon\.svg\?v=[0-9a-f]{12})"', shell.decode())[1]
+        self.assertNotIn('?v=42', shell.decode())
+        response, raw = get(pinned, **{'Accept-Encoding': 'gzip'})
+        self.assertEqual(gzip.decompress(raw), (static/'icon.svg').read_bytes())
+        self.assertIn('immutable', response.getheader('Cache-Control'))
+        self.assertEqual(response.getheader('Vary'), 'Accept-Encoding')
+        self.assertEqual(get(pinned, **{'If-None-Match': response.getheader('ETag')})[0].status, 304)
+        for path in ('/sw.js', '/icon.svg', '/icon.svg?v=42'):
+            self.assertEqual(get(path)[0].getheader('Cache-Control'), 'no-cache', path)
+        self.assertIs(c.sock, sock)
+        # An unread body is never parsed as the next request on the connection.
+        c.request('POST', '/api/favorites', b'{"values": []}', {'Content-Type': 'application/json'})
+        response = c.getresponse(); response.read()
+        self.assertEqual((response.status, response.will_close), (403, True))
+
+    def test_shared_yaml_cache_follows_content_and_stays_read_only(self):
+        p = self.app.path('high')
+        self.assertEqual(self.app.snapshot()['presets']['high']['modelRoles']['task'], 'demo/two:high')
+        stat = p.stat()
+        p.write_text(p.read_text().replace('two', 'six'))
+        os.utime(p, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.assertEqual(p.stat().st_size, stat.st_size)
+        self.assertEqual(self.app.snapshot()['presets']['high']['modelRoles']['task'], 'demo/six:high')
+        body = {'profile': 'high', 'revision': self.app.revision('high'), 'changes': [], 'modeSettings': {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}}
+        with patch('server.yaml_load', wraps=yaml_load) as parse:
+            self.app.snapshot(); self.app.preview_profile(body)
+        self.assertEqual(parse.call_count, 0, 'unchanged files are parsed once')
+        shared = self.app.read(p, shared=True)
+        with self.assertRaises(TypeError):
+            shared['modelRoles']['task'] = 'demo/evil'
+        with self.assertRaises(TypeError):
+            shared.setdefault('retry', {})
+        own = copy.deepcopy(shared)
+        own['modelRoles']['task'] = 'demo/mine'
+        self.assertIs(type(own['modelRoles']), dict)
+        self.assertEqual(self.app.read(p, shared=True)['modelRoles']['task'], 'demo/six:high')
+
+    def test_object_thinking_is_a_list_in_the_catalog(self):
+        (self.agent/'models.yml').write_text('providers:\n  ext:\n    models:\n      - id: a\n        thinking: {mode: effort, efforts: [low, high]}\n')
+        self.assertEqual(self.app.mode_catalog()['ext/a']['thinking'], ['low', 'high'])
 
 
 if __name__=='__main__':unittest.main()

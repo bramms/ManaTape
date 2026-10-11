@@ -2,7 +2,9 @@
 
 https://github.com/can1357/oh-my-pi/blob/v18.6.1/packages/coding-agent/src/config/model-roles.ts
 """
+import hashlib
 import re
+import threading
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -37,7 +39,8 @@ BUILTIN_AGENTS = {
 AGENT_ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 AGENT_FILE_LIMIT = 64 * 1024
 AGENT_FILES_PER_DIR = 200
-AGENT_SOURCES = (('project', 'проєкт'), ('user', 'користувач'))
+# Parsed frontmatter by exact file content: every /api/state rereads the files, parsing only what changed.
+_FRONTMATTER, _FRONTMATTER_LOCK = {}, threading.Lock()
 
 
 def _frontmatter(path):
@@ -45,6 +48,11 @@ def _frontmatter(path):
         text = handle.read(AGENT_FILE_LIMIT + 1)
     if len(text) > AGENT_FILE_LIMIT:
         raise ValueError('файл завеликий')
+    key = hashlib.sha256(text).digest()
+    with _FRONTMATTER_LOCK:
+        hit = _FRONTMATTER.get(key)
+    if hit is not None:
+        return dict(hit)
     lines = text.decode('utf-8').lstrip('\ufeff').splitlines()
     if not lines or lines[0].strip() != '---':
         raise ValueError('немає frontmatter')
@@ -53,7 +61,11 @@ def _frontmatter(path):
             data = YAML(typ='safe').load('\n'.join(lines[1:end]))
             if not isinstance(data, dict):
                 raise ValueError('frontmatter не є об’єктом')
-            return data
+            with _FRONTMATTER_LOCK:
+                if len(_FRONTMATTER) > 512:
+                    _FRONTMATTER.clear()
+                _FRONTMATTER[key] = data
+            return dict(data)
     raise ValueError('frontmatter не закрито')
 
 

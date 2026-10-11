@@ -1,13 +1,15 @@
 """Mode round trips and projection safety, using disposable OMP files only."""
 import copy
+import errno
 import json
+from pathlib import Path
 import time
 import unittest
 from unittest.mock import patch
 
 import test_forge
-from server import Forge, Problem, digest, merge, yaml_load, yaml_dump, atomic
-from profile_modes import compile_profile, route_statuses, is_deepseek, validate_settings
+from server import Forge, Problem, merge, yaml_dump, atomic, fsync_dir, json_value
+from profile_modes import compile_profile, route_statuses, is_deepseek, validate_settings, validate_pools
 
 
 class ProfileModesTest(unittest.TestCase):
@@ -327,11 +329,13 @@ class ProfileModesTest(unittest.TestCase):
     def test_clone_write_failure_recovers_creation_journal(self):
         self.init_modes(); self.save_mode()
         target = self.app.path('failed-copy')
+        from server import create_new
         def fail_creation(path, *args):
             if path == target:
                 raise OSError('simulated disk error')
-            return atomic(path, *args)
-        with patch('server.atomic', side_effect=fail_creation):
+            return create_new(path, *args)
+        # New profiles are created exclusively, never by replacing a file.
+        with patch('server.create_new', side_effect=fail_creation):
             with self.assertRaises(OSError):
                 self.app.profile_action({'action':'clone','profile':'high','name':'failed-copy'})
         self.assertFalse(target.exists())
@@ -553,3 +557,219 @@ class ProfileModesTest(unittest.TestCase):
         body={'profile':'high','revision':self.app.revision('high'),'modeSettings':self.settings,'changes':[]}
         preview=self.app.preview_profile(body)
         self.assertEqual(preview['views']['role']['task']['routes'][0],'demo/three')
+
+    # Interrupted transactions, outside edits and YAML the compiler did not write.
+
+    def mode_body(self, name, settings=None, changes=()):
+        body = {'profile': name, 'revision': self.app.revision(name), 'modeSettings': settings or self.settings, 'changes': list(changes)}
+        body['previewToken'] = self.app.preview_profile(body)['token']
+        return body
+
+    def test_failed_rollback_refuses_every_write_and_recovers_later(self):
+        self.init_modes()
+        before = {n: self.app.path(n).read_bytes() for n in ('standard', 'high')}
+        body = self.mode_body('standard')
+        full = {'on': False}
+        def disk(path, data, *args):
+            if full['on']:
+                raise OSError(errno.ENOSPC, 'No space left on device')
+            atomic(path, data, *args)
+            full['on'] = path.name == 'config.yml'
+        with patch('server.atomic', side_effect=disk):
+            with self.assertRaises(OSError):
+                self.app.save_profile(body)
+            journal = self.app.mode_journal.read_bytes()
+            self.assertNotEqual(self.app.path('standard').read_bytes(), before['standard'])
+            attempts = {
+                'preview': lambda: self.app.preview_profile({'profile': 'high', 'revision': self.app.revision('high'), 'modeSettings': self.settings, 'changes': []}),
+                'pools': lambda: self.app.save_pools({'revision': self.app.pools_revision(), 'pools': {'free-good': [], 'free-fast': []}}),
+                'legacy': lambda: self.app.save_profile({'profile': 'high', 'revision': 'any', 'changes': []}),
+                'rename': lambda: self.app.profile_action({'action': 'rename', 'profile': 'high', 'name': 'night', 'revision': self.app.revision('high')}),
+                'provider': lambda: self.app.provider_save({'id': 'temporary'}),
+            }
+            for name, attempt in attempts.items():
+                with self.subTest(refused=name), self.assertRaises(Problem) as refused:
+                    attempt()
+                self.assertEqual(refused.exception.code, 'mode-recovery')
+            # The unfinished journal is never overwritten by a later save.
+            self.assertEqual(self.app.mode_journal.read_bytes(), journal)
+            self.assertTrue(self.app.snapshot()['modeRecovery']['error'])
+        self.app.writable()  # Space is back: the next write first rolls the transaction back.
+        self.assertEqual({n: self.app.path(n).read_bytes() for n in before}, before)
+        self.assertFalse(self.app.mode_journal.exists())
+        self.assertEqual(self.app.mode_state, {'profiles': {}})
+        self.assertIsNone(self.app.snapshot()['modeRecovery'])
+        self.save_mode('standard')
+        self.assertIn('deepseek', self.app.mode_state['profiles']['standard']['normal'])
+
+    def test_transaction_never_overwrites_an_unfinished_journal(self):
+        self.app.mode_journal.write_text(json.dumps({'files': {}, 'beforeState': {'profiles': {}}, 'afterState': {'profiles': {}}}))
+        raw = self.app.mode_journal.read_bytes()
+        with self.assertRaises(Problem) as refused:
+            self.app.transact({}, {'profiles': {}})
+        self.assertEqual(refused.exception.code, 'mode-recovery')
+        self.assertEqual(self.app.mode_journal.read_bytes(), raw)
+
+    def test_outside_edit_during_transaction_waits_for_adopt_even_after_restart(self):
+        self.init_modes()
+        before = self.app.path('standard').read_bytes()
+        body = self.mode_body('standard')
+        def racing(path, data, *args):
+            atomic(path, data, *args)
+            if path.name == 'config.yml':
+                with self.app.path('high').open('a') as f:
+                    f.write('# owner edit\n')
+        with patch('server.atomic', side_effect=racing), self.assertRaises(Problem):
+            self.app.save_profile(body)
+        self.assertEqual(self.app.path('standard').read_bytes(), before, 'our half of the write is rolled back')
+        self.assertIn('# owner edit', self.app.path('high').read_text())
+        self.assertTrue(self.app.mode_journal.exists())
+        restarted = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')  # no crash loop
+        self.assertEqual(restarted.snapshot()['modeRecovery']['files'], ['high'])
+        with self.assertRaises(Problem) as refused:
+            restarted.save_pools({'revision': restarted.pools_revision(), 'pools': {'free-good': [], 'free-fast': []}})
+        self.assertEqual((refused.exception.code, refused.exception.details['files']), ('mode-recovery', ['high']))
+        restarted.profile_action({'action': 'adopt', 'profile': 'high', 'revision': restarted.revision('high')})
+        self.assertFalse(restarted.mode_journal.exists())
+        self.assertIn('# owner edit', restarted.path('high').read_text())
+        self.assertTrue(list((restarted.state_dir/'backups').glob('*-profile-mode-transaction.json')))
+        self.app = restarted
+        self.save_mode('standard')
+
+    def test_crlf_profiles_recover_as_exact_bytes(self):
+        self.init_modes()
+        crlf = b'# overlay\r\nmodelRoles:\r\n  task: demo/deepseek-v4:high\r\n'
+        self.app.path('high').write_bytes(crlf)
+        body = self.mode_body('high')
+        def failing(path, data, *args):
+            if path.name == 'high.yml':
+                raise OSError(errno.ENOSPC, 'No space left on device')
+            return atomic(path, data, *args)
+        with patch('server.atomic', side_effect=failing), self.assertRaises(OSError):
+            self.app.save_profile(body)
+        self.assertEqual(self.app.path('high').read_bytes(), crlf)
+        self.assertFalse(self.app.mode_journal.exists())
+        self.assertIsNone(self.app.recovery)
+        # A crash after our write: startup restores the CRLF original byte for byte.
+        ours, standard = 'modelRoles:\n  task: demo/three\n', self.app.path('standard').read_text(encoding='utf-8')
+        self.app.path('high').write_text(ours)
+        self.app.mode_journal.write_text(json.dumps({'files': {
+            'high': {'before': crlf.decode(), 'after': ours, 'mode': 0o644},
+            'standard': {'before': standard, 'after': standard + '# never written\n'}},
+            'beforeState': self.app.mode_state, 'afterState': {'profiles': {}}}))
+        app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
+        self.assertIsNone(app.recovery)
+        self.assertEqual(app.path('high').read_bytes(), crlf)
+        self.assertEqual(app.path('high').stat().st_mode & 0o777, 0o644)
+        self.assertFalse(app.mode_journal.exists())
+
+    def test_rename_and_delete_are_journaled_across_crashes(self):
+        self.init_modes(); self.save_mode('high')
+        logical = self.app.mode_state['profiles']['high']['normal']
+        presets = self.project/'.omp/presets'
+        class Crash(BaseException):
+            pass
+        def crash_on_metadata(path, data, *args):
+            if path == self.app.mode_file:
+                raise Crash()
+            return atomic(path, data, *args)
+        with patch('server.atomic', side_effect=crash_on_metadata), self.assertRaises(Crash):
+            self.app.profile_action({'action': 'rename', 'profile': 'high', 'name': 'night', 'revision': self.app.revision('high')})
+        # Both file steps happened: startup completes the rename and keeps the DeepSeek original.
+        app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
+        self.assertEqual(sorted(p.name for p in presets.iterdir()), ['night.yml'])
+        self.assertEqual(app.mode_state['profiles']['night']['normal'], logical)
+        self.assertEqual(app.mode_settings('night')['mode'], 'no-deepseek')
+        # A crash between creating the new name and removing the old one rolls back.
+        def crash_in_presets(path):
+            if Path(path) == presets:
+                raise Crash()
+            return fsync_dir(path)
+        with patch('server.fsync_dir', side_effect=crash_in_presets), self.assertRaises(Crash):
+            app.profile_action({'action': 'rename', 'profile': 'night', 'name': 'day', 'revision': app.revision('night')})
+        self.assertTrue((presets/'day.yml').exists())
+        app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
+        self.assertEqual(sorted(p.name for p in presets.iterdir()), ['night.yml'])
+        self.assertIn('night', app.mode_state['profiles'])
+        self.assertNotIn('day', app.mode_state['profiles'])
+        self.app = app
+        with patch('server.atomic', side_effect=crash_on_metadata), self.assertRaises(Crash):
+            app.profile_action({'action': 'delete', 'profile': 'night', 'revision': app.revision('night')})
+        app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
+        self.assertFalse((presets/'night.yml').exists())
+        self.assertNotIn('night', app.mode_state['profiles'])
+        self.assertTrue(list((app.state_dir/'backups').glob('*-deleted-night.yml')))
+
+    def test_adopt_accepts_outside_edit_without_rewriting_it(self):
+        self.init_modes(); self.save_mode('standard')
+        std = self.app.path('standard')
+        std.write_text(std.read_text() + '# owner note\n')
+        edited = std.read_bytes()
+        with self.assertRaises(Problem) as blocked:
+            self.save_mode('high')
+        self.assertEqual((blocked.exception.code, blocked.exception.details['profiles']), ('mode-conflict', ['standard']))
+        with self.assertRaises(Problem):
+            self.app.profile_action({'action': 'adopt', 'profile': 'standard', 'revision': 'stale'})
+        self.app.profile_action({'action': 'adopt', 'profile': 'standard', 'revision': self.app.revision('standard')})
+        self.assertEqual(std.read_bytes(), edited)
+        self.assertEqual(self.app.mode_conflicts(), [])
+        record = self.app.mode_state['profiles']['standard']
+        self.assertEqual(record['normal'], edited.decode())
+        self.assertEqual(record['settings'], {**self.settings, 'mode': 'deepseek'})
+        self.assertEqual(record['previous']['settings'], self.settings)
+        self.save_mode('high')
+        # Restore explicitly brings back the former logical profile.
+        self.app.profile_action({'action': 'restore', 'profile': 'standard', 'revision': self.app.revision('standard')})
+        self.assertEqual(self.app.mode_state['profiles']['standard']['settings'], self.settings)
+        self.assertNotIn('# owner note', std.read_text())
+
+    def test_outside_edited_preset_stays_frozen_and_orphans_can_be_forgotten(self):
+        self.init_modes()
+        self.app.path('other').write_text('modelRoles:\n  smol: demo/two\n')
+        self.save_mode('high')
+        self.app.path('high').unlink()
+        self.assertEqual(self.app.snapshot()['modeOrphans'], ['high'])
+        self.app.path('high').write_text('modelRoles:\n  task: demo/three\n')
+        ghost = self.app.path('high').read_bytes()
+        self.assertEqual(self.app.mode_conflicts(), ['high'])
+        self.save_mode('other')
+        self.assertEqual(self.app.path('high').read_bytes(), ghost)
+        self.app.profile_action({'action': 'adopt', 'profile': 'high', 'revision': self.app.revision('high')})
+        self.assertEqual(self.app.profiles()[1]['high']['modelRoles']['task'], 'demo/three')
+        self.app.path('other').unlink()
+        self.assertEqual(self.app.snapshot()['modeOrphans'], ['other'])
+        self.app.profile_action({'action': 'adopt', 'profile': 'other'})
+        self.assertNotIn('other', self.app.mode_state['profiles'])
+        self.assertTrue(list((self.app.state_dir/'backups').glob('*-forgotten-other-mode.json')))
+
+    def test_yaml_dates_tags_and_sets_do_not_break_previews_or_saves(self):
+        self.init_modes()
+        std = self.app.path('standard')
+        std.write_text(std.read_text() + 'notes:\n  reviewed: 2026-01-01\n  at: 2026-01-01T10:00:00Z\n  token: !env OMP_TOKEN\n  tags: !!set {a, b}\n')
+        self.app.preview_profile({'profile': 'high', 'revision': self.app.revision('high'), 'modeSettings': self.settings, 'changes': []})
+        self.save_mode('standard')
+        self.save_mode('high')
+        text = std.read_text()
+        self.assertIn('reviewed: 2026-01-01', text)
+        self.assertIn('!env OMP_TOKEN', text)
+        json.dumps(self.app.snapshot(), default=json_value)
+        self.app.save_pools({'revision': self.app.pools_revision(), 'pools': {'free-good': [], 'free-fast': []}})
+
+    def test_compile_edges_and_object_thinking(self):
+        models = {r: {'id': r.split('/', 1)[1], 'input': ['text'], 'thinking': ['high']} for r in ['p/deepseek-v4', 'p/a', 'p/b', 'p/c']}
+        off = {'mode': 'no-deepseek', 'alternatives': ['p/b', 'p/c'], 'overrides': {}}
+        plan = compile_profile({'modelRoles': {'default': 'p/a'}, 'task': {'agentModelOverrides': {'empty': []}}}, off, models, {})
+        self.assertEqual(plan['effective']['task']['agentModelOverrides']['empty'], [])
+        blocked = {r: {'status': 'blocked', 'reason': 'x'} for r in ('p/b', 'p/c')}
+        plan = compile_profile({'modelRoles': {'default': 'p/a'}, 'task': {'agentModelOverrides': {'w': ['p/deepseek-v4']}}}, off, models, blocked)
+        self.assertEqual([(s['key'], s['route']) for s in plan['skipped']], [('vibe:w', 'p/b'), ('vibe:w', 'p/c')])
+        plan = compile_profile({'modelRoles': {'judge': 'p/deepseek-v4'}}, {**off, 'alternatives': ['p/a:high']}, models, {})
+        self.assertEqual(plan['effective']['modelRoles']['judge'], 'p/a', 'judge has no thinking in OMP')
+        objects = {'p/deepseek-v4': {'id': 'deepseek-v4'}, 'p/a': {'id': 'a', 'input': ['text'], 'thinking': {'mode': 'effort', 'efforts': ['low', 'high']}}}
+        plan = compile_profile({'modelRoles': {'default': 'p/deepseek-v4'}}, {**off, 'alternatives': ['p/a:high']}, objects, {})
+        self.assertEqual((plan['skipped'], plan['effective']['modelRoles']['default']), ([], 'p/a:high'))
+        free = {'p/x': {'id': 'x:free', 'cost': {'input': 0, 'output': 0}, 'thinking': {'mode': 'effort', 'efforts': ['low']}},
+                'p/y': {'id': 'y:free', 'cost': {'input': 0, 'output': 0}}}
+        validate_pools({'free-good': ['p/x:low', 'p/y:high'], 'free-fast': []}, free)  # unknown efforts are not checked
+        with self.assertRaises(ValueError):
+            validate_pools({'free-good': ['p/x:high'], 'free-fast': []}, free)
