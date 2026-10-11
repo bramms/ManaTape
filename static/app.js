@@ -30,8 +30,10 @@
   if(state.saving||!Object.hasOwn(p().task.agentModelOverrides||{},worker)&&!agentInfo(worker))return;
   const target=p().task.agentModelOverrides,base=state.profile==='standard'?{}:original.standard.task.agentModelOverrides;
   if(Object.hasOwn(base,worker))target[worker]=copy(base[worker]);else delete target[worker];
-  delete modeSettings().overrides['vibe:'+worker];state.picker=null;render();
+  delete modeSettings().overrides['vibe:'+worker];state.picker=null;render();focusLane(worker,'vibe');
  }
+ // After a reset the old control is gone; focus the lane's own first control.
+ function focusLane(role,group){[...win.querySelectorAll(`button[data-edit="${CSS.escape(role)}"][data-group="${group}"]`)].find(el=>el.getClientRects().length)?.focus({preventScroll:true});}
  function knownRoleKeys(profile){return [...new Set([...builtinRoles.map(r=>r.id),...Object.keys(profile.modelRoles||{})])];}
  function roleInfo(role){return builtinRoles.find(r=>r.id===role);}
  function resetRole(role){
@@ -40,12 +42,12 @@
   for(const [target,base] of [[p().modelRoles,inherited.modelRoles||{}],[p().retry.fallbackChains,inherited.retry?.fallbackChains||{}]]){
    if(Object.hasOwn(base,role))target[role]=copy(base[role]);else delete target[role];
   }
-  delete modeSettings().overrides['role:'+role];state.picker=null;render();
+  delete modeSettings().overrides['role:'+role];state.picker=null;render();focusLane(role,'role');
  }
  function roleFallbacks(role,profile=p()){return profile.retry.fallbackChains[role]||(roleInfo(role)?.defaultFallbacks===false?[]:profile.retry.fallbackChains.default||[]);}
  function acceptsRoleModel(role,group,model){
   if(group==='pool'||group==='alternatives'&&role==='profile')return true;
-  const id=group==='vibe'?(vibeAlias(role).slice(1)||'task'):group==='alternatives'?role.split(':')[1]:role,info=roleInfo(id),kind=model.kind||'chat';
+  const id=group==='vibe'?(aliasRole(vibeAlias(role))||'task'):group==='alternatives'?role.split(':')[1]:role,info=roleInfo(id),kind=model.kind||'chat';
   return (info?.kinds||['chat']).includes(kind)&&(id!=='web'||kind!=='chat'||model.webSearch!=null);
  }
  const original={standard:copy(source.base),...Object.fromEntries(Object.entries(source.presets).map(([k,v])=>[k,merge(source.base,v)]))},profiles=copy(original),roleKeys=knownRoleKeys(source.base),profileKeys=Object.keys(original);
@@ -53,15 +55,16 @@
  const storageKey=key=>'mana:'+source.source+':'+key;
  if(source.legacyDrafts){for(const [storage,key] of [[localStorage,'forge-view'],[sessionStorage,'forge-drafts'],[sessionStorage,'forge-pool-draft']]){try{const old=storage.getItem(key);if(old&&!storage.getItem(storageKey(key))){storage.setItem(storageKey(key),old);storage.removeItem(key);}}catch{}}}
  for(const [name,raw] of Object.entries(original)){const profile=original[name]=normalizeProfile(raw);profiles[name]=copy(profile);profile.forgeMode=copy(source.profileModes?.[name]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});profiles[name].forgeMode=copy(profile.forgeMode);}
- function split(route){const m=String(route).match(/:(off|minimal|low|medium|high|xhigh|max|auto)$/);const raw=m?route.slice(0,-m[0].length):route;const slash=raw.indexOf('/');return {raw,provider:raw.slice(0,slash),id:raw.slice(slash+1),effort:m?m[1]:''};}
+ function split(route){const m=String(route).match(/:(off|minimal|low|medium|high|xhigh|max|auto)$/);const raw=m?route.slice(0,-m[0].length):route;const slash=raw.indexOf('/');return {raw,provider:slash<0?'':raw.slice(0,slash),id:raw.slice(slash+1),effort:m?m[1]:''};}
  const referenced=new Set();for(const p of Object.values(original)){Object.values(p.modelRoles).forEach(x=>referenced.add(split(x).raw));Object.values(p.retry.fallbackChains).flat().forEach(x=>referenced.add(split(x).raw));}
  const referencedProviders=[...new Set([...referenced].map(x=>split(x).provider))];
  const catalogMap=new Map(source.models.map(m=>[m.provider+'/'+m.id,m]));for(const r of referenced){if(!catalogMap.has(r)){const q=split(r);catalogMap.set(r,{provider:q.provider,id:q.id,name:q.id,configuredOnly:true});}}
  const catalog=[...catalogMap.values()].sort((a,b)=>a.provider.localeCompare(b.provider)||a.name.localeCompare(b.name));
  const state={view:'profiles',profile:'standard',device:'desktop',role:roleKeys[0]||'',query:'',catalogQuery:'',catalogMode:'mine',catalogProvider:'all',page:0,favs:[...referenced].slice(0,8),picker:null,modal:null,changes:0,toast:''};
+ let favWrites=Promise.resolve(),favSaved=[];
  let timer,drag=null,modalPageY=0,modalReturnFocus='',composing=false,renderCache=null,pointerHeld=false,nativeSelectBusy=false;
  let backgroundRefreshPending=false,backgroundReloading=false,pendingRender=false,backgroundTimer,writeEpoch=0,activeWrites=0,renderedAt=0;
- const pendingModeResults=new Map();
+ const pendingModeResults=new Map(),resetsSeen=new Set();
  const narrowSurface=()=>win.clientWidth<=600;
  const coarsePointer=()=>matchMedia('(pointer: coarse)').matches||narrowSurface();
  const scrollToControl=el=>el?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
@@ -89,8 +92,8 @@
   if(!state.poolPanel)return '';const selected=state.poolTab||'free-good';
   return `<section class="mode-panel edit-tray pool-editor" id="pool-editor" aria-label="Спільні FREE пули" tabindex="-1"><div class="mode-panel-head edit-tray-head"><b>CUTS / FREE ПУЛИ</b><span class="tray-scope">Спільні для всіх профілів · окреме збереження</span>${poolsDirty()?tool('Скинути','pool-reset','',state.saving?'disabled':''):''}${tool('×','pool-close','icon-only tray-close','aria-label="Закрити налаштування пулів"')}</div><p class="mode-explainer">Редагуй тут один раз. «Зберегти пули» оновить усі доріжки з цими блоками. Порядок змінюється через ⋯, перетягуванням або Shift + ← / →.</p>${state.poolError?`<p class="mode-problem" role="alert">${esc(state.poolError)}</p>`:''}<div class="pool-tabs" role="group" aria-label="Обрати FREE пул">${Object.entries(poolNames).map(([name,label])=>`<button type="button" class="tool pool-tab ${selected===name?'pressed':''}" data-pool-tab="${name}" aria-pressed="${selected===name}" aria-controls="pool-line-${name}">${label} · ${poolDraft[name].length}</button>`).join('')}</div>${Object.entries(poolNames).map(([name,label])=>`<div class="pool-line" id="pool-line-${name}" data-pool-line="${name}" ${selected===name?'':'hidden'}><div class="alternative-list cut-sequence" aria-label="CUTS ${label}">${poolDraft[name].map((r,i)=>node(name,r,i,poolDraft[name].length,'pool')).join('')}<button type="button" class="tool add-node reserve-drop" data-edit="${name}" data-index="${poolDraft[name].length}" data-group="pool" aria-label="Додати CUT у ${label}">+ CUT</button></div></div>`).join('')}</section>`;
  }
- function poolBlock(role,route,i,group,mobile=false){const name=poolName(route),tag=group==='alternatives'?'li':'div';return `<${tag} class="node cut-surface pool-block ${mobile?'pool-mobile':''} ${savedChain(role,group)[i]!==route?'changed':''}" data-clip-key="${clipKey(role,route,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"><button type="button" class="node-name" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc((group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'')+poolNames[name])}" aria-label="Відкрити ${poolNames[name]}: спільний пул">${group==='vibe'&&i===0&&vibeAlias(role)?esc(vibeAlias(role))+' · ':''}${poolNames[name]}</button><span class="node-meta"><span class="pool-count">${source.freePools?.[name]?.length||0} CUTS · спільний</span>${slotActionKey(role,i,group)}</span></${tag}>`;}
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){state.poolTab=b.dataset.poolTab;state.picker=null;state.cutTarget=null;state.armedCut=null;render();win.querySelector(`[data-pool-tab="${b.dataset.poolTab}"]`)?.focus({preventScroll:true});}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;state.poolError='';render();}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
+ function poolBlock(role,route,i,group,mobile=false){const name=poolName(route),tag=group==='alternatives'?'li':'div',inherited=inheritedSlot(role,i,group);return `<${tag} class="node cut-surface pool-block ${mobile?'pool-mobile':''} ${savedChain(role,group)[i]!==route&&!inherited?'changed':''}${inherited?' inherited-fallback':''}" data-clip-key="${clipKey(role,route,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''}><button type="button" class="node-name" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc((group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'')+poolNames[name]+(inherited?' · резерв успадковано з default':''))}" aria-label="Відкрити ${poolNames[name]}: спільний пул${inherited?' · успадковано з default':''}">${group==='vibe'&&i===0&&vibeAlias(role)?esc(vibeAlias(role))+' · ':''}${poolNames[name]}</button><span class="node-meta"><span class="pool-count">${source.freePools?.[name]?.length||0} CUTS · спільний</span>${slotActionKey(role,i,group)}</span></${tag}>`;}
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){state.poolTab=b.dataset.poolTab;state.picker=null;state.cutTarget=null;state.armedCut=null;render();win.querySelector(`[data-pool-tab="${b.dataset.poolTab}"]`)?.focus({preventScroll:true});}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';render();}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
 
  function clipKey(role,r,i,group){return esc(group+'|'+role+'|'+r+'|'+chain(role,group).slice(0,i).filter(v=>v===r).length);}
  function historyStep(direction){if(state.saving)return;const value=editHistory.step(state.profile,direction);if(!value)return;profiles[state.profile]=value;ForgeTape.intent(direction<0?'undo':'edit');state.picker=null;state.opFeedback=direction<0?'Останню дію скасовано.':'Дію повторено.';render();win.querySelector(`[data-action=${direction<0?'undo':'redo'}]`)?.focus({preventScroll:true});}
@@ -117,12 +120,12 @@
   const label=mobile?`<div class="vibe-mobile-heading">${agentName(worker)}</div>`:`<div class="role-name agent-name" title="${esc(info?.description)}"><span class="role-index">↳</span>${agentName(worker)}</div>`;
   return `<div class="${mobile?'mobile-group':'graph-row vibe-row'} agent-default" data-agent-default="${esc(worker)}">${label}${automaticSlot(worker,mobile,'vibe')}${detail}</div>`;
  }
- function agentSectionHead(){return `<div class="section-line vibe-section"><div><strong>Агенти</strong><span>Прив’язки до ролей або власні списки</span>${source.agentWarnings?.length?`<span class="agent-warning" role="status" title="${esc(source.agentWarnings.join('\n'))}">Пропущено файлів агентів: ${source.agentWarnings.length}</span>`:''}</div><label class="check-field sync-control" title="Після редагування ролі копіює її резерви у власні списки агентів із початковим @role. Успадковані ролі оновлюються завжди. Увімкнення саме по собі не змінює списків."><input type="checkbox" data-sync-vibe ${state.syncVibe?'checked':''}>Копіювати резерви після змін ролей</label></div>`;}
+ function agentSectionHead(){return `<div class="section-line vibe-section"><div><strong>Агенти</strong><span>Прив’язки до ролей або власні списки</span>${source.agentWarnings?.length?`<span class="agent-warning" role="status" title="${esc(source.agentWarnings.join('\n'))}">Пропущено файлів агентів: ${source.agentWarnings.length}</span>`:''}</div><label class="check-field sync-control" title="Після зміни резервів ролі оновлює власні списки агентів із початковим @role, які до зміни точно повторювали ці резерви. Списки з власними CUTS не змінюються. Успадковані ролі оновлюються завжди. Увімкнення саме по собі не змінює списків."><input type="checkbox" data-sync-vibe ${state.syncVibe?'checked':''}>Копіювати резерви після змін ролей</label></div>`;}
  function focusAgentRole(role){state.role=role;state.picker=null;render();store();const target=narrowSurface()?win.querySelector('#mobile-role'):win.querySelector(`.graph-row:not(.vibe-row) [data-focus-role="${CSS.escape(role)}"]`);target?.focus({preventScroll:true});scrollToControl(target);}
  function copyAgentRole(worker){
   if(state.saving)return;
   const role=agentLink(worker).slice(1);if(!roleKeys.includes(role))return;
-  if(modeOff()&&(!modeView(role)||diff(state.profile).length&&!activePlan()?.data)){notify('Дочекайся актуального перегляду замін DeepSeek перед копіюванням.');return;}
+  if(projectionPending()){notify('Дочекайся актуального перегляду замін DeepSeek перед копіюванням.');return;}
   const list=baseChain(role),count=values=>values.reduce((n,r)=>n+(poolName(r)?source.freePools?.[poolName(r)]?.length||0:1),0),counts=[count(list),count(chain(role))];
   if(!list.length){notify('Для цієї ролі модель визначає OMP. Спочатку обери основний CUT або залиш успадкування.');return;}
   if(list.length>30||chain(role).length>30){notify('У власному списку агента може бути до 30 CUTS. Скороти роль або залиш успадкування.');return;}
@@ -140,7 +143,7 @@
  function deepseek(value){return ManaOperator.isPaidDeepSeek(value,catalogMap.get(split(value).raw));}
  function modeList(key){const s=modeSettings();return [...(key==='profile'?s.alternatives:s.overrides[key]??s.alternatives)];}
  function modeBody(name=state.profile){return {profile:name,revision:source.revisions[name],changes:diff(name).filter(c=>!c.path[0].startsWith('forge')),modeSettings:copy(modeSettings(name))};}
- function modeKey(name=state.profile){if(renderCache?.keys.has(name))return renderCache.keys.get(name);const key=JSON.stringify([modeBody(name),profiles[name].forgeRefresh||0]);renderCache?.keys.set(name,key);return key;}
+ function modeKey(name=state.profile){if(renderCache?.keys.has(name))return renderCache.keys.get(name);const key=JSON.stringify([modeBody(name),state.modeRefresh?.[name]||0]);renderCache?.keys.set(name,key);return key;}
  function activePlan(){const row=state.modePlans?.[state.profile];return row?.key===modeKey()?row:null;}
  function modeView(role,group='role'){
   if(!modeOff()||group==='alternatives'||group==='pool')return null;
@@ -152,14 +155,14 @@
  }
  function modeRef(role,index,group){const view=modeView(role,group);return view?.refs[index];}
  function temporarySlot(role,index,group){const view=modeView(role,group);return modeRef(role,index,group)?.kind==='replacement'||index===0&&view?.substituted;}
- function modeScope(role,group){return group==='vibe'&&vibeAlias(role)?'role:'+vibeAlias(role).slice(1):group+':'+role;}
+ function modeScope(role,group){return group==='vibe'&&vibeAlias(role)?'role:'+aliasRole(vibeAlias(role)):group+':'+role;}
  function chain(role,group='role'){
   if(group==='pool')return [...poolDraft[role]];
   if(group==='alternatives')return modeList(role);
   return [...(modeView(role,group)?.routes||baseChain(role,group))];
  }
  function ensureModePreview(){
-  if(!diff(state.profile).length&&!state.modePanel)return;
+  if(!diff(state.profile).length&&!state.modePanel&&!state.modeRefresh?.[state.profile])return;
   const name=state.profile,key=modeKey(name);state.modePlans??={};
   if(state.modePlans[name]?.key===key)return;
   const pending={key,pending:true,previous:state.modePlans[name]?.data||state.modePlans[name]?.previous||source.profileModes?.[name]};state.modePlans[name]=pending;
@@ -182,12 +185,13 @@
   return `<button type="button" class="mode-row-mark" aria-label="Заміни DeepSeek: ${esc(role)}" data-mode-scope="${esc(key)}" title="${esc(v.substituted?'Замість '+v.original:count+' входжень DeepSeek призупинено')}">${v.substituted?'⇄':'−'+count}</button>`;
  }
  function tariffTimeline(now=Date.now()){
-  const hour=3600000,kyivHour=Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}).format(now));
-  const start=Math.floor(now/hour)*hour-(kyivHour%4+4)*hour;
+  // Ticks follow local hour boundaries (also in half-hour time zones); tariff windows follow UTC hours.
+  const hour=3600000,localStart=new Date(now);localStart.setMinutes(0,0,0);
+  const start=localStart.getTime()-(localStart.getHours()%4+4)*hour;
   const peak=at=>{const d=new Date(at);return d.getUTCDay()>0&&d.getUTCDay()<6&&((d.getUTCHours()>=1&&d.getUTCHours()<4)||(d.getUTCHours()>=6&&d.getUTCHours()<10));};
   const current=peak(now);let next=(Math.floor(now/hour)+1)*hour;while(peak(next)===current)next+=hour;
   const hours=Math.min(72,Math.max(24,Math.ceil((next-start+12*hour)/(24*hour))*24)),end=start+hours*hour;
-  const ranges=[];for(let t=start;t<end;t+=hour){const p=peak(t),last=ranges.at(-1);if(last&&last.peak===p)last.end=t+hour;else ranges.push({start:t,end:t+hour,peak:p});}
+  const ranges=[];for(let t=Math.floor(start/hour)*hour;t<end;t+=hour){const p=peak(t),last=ranges.at(-1),from=Math.max(t,start),to=Math.min(t+hour,end);if(last&&last.peak===p)last.end=to;else ranges.push({start:from,end:to,peak:p});}
   const clock=at=>new Date(at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit',timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone});
   const day=at=>new Date(at).toLocaleDateString('uk-UA',{weekday:'short',day:'numeric',timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone});
   const duration=resetCountdown(next,now).replace(/^↻ /,''),text=current?'До сприятливого':'Сприятливе ще',step=hours===24?4:hours===48?8:12;
@@ -196,8 +200,10 @@
  }
  function modeBar(){
   const settings=modeSettings(),plan=activePlan(),modeDirty=diff(state.profile).length>0;
-  return `<section class="profile-mode-bar" aria-label="Режим профілю"><div class="mode-control-bank"><div class="mode-toggle mode-shuttle"><span class="mode-shuttle-label"><b>DeepSeek</b><small>${modeOff()?'OFF · заміни':'ON · оригінал'}</small></span><button type="button" class="mode-shuttle-switch" data-profile-mode="${modeOff()?'deepseek':'no-deepseek'}" role="switch" aria-label="DeepSeek у профілі" aria-checked="${!modeOff()}" title="${modeOff()?'Увімкнути DeepSeek · повернути на доріжки':'Вимкнути платний DeepSeek · FREE CUTS залишаються'}" ${state.saving?'disabled':''}><span class="mode-shuttle-zero" aria-hidden="true">0</span><span class="mode-shuttle-one" aria-hidden="true">I</span><span class="mode-shuttle-cap" aria-hidden="true"><i></i></span></button></div><div class="mode-tools">${tool('Заміни · '+settings.alternatives.length,'mode-panel','tray-toggle '+(state.modePanel?'pressed':''),`aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives"`)}${tool('↻','mode-refresh','icon-only mode-refresh-key','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни" '+(modeOff()?'':'disabled aria-hidden="true"'))}</div><span class="mode-save-note" role="status">${plan?.pending?'Розрахунок…':modeDirty?'Ще не збережено':'Режим збережено'}</span></div><div class="tariff-timeline" data-lcd-screen="tariff" title="${esc(source.tariff?.note||'')} Для тарифів DeepSeek з погодинними вікнами; конкретна ціна залежить від моделі та провайдера.">${tariffTimeline()}</div></section>${plan?.error?`<p class="mode-problem" role="alert">${esc(plan.error)}</p>`:''}${plan?.data?.issues?.length?`<p class="mode-problem" role="alert">${plan.data.issues.map(i=>esc(i.key.replace('role:',''))+': '+esc(i.message)).join('<br>')}</p>`:''}${source.modeConflicts?.length?`<p class="mode-problem" role="alert">Зовнішні зміни: ${esc(source.modeConflicts.join(', '))}. Збереження заблоковане, оригінали не перезаписуються.</p>`:''}`;
+  return `<section class="profile-mode-bar" aria-label="Режим профілю"><div class="mode-control-bank"><div class="mode-toggle mode-shuttle"><span class="mode-shuttle-label"><b>DeepSeek</b><small>${modeOff()?'OFF · заміни':'ON · оригінал'}</small></span><button type="button" class="mode-shuttle-switch" data-profile-mode="${modeOff()?'deepseek':'no-deepseek'}" role="switch" aria-label="DeepSeek у профілі" aria-checked="${!modeOff()}" title="${modeOff()?'Увімкнути DeepSeek · повернути на доріжки':'Вимкнути платний DeepSeek · FREE CUTS залишаються'}" ${state.saving?'disabled':''}><span class="mode-shuttle-zero" aria-hidden="true">0</span><span class="mode-shuttle-one" aria-hidden="true">I</span><span class="mode-shuttle-cap" aria-hidden="true"><i></i></span></button></div><div class="mode-tools">${tool('Заміни · '+settings.alternatives.length,'mode-panel','tray-toggle '+(state.modePanel?'pressed':''),`aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives"`)}${tool('↻','mode-refresh','icon-only mode-refresh-key','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни" '+(modeOff()?'':'disabled aria-hidden="true"'))}</div><span class="mode-save-note" role="status">${plan?.pending?'Розрахунок…':modeDirty?'Ще не збережено':'Режим збережено'}</span></div><div class="tariff-timeline" data-lcd-screen="tariff" title="${esc(source.tariff?.note||'')} Для тарифів DeepSeek з погодинними вікнами; конкретна ціна залежить від моделі та провайдера.">${tariffTimeline()}</div></section>`;
  }
+ // Preview and save blockers stay visible even when the DeepSeek bar itself is hidden.
+ function modeProblems(){const plan=activePlan();return `${plan?.error?`<p class="mode-problem" role="alert">${esc(plan.error)}</p>`:''}${plan?.data?.issues?.length?`<p class="mode-problem" role="alert">${plan.data.issues.map(i=>esc(i.key.replace('role:',''))+': '+esc(i.message)).join('<br>')}</p>`:''}${source.modeConflicts?.length?`<p class="mode-problem" role="alert">Зовнішні зміни: ${esc(source.modeConflicts.join(', '))}. Збереження заблоковане, оригінали не перезаписуються.</p>`:''}`;}
  function alternativeCut(key,route,i){return node(key,route,i,modeList(key).length,'alternatives');}
 
  function modePanel(){
@@ -222,10 +228,12 @@
   if(a==='mode-close')editTray('alternatives',false);
   if(a==='mode-alias-scope'){state.modeScope=b.dataset.aliasScope;render();}
   if(a==='mode-reset-scope'){delete modeSettings().overrides[state.modeScope];render();}
-  if(a==='mode-refresh'){p().forgeRefresh=(p().forgeRefresh||0)+1;render();}
+  if(a==='mode-refresh'){state.modeRefresh={...state.modeRefresh,[state.profile]:(state.modeRefresh?.[state.profile]||0)+1};render();}
   if(a==='make-permanent'){
-   const x=state.picker,route=chain(x.role,x.group)[x.index],scope=modeScope(x.role,x.group),[group,role]=scope.split(':');
-   const normal=baseChain(role,group);normal[0]=route;oldSetChain(role,normal,group);delete modeSettings().overrides[scope];closePicker();notify('Тепер це постійна основна модель профілю');
+   const x=state.picker,route=chain(x.role,x.group)[x.index],scope=modeScope(x.role,x.group);
+   // An agent never rewrites its @role: the replacement becomes the agent's own primary.
+   if(x.group==='vibe'){const values=agentValues(x.role);values[0]=route;p().task.agentModelOverrides[x.role]=values;if(scope==='vibe:'+x.role)delete modeSettings().overrides[scope];closePicker();notify('Тепер це постійна основна модель агента '+x.role+'. Роль не змінена.');return;}
+   const role=scope.slice(scope.indexOf(':')+1),normal=baseChain(role);normal[0]=route;oldSetChain(role,normal);delete modeSettings().overrides[scope];closePicker();notify('Тепер це постійна основна модель профілю');
   }
  });
  root.addEventListener('change',e=>{if(e.target.id==='mode-scope'){state.modeScope=e.target.value;render();}});
@@ -234,12 +242,33 @@
  function cutTitle(route){const m=split(route);return ManaOperator.displayModelName(m.id,catalogMap.get(m.raw)?.name);}
  function deletedCut(route){return catalogMap.get(split(route).raw)?.status==='missing';}
  function cutIdentity(route,compact=false){const m=split(route),name=providerName(m.provider);return `${deletedCut(route)?'<span class="cut-deleted" title="Відсутній у провайдера" aria-label="DELETED — відсутній у провайдера">DELETED</span>':''}<span class="cut-provider ${compact?'provider-code':''}" title="${esc(name)}">${esc(compact?providerCode(m.provider):name)}</span>${deletedCut(route)?'':freeBadge(route)}`;}
- function baseChain(role,group='role'){if(group==='vibe'){let a=p().task.agentModelOverrides[role];if(typeof a==='string')a=[a];return (a||[]).map(s=>s.startsWith('@')?(p().modelRoles[s.slice(1)]||s):s);}return p().modelRoles[role]?[p().modelRoles[role],...roleFallbacks(role)]:[];}
+ function aliasRole(alias){return String(alias||'').slice(1).split(':')[0];}
+ // `@role` and `@role:effort` follow the role's primary; an unknown role stays visible as written.
+ function resolveAlias(value,profile=p()){if(typeof value!=='string'||!value.startsWith('@'))return value;const [role,effort]=value.slice(1).split(':'),route=profile.modelRoles?.[role];return !route?value:effort&&!poolName(route)?split(route).raw+':'+effort:route;}
+ function baseChain(role,group='role'){if(group==='vibe')return agentValues(role).map(s=>resolveAlias(s));return p().modelRoles[role]?[p().modelRoles[role],...roleFallbacks(role)]:[];}
  function vibeAlias(worker){const v=p().task.agentModelOverrides[worker],head=Array.isArray(v)?v[0]:v;return typeof head==='string'&&head.startsWith('@')?head:'';}
- function oldSetChain(role,list,group='role'){if(group==='vibe'){const old=p().task.agentModelOverrides[role],head=Array.isArray(old)?old[0]:old;if(typeof head==='string'&&head.startsWith('@')){p().modelRoles[head.slice(1)]=list[0];p().task.agentModelOverrides[role]=[head,...list.slice(1)];}else p().task.agentModelOverrides[role]=list;}else{const configured=!!p().modelRoles[role],tail=list.slice(1),before=roleFallbacks(role);p().modelRoles[role]=list[0];if((configured||tail.length)&&JSON.stringify(tail)!==JSON.stringify(before))p().retry.fallbackChains[role]=tail;}}
- function options(value,raw){const m=catalogMap.get(raw);const levels=Array.isArray(m?.thinking)&&m.thinking.length?['',...new Set(['off',...m.thinking])]:m?.reasoning===false?['','off']:['','off','minimal','low','medium','high','xhigh','max'];if(value&&!levels.includes(value))levels.push(value);return levels.map(e=>`<option value="${e}" ${e===value?'selected':''}>${e||'типово'}</option>`).join('');}
+ // Fallbacks inherited from `default` are drawn on the lane but are not its own chain.
+ function inheritsDefault(role,profile=p()){return role!=='default'&&!!profile.modelRoles[role]&&!Object.hasOwn(profile.retry.fallbackChains,role)&&roleInfo(role)?.defaultFallbacks!==false&&!!profile.retry.fallbackChains.default?.length;}
+ function inheritedSlot(role,index,group='role'){if(group!=='role'||index<1||!inheritsDefault(role))return false;const view=modeView(role,group),ref=view?.refs?.[index];return view?.refs?ref?.kind==='base'&&ref.index>=1:true;}
+ function oldSetChain(role,list,group='role'){if(group==='vibe'){writeAgent(role,agentFromResolved(role,list));return;}const configured=!!p().modelRoles[role],tail=list.slice(1),before=roleFallbacks(role);p().modelRoles[role]=list[0];if((configured||tail.length)&&JSON.stringify(tail)!==JSON.stringify(before))p().retry.fallbackChains[role]=tail;}
+ // An agent edit never rewrites a role: every @role keeps its place among the agent's own CUTS.
+ function agentFromResolved(worker,list){
+  const raw=agentValues(worker),out=[...list],taken=new Set();
+  raw.forEach((value,j)=>{
+   if(!value.startsWith('@'))return;
+   const route=resolveAlias(value),at=out.findIndex((r,k)=>!taken.has(k)&&r===route);
+   if(at>=0){out[at]=value;taken.add(at);}
+   else if(list.length>=raw.length)chainNotes.push(value+' у '+worker+' замінено власним CUT; роль не змінена');
+  });
+  return out;
+ }
+ function writeAgent(worker,values){
+  const before=agentValues(worker);p().task.agentModelOverrides[worker]=values;
+  if(values.length===1&&values[0].startsWith('@')&&!(before.length===1&&before[0]===values[0]))chainNotes.push(worker+' тепер успадковує '+values[0]+' разом із резервами ролі');
+ }
+ function options(value,raw){const m=catalogMap.get(raw);const levels=Array.isArray(m?.thinking)&&m.thinking.length?['',...new Set(['off',...m.thinking])]:m?.reasoning===false?['','off']:['','off','minimal','low','medium','high','xhigh','max'];if(value&&!levels.includes(value))levels.push(value);return levels.map(e=>`<option value="${esc(e)}" ${e===value?'selected':''}>${esc(e||'типово')}</option>`).join('');}
  function effortControl(m,attrs){const role=attrs.match(/data-effort-role="([^"]+)"/)?.[1];if(roleInfo(role)?.thinking===false)return '';const angle={off:-125,minimal:-95,low:-65,medium:0,high:55,xhigh:90,max:125,auto:0}[m.effort]??0;return `<label class="effort-control ${m.effort?'':'automatic'}" style="--turn:${angle}deg"><span class="effort-rotor" aria-hidden="true"></span><select class="effort-select" ${attrs}>${options(m.effort,m.raw)}</select></label>`;}
- function profileOptions(){return [state.profile,...profileKeys.filter(k=>k!==state.profile)].map(k=>`<option value="${esc(k)}" ${k===state.profile?'selected':''}>${esc(prettyProfile(k))}</option>`).join('');}
+ function profileOptions(){return profileKeys.map(k=>`<option value="${esc(k)}" ${k===state.profile?'selected':''}>${esc(prettyProfile(k))}</option>`).join('');}
  function providerName(id){return providerNames[id]||source.providers.find(v=>v.id===id)?.name||id;}
  function routeMatches(route){const m=split(route),model=catalogMap.get(m.raw);return !!state.query.trim()&&matchesQuery(state.query,m.id,model?.name,short(m.id));}
  function freeBadge(route){const m=catalogMap.get(split(route).raw);return m&&priceInfo(m).kind==='free'?'<span class="cut-free" aria-label="Безкоштовний CUT" title="Безкоштовний маршрут. Ліміти провайдера можуть діяти.">FREE</span>':'';}
@@ -258,13 +287,13 @@
   if(group==='alternatives')return original[state.profile].forgeMode.overrides[role]||original[state.profile].forgeMode.alternatives;
   const profile=original[state.profile],view=profile.forgeMode?.mode==='no-deepseek'?source.profileModes?.[state.profile]?.views?.[group]?.[role]:null;
   if(view?.routes)return view.routes;
-  if(group==='vibe'){const raw=profile.task.agentModelOverrides[role],list=Array.isArray(raw)?raw:[raw];return list.filter(Boolean).map(v=>v.startsWith('@')?profile.modelRoles[v.slice(1)]:v);}
+  if(group==='vibe'){const raw=profile.task.agentModelOverrides[role],list=Array.isArray(raw)?raw:[raw];return list.filter(Boolean).map(v=>resolveAlias(v,profile));}
   return profile.modelRoles[role]?[profile.modelRoles[role],...roleFallbacks(role,profile)]:[];
  }
  function node(role,r,i,n,group='role'){
   if(poolName(r))return poolBlock(role,r,i,group);
-  const m=split(r),before=savedChain(role,group)[i],sequence=group==='alternatives'||group==='pool',tag=group==='alternatives'?'li':'div',replacement=temporarySlot(role,i,group);
-  return `<${tag} class="node cut-surface ${group==='alternatives'?'alternative-cut':''} ${!sequence&&i===0?'primary':''} ${i<n-1?'has-next':''} ${before!==r?'changed':''}${replacement?' mode-replacement':''}${slotClasses(r)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-before="${esc(before!==r?before:'')}" data-index="${i}" data-group="${group}" draggable="false" ${group==='alternatives'?`title="${esc(modeStatus(m.raw).reason)}"`:''}><button type="button" class="node-name ${sequence?'sequence-label':''} ${group==='alternatives'?'alternative-label':''}" draggable="false" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(r+(before!==r?(before?' · До зміни: '+before:' · Новий CUT'):''))}" aria-label="Змінити CUT ${i+1}, ${esc(group==='pool'?poolNames[role]:role)}: ${esc(r)}${deletedCut(r)?' · DELETED — відсутній у провайдера':''}">${sequence?`<span class="alternative-order cut-order" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}${group==='vibe'&&i===0&&vibeAlias(role)?esc(vibeAlias(role))+' · ':''}${replacement?'<span class="replacement-glyph" title="Замість DeepSeek">⇄</span>':''}<span class="cut-title">${esc(cutTitle(r))}</span>${!deletedCut(r)&&routeWarning(m.raw)?'<span class="warning-dot">!</span>':''}</button><span class="node-meta cut-meta">${cutIdentity(r,true)}${effortControl(m,`data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="Thinking: ${esc(role)}, CUT ${i+1}"`)}${slotActionKey(role,i,group)}</span></${tag}>`;
+  const m=split(r),before=savedChain(role,group)[i],sequence=group==='alternatives'||group==='pool',tag=group==='alternatives'?'li':'div',replacement=temporarySlot(role,i,group),inherited=inheritedSlot(role,i,group);
+  return `<${tag} class="node cut-surface ${group==='alternatives'?'alternative-cut':''} ${!sequence&&i===0?'primary':''} ${i<n-1?'has-next':''} ${before!==r&&!inherited?'changed':''}${replacement?' mode-replacement':''}${inherited?' inherited-fallback':''}${slotClasses(r)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-before="${esc(before!==r?before:'')}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} draggable="false" ${group==='alternatives'?`title="${esc(modeStatus(m.raw).reason)}"`:''}><button type="button" class="node-name ${sequence?'sequence-label':''} ${group==='alternatives'?'alternative-label':''}" draggable="false" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(r+(inherited?' · резерв успадковано з default':before!==r?(before?' · До зміни: '+before:' · Новий CUT'):''))}" aria-label="Змінити CUT ${i+1}, ${esc(group==='pool'?poolNames[role]:role)}: ${esc(r)}${inherited?' · успадковано з default':''}${deletedCut(r)?' · DELETED — відсутній у провайдера':''}">${sequence?`<span class="alternative-order cut-order" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}${group==='vibe'&&i===0&&vibeAlias(role)?esc(vibeAlias(role))+' · ':''}${replacement?'<span class="replacement-glyph" title="Замість DeepSeek">⇄</span>':''}<span class="cut-title">${esc(cutTitle(r))}</span>${!deletedCut(r)&&routeWarning(m.raw)?'<span class="warning-dot">!</span>':''}</button><span class="node-meta cut-meta">${cutIdentity(r,true)}${effortControl(m,`data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="Thinking: ${esc(role)}, CUT ${i+1}"`)}${slotActionKey(role,i,group)}</span></${tag}>`;
  }
 
 
@@ -292,14 +321,14 @@
 
  function slotActionKey(role,index,group,mobile=false){return chain(role,group).length>1||group==='pool'||group==='alternatives'||poolName(chain(role,group)[index])||temporarySlot(role,index,group)?`<button type="button" class="${mobile?'more-mobile':'slot-actions'}" data-slot-actions="${esc(role)}" data-index="${index}" data-group="${group}" aria-label="Дії з CUT: ${esc(role)}, слот ${index+1}" title="Порядок / дії з CUT">⋯</button>`:'';}
 
- function mobileLine(role,r,i,n,group='role'){if(poolName(r))return poolBlock(role,r,i,group,true);const m=split(r);return `<div class="tree-line cut-surface ${roleInfo(role)?.thinking===false?'no-thinking':''} ${i===0?'main':''} ${savedChain(role,group)[i]!==r?'changed':''}${temporarySlot(role,i,group)?' mode-replacement':''}${slotClasses(r)}" data-clip-key="${clipKey(role,r,i,group)}"><span class="tree-number">${i===0?'●':String(i).padStart(2,'0')}</span><button type="button" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(r)}" aria-label="Змінити CUT ${i+1}, ${esc(role)}: ${esc(r)}"><strong class="cut-title">${temporarySlot(role,i,group)?'⇄ ':''}${esc(cutTitle(r))}</strong><small class="cut-meta">${temporarySlot(role,i,group)?'Замість DeepSeek · ':''}${routeWarning(m.raw)?'⚠ ':''}${isLocal(m.provider)?'GPU · ':''}${cutIdentity(r)}${group==='vibe'&&i===0&&vibeAlias(role)?' · '+esc(vibeAlias(role)):''}</small></button>${effortControl(m,`data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="Thinking ${i===0?'основної моделі':'резерв '+i}"`)}${slotActionKey(role,i,group,true)}</div>`;}
+ function mobileLine(role,r,i,n,group='role'){if(poolName(r))return poolBlock(role,r,i,group,true);const m=split(r),inherited=inheritedSlot(role,i,group);return `<div class="tree-line cut-surface ${roleInfo(role)?.thinking===false?'no-thinking':''} ${i===0?'main':''} ${savedChain(role,group)[i]!==r&&!inherited?'changed':''}${temporarySlot(role,i,group)?' mode-replacement':''}${inherited?' inherited-fallback':''}${slotClasses(r)}" data-clip-key="${clipKey(role,r,i,group)}"${inherited?' data-inherited="default"':''}><span class="tree-number">${i===0?'●':String(i).padStart(2,'0')}</span><button type="button" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(r+(inherited?' · резерв успадковано з default':''))}" aria-label="Змінити CUT ${i+1}, ${esc(role)}: ${esc(r)}${inherited?' · успадковано з default':''}"><strong class="cut-title">${temporarySlot(role,i,group)?'⇄ ':''}${esc(cutTitle(r))}</strong><small class="cut-meta">${temporarySlot(role,i,group)?'Замість DeepSeek · ':''}${routeWarning(m.raw)?'⚠ ':''}${isLocal(m.provider)?'GPU · ':''}${cutIdentity(r)}${group==='vibe'&&i===0&&vibeAlias(role)?' · '+esc(vibeAlias(role)):''}</small></button>${effortControl(m,`data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="Thinking ${i===0?'основної моделі':'резерв '+i}"`)}${slotActionKey(role,i,group,true)}</div>`;}
 
 
  function mobileTracks(){
   const list=chain(state.role),track=role=>{const routes=chain(role);return routes.length?routes.map((r,i)=>mobileLine(role,r,i,routes.length)).join(''):automaticSlot(role,true);};
   return `${state.query.trim()?roleKeys.map(role=>`<section class="search-role-group"><h3>${esc(role)} <small>${esc(labels[role]||role)}</small></h3>${track(role)}</section>`).join(''):track(state.role)}<div class="tree-add">${tool(list.length?'+ Додати резерв':'+ Обрати основний CUT','add-mobile')}</div>${mobileVibe()}`;
  }
- function profileView(){const shown=roleKeys;return `${poolShelf()}${poolEditor()}${state.modePanel?modePanel():''}<div class="profile-workbench"><section id="profile-tracks" class="tape-workspace" aria-label="Доріжки ролей">${state.armedCut?`<div class="cut-placement" role="status"><span>Обрано <b>${esc(poolNames[poolName(state.armedCut)]||cutTitle(state.armedCut))}</b>. Торкнись CUT для заміни або + для додавання.</span>${tool('Скасувати','cancel-cut')}</div>`:''}<div class="track-tools"><label class="search"><input id="role-query" value="${esc(state.query)}" placeholder="Підсвітити CUT на плівці" aria-label="Знайти CUT на плівці"></label><span class="health-legend">${state.health?'HEALTH · ● запас · △ малий · ∅ нуль · ? немає виміру · ◈ GPU':'HEALTH вимкнено · чиста плівка'}</span></div><div class="mobile-controls"><div class="mobile-title"><span class="mobile-save-state" role="status">${state.saving?'Збереження…':state.changes?'Незбережено':'Збережено'}</span></div><div class="role-stepper">${tool('‹','prev-role','icon-only','aria-label="Попередня роль"')}<select id="mobile-role" aria-label="Роль">${roleKeys.map(r=>`<option value="${r}" ${r===state.role?'selected':''}>${r} · ${(labels[r]||r)}</option>`).join('')}</select>${tool('›','next-role','icon-only','aria-label="Наступна роль"')}</div></div><div class="desktop-graph ${modeOff()&&diff(state.profile).length&&!activePlan()?.data?'mode-pending':''}" ${modeOff()&&diff(state.profile).length&&!activePlan()?.data?'inert':''}><div class="graph"><div class="graph-head"><span>Роль / доріжка</span><span>Основна</span>${Array.from({length:stepCount()-1},(_,i)=>i+1).map(n=>`<span>Резерв ${n}</span>`).join('')}<span></span></div>${shown.map(r=>graphRow(r,roleKeys.indexOf(r))).join('')}</div>${agentSectionHead()}<div class="vibe-list">${vibeDesktop()}</div></div><div class="mobile-tree ${modeOff()&&diff(state.profile).length&&!activePlan()?.data?'mode-pending':''}" ${modeOff()&&diff(state.profile).length&&!activePlan()?.data?'inert':''}>${mobileTracks()}</div><div class="legend">${referencedProviders.map(v=>`<span><b>${esc(providerCode(v))}</b>${esc(providerName(v))}</span>`).join('')}</div><p class="view-note">Збереження застосовується до нових запусків OMP. Активні сесії зберігають свої налаштування.</p></section></div>`;}
+ function profileView(){const shown=roleKeys,pending=projectionPending();return `${poolShelf()}${poolEditor()}${state.modePanel?modePanel():''}<div class="profile-workbench"><section id="profile-tracks" class="tape-workspace" aria-label="Доріжки ролей">${state.armedCut?`<div class="cut-placement" role="status"><span>Обрано <b>${esc(poolNames[poolName(state.armedCut)]||cutTitle(state.armedCut))}</b>. Торкнись CUT для заміни або + для додавання.</span>${tool('Скасувати','cancel-cut')}</div>`:''}<div class="track-tools"><label class="search"><input id="role-query" value="${esc(state.query)}" placeholder="Підсвітити CUT на плівці" aria-label="Знайти CUT на плівці"></label><span class="health-legend">${state.health?'HEALTH · ● запас · △ малий · ∅ нуль · ? немає виміру · ⊘ недоступна · ◈ GPU':'HEALTH вимкнено · чиста плівка'}</span></div><div class="mobile-controls"><div class="mobile-title"><span class="mobile-save-state" role="status">${state.saving?'Збереження…':state.changes?'Незбережено':'Збережено'}</span></div><div class="role-stepper">${tool('‹','prev-role','icon-only','aria-label="Попередня роль"')}<select id="mobile-role" aria-label="Роль">${roleKeys.map(r=>`<option value="${esc(r)}" ${r===state.role?'selected':''}>${esc(r)} · ${esc(labels[r]||r)}</option>`).join('')}</select>${tool('›','next-role','icon-only','aria-label="Наступна роль"')}</div></div><div class="desktop-graph ${pending?'mode-pending':''}" ${pending?'aria-busy="true"':''}><div class="graph"><div class="graph-head"><span>Роль / доріжка</span><span>Основна</span>${Array.from({length:stepCount()-1},(_,i)=>i+1).map(n=>`<span>Резерв ${n}</span>`).join('')}<span></span></div>${shown.map(r=>graphRow(r,roleKeys.indexOf(r))).join('')}</div>${agentSectionHead()}<div class="vibe-list">${vibeDesktop()}</div></div><div class="mobile-tree ${pending?'mode-pending':''}" ${pending?'aria-busy="true"':''}>${mobileTracks()}</div><div class="legend">${referencedProviders.map(v=>`<span><b>${esc(providerCode(v))}</b>${esc(providerName(v))}</span>`).join('')}</div><p class="view-note">Збереження застосовується до нових запусків OMP. Активні сесії зберігають свої налаштування.</p></section></div>`;}
 
 
  function myProviderIds(){
@@ -330,19 +359,23 @@
   if(selected&&!found.some(a=>a.provider+'/'+a.id===m.raw)&&(!q||matchesQuery(q,selected.name,selected.id,selected.provider))&&(x.provider==='all'||x.provider===selected.provider))found.unshift(selected);
   found.sort((a,b)=>Number(b.provider+'/'+b.id===m?.raw)-Number(a.provider+'/'+a.id===m?.raw)||Number(inProfile.has(b.provider+'/'+b.id))-Number(inProfile.has(a.provider+'/'+a.id))||Number(state.favs.includes(b.provider+'/'+b.id))-Number(state.favs.includes(a.provider+'/'+a.id)));
   const shown=found.slice(0,x.limit);
-  return `<section class="picker quick-picker" role="dialog" tabindex="-1" aria-label="${current?'Заміна':'Додавання'} CUT" style="top:${x.top}px;left:${x.left}px">${head}${x.group==='vibe'&&agentInfo(x.role)&&agentValues(x.role).length?tool('Типово в OMP','reset-agent','role-reset','aria-label="Повернути типовий вибір OMP для агента: '+esc(x.role)+'"'):''}${x.group==='role'&&roleInfo(x.role)&&p().modelRoles[x.role]?tool('Типово в OMP','reset-role','role-reset','aria-label="Повернути типовий вибір OMP: '+esc(x.role)+'"'):''}<div class="quick-search"><label class="search">${icon('search')}<input id="picker-search" placeholder="Знайти CUT…" value="${esc(x.query)}" aria-label="Знайти CUT" aria-controls="picker-results" autocomplete="off"></label>${opSelect('picker-provider','EDITION',x.scope==='all'?'*':x.provider,[['all','Мої'],...ids.map(id=>[id,providerName(id)]),['*','Весь каталог']])}</div>${x.scope==='all'?'<p class="picker-hint">Доступ залежить від підключення провайдера.</p>':''}${x.group==='vibe'&&x.index===0&&vibeAlias(x.role)?`<p class="picker-hint">Через ${esc(vibeAlias(x.role))} · зміниться також ця роль</p>`:''}<div class="picker-results" id="picker-results" data-filter-key="${esc(JSON.stringify([x.role,x.group,x.query,x.provider,x.scope]))}">${shown.length?shown.map(a=>pickerRow(a,a.provider+'/'+a.id===m?.raw)).join(''):'<div class="picker-empty">Збігів немає</div>'}${found.length>shown.length?tool('Ще '+(found.length-shown.length),'picker-more','picker-more'):''}</div></section>`;
+  return `<section class="picker quick-picker" role="dialog" tabindex="-1" aria-label="${current?'Заміна':'Додавання'} CUT" style="top:${x.top}px;left:${x.left}px">${head}${x.group==='vibe'&&agentInfo(x.role)&&agentValues(x.role).length?tool('Типово в OMP','reset-agent','role-reset','aria-label="Повернути типовий вибір OMP для агента: '+esc(x.role)+'"'):''}${x.group==='role'&&roleInfo(x.role)&&p().modelRoles[x.role]?tool('Типово в OMP','reset-role','role-reset','aria-label="Повернути типовий вибір OMP: '+esc(x.role)+'"'):''}<div class="quick-search"><label class="search">${icon('search')}<input id="picker-search" placeholder="Знайти CUT…" value="${esc(x.query)}" aria-label="Знайти CUT" aria-controls="picker-results" autocomplete="off"></label>${opSelect('picker-provider','EDITION',x.scope==='all'?'*':x.provider,[['all','Мої'],...ids.map(id=>[id,providerName(id)]),['*','Весь каталог']])}</div>${x.scope==='all'?'<p class="picker-hint">Доступ залежить від підключення провайдера.</p>':''}${x.group==='vibe'&&x.index===0&&vibeAlias(x.role)?`<p class="picker-hint">Замість ${esc(vibeAlias(x.role))} стане власний CUT агента · роль не зміниться</p>`:''}<div class="picker-results" id="picker-results" data-filter-key="${esc(JSON.stringify([x.role,x.group,x.query,x.provider,x.scope]))}">${shown.length?shown.map(a=>pickerRow(a,a.provider+'/'+a.id===m?.raw)).join(''):'<div class="picker-empty">Збігів немає</div>'}${found.length>shown.length?tool('Ще '+(found.length-shown.length),'picker-more','picker-more'):''}</div></section>`;
  }
 
+ // Only real controls take focus; an automatic lane's wrapper carries the same data attributes.
  function pickerFocus(x){
   const index=Math.max(0,Math.min(x.index,chain(x.role,x.group).length-1));
-  [...win.querySelectorAll(`[data-edit="${CSS.escape(x.role)}"][data-index="${index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length)?.focus({preventScroll:true});
+  const target=[...win.querySelectorAll(`button[data-edit="${CSS.escape(x.role)}"][data-index="${index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);
+  target?.focus({preventScroll:true});return !!target;
  }
  function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(restore&&x)pickerFocus(x);}
- function pickerActionsPending(){const x=state.picker;return !!(x&&x.group!=='alternatives'&&x.group!=='pool'&&modeOff()&&diff(state.profile).length&&!activePlan()?.data);}
+ // A changed OFF profile waits for its projection; a failed preview shows the real chain instead.
+ function projectionPending(){if(!modeOff()||!diff(state.profile).length)return false;const plan=activePlan();return !plan?.data&&!plan?.error;}
+ function pickerActionsPending(){const x=state.picker;return !!(x&&x.group!=='alternatives'&&x.group!=='pool'&&projectionPending());}
  function movePickerCut(direction){
   const x=state.picker;if(!x||state.saving||pickerActionsPending())return;
   const list=chain(x.role,x.group),to=x.index+direction;if(to<0||to>=list.length)return;
-  [list[x.index],list[to]]=[list[to],list[x.index]];setChain(x.role,list,x.group);x.index=to;x.focusDirection=direction;render();
+  [list[x.index],list[to]]=[list[to],list[x.index]];if(setChain(x.role,list,x.group,{moved:to}))x.index=to;x.focusDirection=direction;render();
   focusPickerMove(direction);
  }
  function focusPickerMove(direction){(win.querySelector(`.cut-tools [data-action=move-node][data-direction="${direction}"]:not(:disabled)`)||win.querySelector('.cut-tools [data-action=move-node]:not(:disabled)')||win.querySelector('.cut-tools'))?.focus({preventScroll:true});}
@@ -388,39 +421,45 @@
    }
   }finally{renderCache=previousCache;}
  }
- function searchInput(el){
+ // `commit` is the blur-time change event: an unchanged value must not replace the result under the pointer.
+ function searchInput(el,commit=false){
   const fields={'role-query':'query','catalog-query':'catalogQuery','cut-query':'cutQuery'},key=fields[el.id];
-  if(el.id==='picker-search'){if(!state.picker)return;state.picker.query=el.value;state.picker.limit=40;}
-  else if(key){state[key]=el.value;if(key==='catalogQuery'){state.analyze=null;state.page=0;}}else return;
+  if(el.id==='picker-search'){if(!state.picker||commit&&state.picker.query===el.value)return;state.picker.query=el.value;state.picker.limit=40;}
+  else if(key){if(commit&&state[key]===el.value)return;state[key]=el.value;if(key==='catalogQuery'){state.analyze=null;state.page=0;}}else return;
   if(!composing)refreshSearch(el.id);
  }
  root.addEventListener('compositionstart',()=>{composing=true;});
  root.addEventListener('compositionend',e=>{composing=false;searchInput(e.target);scheduleBackgroundWork();});
  root.addEventListener('input',e=>{if(e.isComposing)composing=true;searchInput(e.target);});
- root.addEventListener('change',e=>searchInput(e.target));
+ root.addEventListener('change',e=>searchInput(e.target,true));
  root.addEventListener('click',e=>{if(e.target.closest('.cut-tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
  root.addEventListener('click',e=>{if(e.target.closest('.profile-menu button'))win.querySelector('.profile-menu')?.removeAttribute('open');},true);
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.effort-control'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.device){state.device=b.dataset.device;state.page=0;state.picker=null;render();store();return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.query='';state.page=0;render();store();if(b.dataset.subscription){const panel=win.querySelector(`[data-quota-provider="${CSS.escape(b.dataset.subscription)}"]`);panel?.scrollIntoView({block:'center',behavior:'instant'});panel?.focus({preventScroll:true});}return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.mode){state.catalogMode=b.dataset.mode;state.catalogProvider='all';state.page=0;render();return;}if(b.dataset.fav){const r=b.dataset.fav;state.favs=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];render();try{await api('/api/favorites',{values:state.favs});}catch(e){notify(e.message);}return;}if(b.dataset.removeRole){const r=b.dataset.removeRole,g=b.dataset.group,a=chain(r,g);a.splice(Number(b.dataset.index),1);setChain(r,a,g);state.changes++;render();return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const known=catalogMap.get(b.dataset.pick),prior=previous?.effort||'',old=prior&&Array.isArray(known?.thinking)&&known.thinking.includes(prior)?prior:prior==='off'&&known?.reasoning===false?'off':'';a[x.index]=b.dataset.pick+(old?':'+old:'');setChain(x.role,a,x.group);closePicker();if(prior&&!old)notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.effort-control'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.device){state.device=b.dataset.device;state.page=0;state.picker=null;render();store();return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.query='';state.page=0;render();store();if(b.dataset.subscription){const panel=win.querySelector(`[data-quota-provider="${CSS.escape(b.dataset.subscription)}"]`);panel?.scrollIntoView({block:'center',behavior:'instant'});panel?.focus({preventScroll:true});}return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.mode){state.catalogMode=b.dataset.mode;state.catalogProvider='all';state.page=0;render();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.removeRole){const r=b.dataset.removeRole,g=b.dataset.group,a=chain(r,g);a.splice(Number(b.dataset.index),1);setChain(r,a,g);state.changes++;render();return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const prior=previous?.effort||'',old=carryEffort(prior,b.dataset.pick);a[x.index]=b.dataset.pick+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
 
  const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='quota-expand'){state.quotasExpanded=!state.quotasExpanded;render();win.querySelector('[data-action=quota-expand]')?.focus({preventScroll:true});}if(a==='clear-search'){state.query='';render();win.querySelector('#role-query')?.focus();}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;render();}if(a==='next-role'||a==='prev-role'){const i=roleKeys.indexOf(state.role);state.role=roleKeys[(i+(a==='next-role'?1:roleKeys.length-1))%roleKeys.length];state.picker=null;render();store();}if(a==='add-mobile')openPicker(state.role,chain(state.role).length,'role',b);if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('.picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('.picker-results').scrollTop=offset;}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){state.page+=a==='next-page'?1:-1;render();}if(a==='provider-add'){state.editProvider=null;state.modalError='';state.modal='provider';render();win.querySelector('input[name=name]')?.focus();}if(a==='modal-close'){state.modal=null;state.modalError='';render();}if(a==='provider-create'){await saveProvider();}
 
  });
  root.addEventListener('change',e=>{const el=e.target;if(el.id==='profile-choice'||el.id==='provider-profile'||el.id==='catalog-profile-target'){state.poolPanel=false;state.profile=el.value;state.picker=null;state.armedCut=null;state.cutTarget=null;render();store();}if(el.id==='mobile-role'||el.id==='catalog-role-target'){state.role=el.value;state.picker=null;render();store();}if(el.dataset.effortRole){el.focus({preventScroll:true});const role=el.dataset.effortRole,g=el.dataset.group,a=chain(role,g),i=Number(el.dataset.index);a[i]=split(a[i]).raw+(el.value?':'+el.value:'');setChain(role,a,g);state.changes++;render();}if(el.id==='catalog-provider'){state.catalogProvider=el.value;state.analyze=null;state.page=0;render();}if(el.id==='picker-provider'){state.picker.scope=el.value==='*'?'all':'mine';state.picker.provider=el.value==='*'?'all':el.value;state.picker.limit=40;render();if(coarsePointer())win.querySelector('#picker-provider')?.focus({preventScroll:true});else focusPicker();}if(el.id==='picker-effort'){el.focus({preventScroll:true});const x=state.picker,list=chain(x.role,x.group);list[x.index]=split(list[x.index]).raw+(el.value?':'+el.value:'');setChain(x.role,list,x.group);render();}if(el.dataset.providerToggle){const id=el.dataset.providerToggle;p().disabledProviders=(p().disabledProviders||[]).filter(x=>x!==id);if(!el.checked)p().disabledProviders.push(id);state.changes++;render();}});
 
- root.addEventListener('keydown',e=>{
+ function onKeydown(e){
   const clip=e.target.closest('[data-edit]');
-  if(clip?.closest('[data-node-role],.tree-line')&&!state.picker&&!state.modal&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete'].includes(e.key)){
+  if(clip?.closest('[data-node-role],.tree-line,.automatic-role')&&!state.picker&&!state.modal&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete'].includes(e.key)){
    e.preventDefault();const {edit:role,group}=clip.dataset,index=Number(clip.dataset.index),list=chain(role,group),step=e.key==='ArrowLeft'?-1:1;
-   if(e.shiftKey&&['ArrowLeft','ArrowRight'].includes(e.key)){const to=index+step;if(to>=0&&to<list.length){[list[index],list[to]]=[list[to],list[index]];setChain(role,list,group);render();pickerFocus({role,group,index:to});}return;}
-   if(e.key==='Delete'){if(index>0||group==='alternatives'||group==='pool'||poolName(list[0])&&list.length>1){list.splice(index,1);setChain(role,list,group);render();pickerFocus({role,group,index:Math.min(index,list.length-1)});}return;}
+   if(e.shiftKey&&['ArrowLeft','ArrowRight'].includes(e.key)){const to=index+step;if(to>=0&&to<list.length){[list[index],list[to]]=[list[to],list[index]];const ok=setChain(role,list,group,{moved:to});render();pickerFocus({role,group,index:ok?to:index});}return;}
+   if(e.key==='Delete'){if(index>0||group==='alternatives'||group==='pool'||poolName(list[0])&&list.length>1){list.splice(index,1);const ok=setChain(role,list,group);render();if(!pickerFocus({role,group,index:ok?Math.min(index,list.length-1):index})&&group==='vibe')win.querySelector(`[data-agent-copy="${CSS.escape(role)}"],.agent-role-link[aria-label^="${CSS.escape(role)}:"]`)?.focus({preventScroll:true});}return;}
    let nextRole=role,nextIndex=index;
    if(group==='alternatives'||group==='pool')nextIndex=Math.max(0,Math.min(list.length-1,index+(['ArrowLeft','ArrowUp'].includes(e.key)?-1:1)));
-   else if(['ArrowUp','ArrowDown'].includes(e.key)){const roles=group==='vibe'?workers():roleKeys,at=roles.indexOf(role)+(e.key==='ArrowUp'?-1:1);nextRole=roles[Math.max(0,Math.min(roles.length-1,at))];nextIndex=Math.min(index,chain(nextRole,group).length-1);}
+   else if(['ArrowUp','ArrowDown'].includes(e.key)){
+    // Linked agents have no CUT to focus; step over them to the next editable lane.
+    const roles=group==='vibe'?workers():roleKeys,dir=e.key==='ArrowUp'?-1:1,editable=r=>group!=='vibe'||[...win.querySelectorAll(`button[data-edit="${CSS.escape(r)}"][data-group="vibe"]`)].some(el=>el.getClientRects().length);
+    for(let at=roles.indexOf(role)+dir;at>=0&&at<roles.length;at+=dir)if(editable(roles[at])){nextRole=roles[at];break;}
+    nextIndex=Math.max(0,Math.min(index,chain(nextRole,group).length-1));
+   }
    else nextIndex=Math.max(0,Math.min(list.length-1,index+step));
    if(group==='role')state.role=nextRole;render();pickerFocus({role:nextRole,group,index:nextIndex});return;
   }
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'&&!e.target.matches('input,textarea,select')&&!state.modal){e.preventDefault();(e.target.closest('.pool-editor')||state.picker?.group==='pool'||poolActionContext()?poolStep:historyStep)(e.shiftKey?1:-1);return;}
-  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'&&['profiles','models'].includes(state.view)&&!state.modal){e.preventDefault();const poolContext=e.target.closest('.pool-editor')||state.picker?.group==='pool'||poolActionContext();state.picker=null;(poolContext?savePools:save)();return;}
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'&&['profiles','models'].includes(state.view)&&!state.modal){e.preventDefault();const poolContext=e.target.closest('.pool-editor')||state.picker?.group==='pool'||poolActionContext();if(state.picker)closePicker();(poolContext?savePools:save)();return;}
   if(e.key==='Escape'&&win.querySelector('.profile-menu[open]')){const menu=win.querySelector('.profile-menu');menu.removeAttribute('open');menu.querySelector('summary').focus();return;}
   if(e.key==='Escape'&&(e.defaultPrevented||e.target.closest('select')&&(CSS.supports('selector(select:open)')?e.target.closest('select').matches(':open'):true)))return;
   if(e.key==='Escape'&&(state.picker||state.modal)){e.preventDefault();if(state.picker){closePicker();return;}state.modal=null;state.modalError='';render();return;}
@@ -431,11 +470,16 @@
    if(['ArrowDown','ArrowUp'].includes(e.key)&&(e.target.id==='picker-search'||e.target.hasAttribute('data-pick'))){e.preventDefault();const i=rows.indexOf(e.target),next=i<0?(e.key==='ArrowDown'?0:rows.length-1):Math.max(0,Math.min(rows.length-1,i+(e.key==='ArrowDown'?1:-1)));rows[next]?.focus();}
    if(e.key==='Enter'&&e.target.id==='picker-search'){e.preventDefault();if(state.picker.query.trim())rows[0]?.click();else win.querySelector('.picker-row.is-current')?.click();}
   }
- });
+ }
+ root.addEventListener('keydown',onKeydown);
+ // Shortcuts keep working when a re-render left focus on <body>.
+ document.addEventListener('keydown',e=>{if(e.target instanceof Element&&!e.composedPath().includes(root))onKeydown(e);});
  document.addEventListener('click',e=>{if(!e.target.closest('.profile-menu'))win.querySelector('.profile-menu')?.removeAttribute('open');if(state.picker&&!e.target.closest('.picker,[data-edit],[data-slot-actions],[data-node-role],[data-action="add-mobile"]'))closePicker(false);});
  // One pointer gesture for both the label and the segment edge. Native buttons
  // consume HTML dragging in WebKit; keep native buttons for click/keyboard access.
+ // A completed drag swallows only its own synthetic click; keyboard clicks (detail 0) are never swallowed.
  let suppressClipClick=false;
+ function suppressNextClick(){suppressClipClick=true;setTimeout(()=>{suppressClipClick=false;},0);}
  function endClipDrag(){
   const d=drag;drag=null;if(!d)return;
   d.node.classList.remove('tape-lifted');d.node.style.translate='';d.node.style.zIndex='';
@@ -463,7 +507,7 @@
  });
  root.addEventListener('pointerup',e=>{
   if(!drag||e.pointerId!==drag.pointer)return;const d=endClipDrag();if(!d.active)return;
-  e.preventDefault();suppressClipClick=true;
+  e.preventDefault();suppressNextClick();
   let focus={role:d.role,group:d.group,index:d.index};
   if(d.target){
    const role=d.target.dataset.nodeRole||d.target.dataset.edit,group=d.target.dataset.group,index=Number(d.target.dataset.index),same=role===d.role&&group===d.group;
@@ -472,21 +516,22 @@
    if(!same&&routeWarning(split(route).raw)){notify('Цей маршрут зараз недоступний.');return;}
    const list=ManaOperator.transferCut(sourceList,chain(role,group),d.index,index,same),limit=group==='pool'?Infinity:group==='alternatives'?12:group==='vibe'?30:31;
    if(list.length>limit){notify('Доріжка вже має максимальну кількість CUTS.');return;}
-   setChain(role,list,group);focus={role,group,index:list.indexOf(route)};
-   if(!same)state.opFeedback='Скопійовано CUT → '+role+' · thinking збережено';
+   if(setChain(role,list,group,same?{moved:list.indexOf(route)}:{inserted:list.indexOf(route)})){focus={role,group,index:list.indexOf(route)};if(!same)state.opFeedback=withNotes('Скопійовано CUT → '+role+(chainNotes.some(n=>n.startsWith('thinking прибрано'))?'':' · thinking збережено'));}
   }
   render();pickerFocus(focus);
  });
  root.addEventListener('pointercancel',()=>{if(endClipDrag())render();});
  root.addEventListener('lostpointercapture',()=>{if(endClipDrag())render();});
  root.addEventListener('keydown',e=>{if(e.key==='Escape'&&drag?.active){e.preventDefault();suppressClipClick=true;endClipDrag();render();}},true);
- root.addEventListener('click',e=>{if(suppressClipClick){e.preventDefault();e.stopImmediatePropagation();suppressClipClick=false;}},true);
+ root.addEventListener('click',e=>{if(suppressClipClick&&e.detail!==0){e.preventDefault();e.stopImmediatePropagation();suppressClipClick=false;}},true);
+ // After an Escape-cancelled gesture the release still produces a click; forget it once that task ends.
+ document.addEventListener('pointerup',()=>{if(suppressClipClick)setTimeout(()=>{suppressClipClick=false;},0);},true);
 
 
  function diff(name){
   if(renderCache?.diffs.has(name))return renderCache.diffs.get(name);
   const a=original[name],b=profiles[name],out=[];
-  for(const path of [...[...new Set([...Object.keys(a.modelRoles),...Object.keys(b.modelRoles)])].map(r=>['modelRoles',r]),...[...new Set([...Object.keys(a.retry.fallbackChains),...Object.keys(b.retry.fallbackChains)])].map(r=>['retry','fallbackChains',r]),...[...new Set([...workers(a),...workers(b)])].map(r=>['task','agentModelOverrides',r]),['disabledProviders'],['forgeMode'],['forgeRefresh']]){
+  for(const path of [...[...new Set([...Object.keys(a.modelRoles),...Object.keys(b.modelRoles)])].map(r=>['modelRoles',r]),...[...new Set([...Object.keys(a.retry.fallbackChains),...Object.keys(b.retry.fallbackChains)])].map(r=>['retry','fallbackChains',r]),...[...new Set([...workers(a),...workers(b)])].map(r=>['task','agentModelOverrides',r]),['disabledProviders'],['forgeMode']]){
    const get=o=>path.reduce((v,k)=>v?.[k],o),v=get(b);
    if(JSON.stringify(get(a))!==JSON.stringify(v))out.push(v===undefined?{path,remove:true}:{path,value:v});
   }
@@ -508,7 +553,8 @@
    if(pendingRender){pendingRender=false;render();}
   }
   if(backgroundRefreshPending&&!backgroundReloading&&!interactionBusy()){backgroundRefreshPending=false;pollState();}
-  if(backgroundRefreshPending||pendingRender||pendingModeResults.size){clearTimeout(backgroundTimer);backgroundTimer=setTimeout(flushBackgroundWork,200);}
+  // A hidden tab or a focused field wakes the queue through visibilitychange/focusout; do not poll for them.
+  if((backgroundRefreshPending||pendingRender||pendingModeResults.size)&&!(document.hidden||document.activeElement?.matches?.('input,textarea'))){clearTimeout(backgroundTimer);backgroundTimer=setTimeout(flushBackgroundWork,200);}
  }
  async function pollState(){
   if(interactionBusy()){backgroundRefreshPending=true;return;}
@@ -547,7 +593,7 @@
   for(const [k,v]of Object.entries(next)){if(!discard&&profiles[k]&&diff(k).length){if(!rebasePools||JSON.stringify(v)!==JSON.stringify(original[k]))fresh.revisions[k]=source.revisions[k];continue;}profiles[k]=copy(v);original[k]=copy(v);}
   if(discard||!poolsDirty()){poolOriginal=copy(fresh.freePools);poolDraft=copy(poolOriginal);poolRevision=fresh.poolsRevision;}
   source=fresh;profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));roleKeys.splice(0,roleKeys.length,...knownRoleKeys(fresh.base));
-  if(!profiles[state.profile])state.profile='standard';state.favs=fresh.favs||[];rebuild();state.offline=false;render();
+  if(!profiles[state.profile])state.profile='standard';state.favs=favSaved=fresh.favs||[];rebuild();state.offline=false;render();
   }finally{if(background)backgroundReloading=false;}
  }
  async function save(){
@@ -559,35 +605,98 @@
    if(preview.issues.length)throw Error('Додай доступну заміну для позначених ролей.');
    if(saved.forgeMode.mode==='no-deepseek'&&(!displayed||displayed.token!==preview.token)){notify('Заміни оновились. Переглянь карту й збережи ще раз.');return;}
    await api('/api/profile',{...body,previewToken:preview.token});
-   original[name]=saved;state.opFeedback='Профіль збережено для нових запусків OMP.';delete profiles[name].forgeRefresh;delete original[name].forgeRefresh;delete state.modePlans[name];editHistory.reset(name,original[name]);
+   original[name]=saved;state.opFeedback='Профіль збережено для нових запусків OMP.';delete state.modePlans[name];editHistory.reset(name,original[name]);
    await reload();notify('Збережено · '+(saved.forgeMode.mode==='no-deepseek'?'Без DeepSeek':'З DeepSeek'));
   }catch(e){if(e.status===409){state.modal='conflict';state.error=e.message;}else state.error=e.message;render();}
   finally{state.saving=false;render();}
  }
- function setChain(role,list,group='role'){
-  if(state.saving)return;
-  if(list.some(r=>!poolName(r)&&catalogMap.has(split(r).raw)&&!acceptsRoleModel(role,group,catalogMap.get(split(r).raw)))){notify('Цей CUT не підтримує роль '+role+'.');return;}
+ let chainNotes=[];
+ function withNotes(message){return [message,...chainNotes].filter(Boolean).join(' · ');}
+ function thinkingOff(role,group){const id=group==='role'?role:group==='alternatives'&&String(role).startsWith('role:')?role.slice(5):'';return !!id&&roleInfo(id)?.thinking===false;}
+ // One edit of a lane. Returns false when nothing was applied (the caller keeps focus and the gesture).
+ // hint.moved: index of a CUT moved within this lane; hint.inserted: index of a CUT dropped from elsewhere.
+ function setChain(role,list,group='role',hint={}){
+  chainNotes=[];
+  if(state.saving)return false;
+  if(thinkingOff(role,group)){
+   // Roles without chat-thinking reject an effort suffix; strip it from every inserted or replaced CUT.
+   const current=chain(role,group),next=list.map(r=>current.includes(r)||poolName(r)||String(r).startsWith('@')?r:split(r).raw);
+   if(next.some((r,i)=>r!==list[i]))chainNotes.push('thinking прибрано: '+(group==='role'?role:role.slice(5))+' не використовує thinking');
+   list=next;
+  }
+  if(list.some(r=>!poolName(r)&&catalogMap.has(split(r).raw)&&!acceptsRoleModel(role,group,catalogMap.get(split(r).raw)))){notify('Цей CUT не підтримує роль '+role+'.');return false;}
   if(group!=='pool')state.poolPanel=false;
-  if(group==='pool'){if(list.some(r=>!ManaOperator.isFreeModel(catalogMap.get(split(r).raw)||{}))){notify('До пулу можна додавати лише підтверджені FREE CUTS.');return;}poolDraft[role]=[...new Map(list.map(v=>[split(v).raw,v])).values()];return;}
-  if(group==='alternatives'){const s=modeSettings(),routes=[...new Map(list.map(v=>[split(v).raw,v])).values()];if(role==='profile')s.alternatives=routes;else s.overrides[role]=routes;return;}
-  const view=modeView(role,group);
-  if(view?.substituted){modeSettings().overrides[modeScope(role,group)]=[...new Map(list.map(v=>[split(v).raw,v])).values()];return;}
-  const replacementAt=view?.refs.findIndex(ref=>ref.kind==='replacement')??-1;
-  if(replacementAt>0){
-   // Retain the original DeepSeek positions; only this mode owns the tail after them.
-   const normal=baseChain(role,group);
-   for(let i=0;i<replacementAt;i++)normal[view.refs[i].index]=list[i];
-   if(JSON.stringify(normal)!==JSON.stringify(baseChain(role,group)))oldSetChain(role,normal,group);
-   modeSettings().overrides[modeScope(role,group)]=[...new Map(list.slice(replacementAt).map(v=>[split(v).raw,v])).values()];return;
+  if(group==='pool'){if(list.some(r=>!ManaOperator.isFreeModel(catalogMap.get(split(r).raw)||{}))){notify('До пулу можна додавати лише підтверджені FREE CUTS.');return false;}poolDraft[role]=[...new Map(list.map(v=>[split(v).raw,v])).values()];return true;}
+  if(group==='alternatives'){
+   if(list.some(r=>!poolName(r)&&deepseek(r))){notify('Заміна має бути без платного DeepSeek. FREE DeepSeek можна.');return false;}
+   const s=modeSettings(),routes=[...new Map(list.map(v=>[split(v).raw,v])).values()];if(role==='profile')s.alternatives=routes;else s.overrides[role]=routes;
+   if(chainNotes.length)state.opFeedback=chainNotes.join(' · ');return true;
   }
-  if(view){
-   const normal=baseChain(role,group),visible=copy(list);
-   // Fill only visible original positions; paused DeepSeek slots keep their identity.
-   for(const ref of view.refs){if(ref.kind==='base')normal[ref.index]=visible.shift();}
-   list=[...normal.filter(v=>v!==undefined),...visible];
+  // An index-based edit must read the projection it was made on.
+  if(projectionPending()){notify('Ще розраховується режим DeepSeek. Спробуй за мить.');return false;}
+  const view=modeView(role,group),before=group==='role'?baseChain(role).slice(1):null,inherited=group==='role'&&inheritsDefault(role);
+  if(view?.refs){if(!applyModeEdit(role,list,group,view,hint))return false;}
+  else oldSetChain(role,list,group);
+  if(inherited&&Object.hasOwn(p().retry.fallbackChains,role))chainNotes.push(roleFallbacks(role).length?'Резерви default скопійовано в '+role+'; доріжка більше не слідує за default':role+' більше не бере резерви default');
+  if(group==='role'&&state.syncVibe)syncAgentTails(role,before);
+  if(chainNotes.length)state.opFeedback=chainNotes.join(' · ');
+  return true;
+ }
+ // «Копіювати резерви»: only a list that still repeated the role's fallbacks follows the role.
+ function syncAgentTails(role,before){
+  const after=baseChain(role).slice(1),synced=[];if(JSON.stringify(after)===JSON.stringify(before))return;
+  for(const worker of workers()){const values=agentValues(worker);if(values.length>1&&values[0]==='@'+role&&JSON.stringify(values.slice(1))===JSON.stringify(before)){p().task.agentModelOverrides[worker]=['@'+role,...after];synced.push(worker);}}
+  if(synced.length)chainNotes.push('Резерви '+role+' також оновлено в агентах: '+synced.join(', '));
+ }
+ // DeepSeek OFF edits a projection. Every CUT returns to its source: ⇄ replacements stay in the
+ // replacement list (their slots, their order); any other CUT, including a new one, joins the real chain.
+ function applyModeEdit(role,list,group,view,{moved=-1,inserted=-1}={}){
+  const old=view.routes||[],refs=view.refs,scope=modeScope(role,group),base=group==='vibe'?agentValues(role):baseChain(role),used=new Set();
+  const items=list.map(route=>({route,ref:null,from:-1,same:false}));
+  items.forEach((item,i)=>{if(i===inserted)return;const j=old.findIndex((r,k)=>!used.has(k)&&r===item.route);if(j>=0){used.add(j);Object.assign(item,{ref:refs[j],from:j,same:true});}});
+  // A replacement in place (pick, thinking, collection) keeps the position's source.
+  if(inserted<0&&list.length===old.length)items.forEach((item,i)=>{if(!item.ref&&!used.has(i)&&refs[i]){used.add(i);Object.assign(item,{ref:refs[i],from:i});}});
+  // A dropped CUT that already stood among the ⇄ replacements joins the real chain; the replacement stays.
+  const kept=inserted>=0?refs.findIndex((r,k)=>!used.has(k)&&r.kind==='replacement'&&split(old[k]).raw===split(list[inserted]).raw):-1;
+  const replacement=item=>item.ref?.kind==='replacement'&&(item.ref.key||scope)===scope;
+  const firstOld=refs.findIndex(r=>r.kind==='replacement'),first=items.findIndex(replacement),last=items.findLastIndex(replacement);
+  if(moved>=0&&replacement(items[moved]||{})&&items.slice(first+1,last).some(item=>!replacement(item)&&item.same)){notify('Заміни DeepSeek ідуть одним блоком на місці DeepSeek. Їхній порядок — у «Заміни».');return false;}
+  const ahead=[],behind=[];let crossed=false;
+  items.forEach((item,i)=>{
+   if(replacement(item))return;
+   const inside=first>=0&&i>first&&i<last;
+   // A CUT moved into the block crosses it as a whole; a new CUT goes right after it.
+   if(inside&&item.same)crossed=true;
+   const after=first>=0&&(i>last||inside&&!(item.same&&firstOld>=0&&item.from>firstOld));
+   (after?behind:ahead).push(item);
+  });
+  if(crossed)chainNotes.push('Заміни DeepSeek стоять одним блоком на місці DeepSeek');
+  const host=view.alias?-1:(view.paused?.[0]?.index??-1),segment=first>=0&&host>=0;
+  const entry=item=>{
+   if(item.ref?.kind!=='base')return {value:item.route,idx:null};
+   const stored=base[item.ref.index];
+   if(item.same)return {value:stored,idx:item.ref.index};
+   if(group==='vibe'&&String(stored).startsWith('@'))chainNotes.push(stored+' у '+role+' замінено власним CUT; роль не змінена');
+   return {value:item.route,idx:item.ref.index};
+  };
+  const sequence=[...ahead.map(entry),...(segment?[{value:base[host],idx:host}]:[]),...behind.map(entry)];
+  // Hidden CUTS (paused DeepSeek, duplicates) keep their place after their predecessor.
+  const present=new Set(sequence.map(e=>e.idx).filter(i=>i!=null)),shown=new Set(refs.filter(r=>r.kind==='base').map(r=>r.index)),anchor=new Map(),attached=new Map([[-1,[]]]);
+  for(let h=0;h<base.length;h++){
+   if(shown.has(h)||present.has(h))continue;
+   let pred=-1;for(let k=h-1;k>=0;k--){if(present.has(k)){pred=k;break;}if(anchor.has(k)){pred=anchor.get(k);break;}}
+   anchor.set(h,pred);if(!attached.has(pred))attached.set(pred,[]);attached.get(pred).push(base[h]);
   }
-  oldSetChain(role,list,group);
-  if(group==='role'&&state.syncVibe){for(const worker of workers())if(!agentLink(worker)&&vibeAlias(worker)==='@'+role)p().task.agentModelOverrides[worker]=['@'+role,...list.slice(1)];}
+  const next=[...attached.get(-1)];for(const e of sequence){next.push(e.value);if(e.idx!=null)next.push(...(attached.get(e.idx)||[]));}
+  // Replacement slots are refilled in their new order; hidden replacements keep their slots.
+  const own=modeList(scope),slots=refs.filter((r,k)=>k!==kept&&r.kind==='replacement'&&(r.key||scope)===scope).map(r=>own.indexOf(r.route)).filter(i=>i>=0).sort((a,b)=>a-b);
+  const values=items.filter(replacement).map(item=>item.same?item.ref.route:item.route),replaced=[...own];
+  slots.forEach((slot,k)=>{replaced[slot]=k<values.length?values[k]:undefined;});
+  const routes=[...new Map(replaced.filter(v=>v!==undefined).map(v=>[split(v).raw,v])).values()];
+  if(routes.some(r=>!poolName(r)&&deepseek(r))){notify('Заміна має бути без платного DeepSeek. FREE DeepSeek можна.');return false;}
+  if(next.length&&JSON.stringify(next)!==JSON.stringify(base)){if(group==='vibe')writeAgent(role,next);else oldSetChain(role,next,group);}
+  if(JSON.stringify(routes)!==JSON.stringify(own))modeSettings().overrides[scope]=routes;
+  return true;
  }
  function store(){try{localStorage.setItem(storageKey('forge-view'),JSON.stringify({view:state.view,profile:state.profile,role:state.role,syncVibe:state.syncVibe}));}catch{}}
 
@@ -657,8 +766,8 @@
  async function saveProvider(){const f=win.querySelector('#new-provider');if(!f.reportValidity()||state.providerSaving)return;const d=new FormData(f);state.providerSaving=true;const body={id:d.get('id'),name:d.get('name'),url:d.get('url'),api:d.get('api'),auth:d.get('auth'),key:d.get('key'),discovery:d.get('discovery'),models:String(d.get('models')).split('\n').map(s=>s.trim()).filter(Boolean),days:Number(d.get('days')),revision:source.providerRevision};const b=f.querySelector('[data-action=provider-create]');b.disabled=true;b.textContent='Збереження…';try{await api('/api/provider',body);state.modal=null;state.modalError='';await reload();notify('Провайдер збережений. Каталог оновлюється.');}catch(e){let error=f.querySelector('.form-error');if(!error){error=document.createElement('p');error.className='error-banner form-error';error.setAttribute('role','alert');f.prepend(error);}error.textContent=e.message;b.disabled=false;b.textContent='Зберегти провайдера';}finally{state.providerSaving=false;}}
  // OPERATOR — one control plane, three working surfaces.
  const op=ManaOperator;
- const healthNames={local:'Локально',healthy:'Є запас',risk:'Малий запас',empty:'Вичерпано',unknown:'Немає виміру'};
- const healthGlyph={local:'◈',healthy:'●',risk:'△',empty:'∅',unknown:'?'};
+ const healthNames={local:'Локально',healthy:'Є запас',risk:'Малий запас',empty:'Вичерпано',unknown:'Немає виміру',unavailable:'Недоступна'};
+ const healthGlyph={local:'◈',healthy:'●',risk:'△',empty:'∅',unknown:'?',unavailable:'⊘'};
  let cutGesture=null;
  let opReportCache=null;
  function opHealth(model){return op.health({...model,free:priceInfo(model).kind==='free',expired:source.providers.find(v=>v.id===model.provider)?.expired},opReportCache||usageReports(),p().disabledProviders||[]);}
@@ -694,20 +803,32 @@
  function cutsTray(){
   if(!state.cuts)return '';
   const cuts=collectionCuts(),shown=cuts.slice(0,state.cutLimit||60),target=state.cutTarget;
-  return `<section id="cuts-collection" class="cuts-drawer ${win.querySelector('.cuts-drawer')?'':'entering'}" aria-label="Колекція CUTS"><div class="drawer-grip" id="cuts-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="cuts-collection" aria-label="Висота колекції CUTS" title="Тягни вгору або вниз, щоб змінити висоту · ↑ / ↓"></div><div class="drawer-head"><div><b>КОЛЕКЦІЯ CUTS</b><small>${target?'Місце: '+target.role+' · '+(target.index===0?'основна':'резерв '+target.index):(win.clientWidth<=700?'Обери CUT → торкнись місця на доріжці':'Перетягни CUT на доріжку або вибери CUT і місце')}</small></div>${tool('×','cuts-close','icon-only','aria-label="Закрити колекцію"')}</div><div class="drawer-controls">${opSelect('cut-provider','Провайдер',state.cutProvider,opProviderItems())}${opSwitch('free','FREE CUTS',state.freeCuts)}${opSelect('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames)])}<label class="search"><input id="cut-query" aria-label="Пошук у колекції" placeholder="Знайти CUT…" value="${esc(state.cutQuery)}"></label><span class="drawer-count">${cuts.length} CUTS</span></div><div class="drawer-results" data-filter-key="${esc(JSON.stringify([state.cutProvider,state.cutHealth,state.freeCuts,state.cutQuery]))}"><div class="cut-bin">${shown.map(m=>{const route=m.provider+'/'+m.id;return `<button type="button" class="collection-cut cut-surface ${state.armedCut===route?'armed':''}" data-cut="${esc(route)}" data-health-route="${esc(route)}" aria-label="${esc(cutTitle(route)+' · '+route)}" title="${esc(route)}"><span class="cut-hole" aria-hidden="true"></span><strong class="cut-title">${esc(cutTitle(route))}</strong><small class="cut-meta">${cutIdentity(route)}</small></button>`;}).join('')||'<p class="empty-state">Немає CUTS за цими фільтрами.</p>'}</div>${cuts.length>shown.length?tool('Ще '+Math.min(60,cuts.length-shown.length),'cuts-more'):''}</div></section>`;
+  return `<section id="cuts-collection" class="cuts-drawer ${win.querySelector('.cuts-drawer')?'':'entering'}" aria-label="Колекція CUTS"><div class="drawer-grip" id="cuts-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="cuts-collection" aria-label="Висота колекції CUTS" title="Тягни вгору або вниз, щоб змінити висоту · ↑ / ↓"></div><div class="drawer-head"><div><b>КОЛЕКЦІЯ CUTS</b><small>${target?'Місце: '+esc(target.role)+' · '+(target.index===0?'основна':'резерв '+target.index):(win.clientWidth<=700?'Обери CUT → торкнись місця на доріжці':'Перетягни CUT на доріжку або вибери CUT і місце')}</small></div>${tool('×','cuts-close','icon-only','aria-label="Закрити колекцію"')}</div><div class="drawer-controls">${opSelect('cut-provider','Провайдер',state.cutProvider,opProviderItems())}${opSwitch('free','FREE CUTS',state.freeCuts)}${opSelect('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames).filter(([k])=>k!=='unavailable')])}<label class="search"><input id="cut-query" aria-label="Пошук у колекції" placeholder="Знайти CUT…" value="${esc(state.cutQuery)}"></label><span class="drawer-count">${cuts.length} CUTS</span></div><div class="drawer-results" data-filter-key="${esc(JSON.stringify([state.cutProvider,state.cutHealth,state.freeCuts,state.cutQuery]))}"><div class="cut-bin">${shown.map(m=>{const route=m.provider+'/'+m.id;return `<button type="button" class="collection-cut cut-surface ${state.armedCut===route?'armed':''}" data-cut="${esc(route)}" data-health-route="${esc(route)}" aria-label="${esc(cutTitle(route)+' · '+route)}" title="${esc(route)}"><span class="cut-hole" aria-hidden="true"></span><strong class="cut-title">${esc(cutTitle(route))}</strong><small class="cut-meta">${cutIdentity(route)}</small></button>`;}).join('')||'<p class="empty-state">Немає CUTS за цими фільтрами.</p>'}</div>${cuts.length>shown.length?tool('Ще '+Math.min(60,cuts.length-shown.length),'cuts-more'):''}</div></section>`;
  }
  let drawerGesture=null;
- function resizeDrawer(height,remember=false){
-  const drawer=win.querySelector('.cuts-drawer'),grip=win.querySelector('#cuts-resize');if(!drawer||!grip)return;
-  const surface=win.querySelector('.operator-surface').getBoundingClientRect();
-  drawer.style.left=Math.max(8,surface.left)+'px';drawer.style.right=Math.max(8,window.innerWidth-surface.right)+'px';
-  const max=Math.max(160,window.innerHeight-(parseFloat(getComputedStyle(drawer).bottom)||0)-48);
+ // The drawer is fixed to the viewport. Its CSS max-height and the sticky dock bound it; the default
+ // follows the current window. Only a user resize is remembered (never an automatic default).
+ function drawerLimits(drawer){
+  const css=getComputedStyle(drawer),bottom=parseFloat(css.bottom)||0,cssMax=parseFloat(css.maxHeight),viewport=document.documentElement.clientHeight||window.innerHeight;
+  const dock=win.querySelector('.operator-dock'),dockStyle=dock?getComputedStyle(dock):null,top=dockStyle?.position==='sticky'?(parseFloat(dockStyle.top)||0)+(dock.offsetHeight||0)+8:48;
+  const max=Math.round(Math.max(160,Math.min(Number.isFinite(cssMax)?cssMax:Infinity,viewport-bottom-top)));
   const min=Math.min(max,Math.ceil(drawer.querySelector('.drawer-head').offsetHeight+drawer.querySelector('.drawer-controls').offsetHeight+120));
-  const preferred=Number.isFinite(height)?height:Math.min(290,window.innerHeight*.43);
+  return {bottom,max,min,viewport};
+ }
+ function resizeDrawer(height,remember=false){
+  const drawer=win.querySelector('.cuts-drawer'),grip=win.querySelector('#cuts-resize'),scroller=document.documentElement;
+  if(!drawer||!grip){scroller.style.removeProperty('scroll-padding-bottom');return;}
+  const surface=win.querySelector('.operator-surface').getBoundingClientRect();
+  // Align with the deck in the fixed containing block, which excludes a classic scrollbar or a stable gutter.
+  const placed=drawer.getBoundingClientRect(),style=getComputedStyle(drawer),edge=placed.right+(parseFloat(style.right)||0);
+  drawer.style.left=Math.max(8,surface.left)+'px';drawer.style.right=Math.max(8,(Number.isFinite(edge)?edge:scroller.clientWidth||window.innerWidth)-surface.right)+'px';
+  const {bottom,max,min,viewport}=drawerLimits(drawer),preferred=Number.isFinite(height)?height:Math.min(290,viewport*.43);
   height=Math.round(Math.max(min,Math.min(max,preferred)));
   // A temporary viewport limit must not replace the user's chosen height.
-  if(remember||!Number.isFinite(state.drawerHeight))state.drawerHeight=remember?height:preferred;
+  if(remember)state.drawerHeight=height;
   root.style.setProperty('--cuts-height',height+'px');
+  // Focus moves and scrollIntoView keep the target above the drawer.
+  scroller.style.setProperty('scroll-padding-bottom',(bottom+height+12)+'px');
   grip.setAttribute('aria-valuemin',min);grip.setAttribute('aria-valuemax',max);grip.setAttribute('aria-valuenow',height);grip.setAttribute('aria-valuetext',height+' пікселів');
  }
  function finishDrawerResize(cancel=false){
@@ -729,10 +850,27 @@
   if(e.target.id!=='cuts-resize'||!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;
   e.preventDefault();resizeDrawer(e.key==='Home'?0:e.key==='End'?window.innerHeight:e.target.parentElement.getBoundingClientRect().height+(e.key==='ArrowUp'?32:-32),true);storeOperator();
  });
- function placeCut(route,target){if(!poolName(route)&&!collectionModels().some(m=>m.provider+'/'+m.id===route))return;commitCut(route,{...target,profile:state.profile,expected:chain(target.role,target.group||'role')[target.index]??null});}
+ // An armed CUT stays placeable when the drawer filters change; only real availability decides.
+ function placeCut(route,target){
+  if(!poolName(route)){const m=catalogMap.get(route);if(!m||m.status==='missing'||!(m.available||source.providers.find(v=>v.id===m.provider)?.connected)||routeWarning(route)){notify('Цей CUT зараз недоступний. Обери інший.');return;}}
+  commitCut(route,{...target,profile:state.profile,expected:chain(target.role,target.group||'role')[target.index]??null});
+ }
+ // `off` is offered for every CUT, so it survives a replacement; other efforts only when the new model lists them.
+ function carryEffort(effort,raw){if(!effort)return '';if(effort==='off')return 'off';const t=catalogMap.get(raw)?.thinking,efforts=Array.isArray(t)?t:Array.isArray(t?.efforts)?t.efforts:[];return efforts.includes(effort)?effort:'';}
  function commitCut(route,target){
-  if(state.saving)return;if(poolName(route)&&!source.freePools?.[poolName(route)]?.length){notify('Спочатку наповни й збережи цей пул.');return;}if(modeOff()&&activePlan()?.pending){notify('Ще розраховується режим. Спробуй за мить.');return;}if(target.profile!==state.profile||(chain(target.role,target.group||'role')[target.index]??null)!==target.expected){state.cutTarget=null;state.armedCut=null;notify('Доріжка змінилася. Обери місце ще раз.');return;}if(modeOff()&&deepseek(route)){notify('Для платного DeepSeek увімкни режим «Із DeepSeek».');return;}if(!poolName(route)&&routeWarning(route)){notify('Цей маршрут зараз недоступний. Обери CUT іншого провайдера.');return;}const {role,index,group='role'}=target,list=chain(role,group),old=list[index]?split(list[index]):null,m=catalogMap.get(route);
-  const effort=old?.effort&&m?.thinking?.includes(old.effort)?':'+old.effort:'';const existing=list.findIndex(r=>split(r).raw===route);if(existing>=0){const [cut]=list.splice(existing,1);list.splice(Math.min(index,list.length),0,cut);}else{list[index]=route+effort;}if(list.length>(group==='pool'?Infinity:group==='vibe'?30:group==='alternatives'?12:31)){notify('Доріжка вже має максимальну кількість CUTS.');return;}setChain(role,list,group);state.cutTarget=null;state.armedCut=null;if(narrowSurface())state.cuts=false;state.opFeedback='Вставлено '+short(split(route).id)+' · '+providerName(split(route).provider)+' → '+role;render();if(narrowSurface()){pickerFocus({role,index,group});scrollToControl(document.activeElement);}
+  if(state.saving)return;if(poolName(route)&&!source.freePools?.[poolName(route)]?.length){notify('Спочатку наповни й збережи цей пул.');return;}
+  const {role,index,group='role'}=target;
+  if(group!=='alternatives'&&group!=='pool'&&projectionPending()){notify('Ще розраховується режим. Спробуй за мить.');return;}
+  if(target.profile!==state.profile||(chain(role,group)[index]??null)!==target.expected){state.cutTarget=null;state.armedCut=null;notify('Доріжка змінилася. Обери місце ще раз.');return;}
+  if(group==='alternatives'&&!poolName(route)&&deepseek(route)){notify('Заміна має бути без платного DeepSeek. FREE DeepSeek можна.');return;}
+  if(modeOff()&&deepseek(route)){notify('Для платного DeepSeek увімкни режим «Із DeepSeek».');return;}
+  if(!poolName(route)&&routeWarning(route)){notify('Цей маршрут зараз недоступний. Обери CUT іншого провайдера.');return;}
+  const list=chain(role,group),old=list[index]?split(list[index]):null,effort=carryEffort(old?.effort,route);
+  const existing=list.findIndex(r=>split(r).raw===route);if(existing>=0){const [cut]=list.splice(existing,1);list.splice(Math.min(index,list.length),0,cut);}else{list[index]=route+(effort?':'+effort:'');}
+  if(list.length>(group==='pool'?Infinity:group==='vibe'?30:group==='alternatives'?12:31)){notify('Доріжка вже має максимальну кількість CUTS.');return;}
+  if(!setChain(role,list,group,existing>=0?{inserted:Math.min(index,list.length-1)}:{}))return;
+  state.cutTarget=null;state.armedCut=null;if(narrowSurface())state.cuts=false;
+  state.opFeedback=withNotes('Вставлено '+short(split(route).id)+' · '+providerName(split(route).provider)+' → '+role+(old?.effort&&!effort&&existing<0&&!thinkingOff(role,group)?' · thinking → типово':''));render();if(narrowSurface()){pickerFocus({role,index,group});scrollToControl(document.activeElement);}
  }
  function contextTokens(n){return n>=1e6?num(n/1e6)+'M':num(n/1e3)+'K';}
  function opPriceValue(m){const q=priceInfo(m);return q.kind==='free'?0:Number.isFinite(m.cost?.input)&&Number.isFinite(m.cost?.output)&&(m.cost.input||m.cost.output)?(m.cost.input+m.cost.output)/2:null;}
@@ -757,7 +895,7 @@
  function analyzerDetail(rows){
   const m=catalogMap.get(state.analyze)||rows[0];if(!m)return '<section class="analysis-inspector"><p>Зміни фільтри, щоб побачити моделі.</p></section>';
   const route=m.provider+'/'+m.id,q=opEvidence(m),h=opHealth(m),editions=catalog.filter(x=>op.normalize(x.id)===op.normalize(m.id));
-  return `<section class="analysis-inspector" tabindex="-1"><header><span>CUT / ${esc(providerName(m.provider))}</span><button type="button" class="favorite" data-fav="${esc(route)}" aria-pressed="${state.favs.includes(route)}" aria-label="В обране">☆</button></header><h2>${esc(cutTitle(route))}</h2><p class="analysis-id">${esc(m.id)}</p><div class="inspector-score"><strong>${q?num(q.score):'—'}</strong><span>${esc((labels[state.role]||state.role))}<small>Зважена оцінка тестів / 100</small></span></div>${q?`<div class="test-mini-bars">${Object.entries(q.weights).map(([k,w])=>`<div><span>${esc(k)} <small>${Math.round(w*100)}%</small></span><i><b style="width:${q.record.scores[k]}%"></b></i><strong>${num(q.record.scores[k])}</strong></div>`).join('')}</div><p class="evidence-note">${esc(q.record.id)} · ${esc(q.record.effort||'режим джерела')}<br><a href="${esc(q.record.url)}" target="_blank" rel="noreferrer">${esc(q.record.source)} ↗</a> · ${esc(q.record.release)}. Оцінка — орієнтир для ролі, не тест провайдера.</p>`:'<p class="evidence-note">Для цієї ролі та версії немає повного набору тестів. Окремі виміри показано нижче.</p>'}${capabilityMarkup(m)}${evidenceDeck(m)}<div class="inspector-editions"><small>EDITION · ВХІД / ВИХІД $/1M</small>${editions.slice(0,state.allEditions?editions.length:4).sort((a,b)=>(opPriceValue(a)??Infinity)-(opPriceValue(b)??Infinity)).map(x=>`<button type="button" data-analyze="${esc(x.provider+'/'+x.id)}"><b>${esc(providerName(x.provider))}</b><span>${priceMarkup(x)}</span></button>`).join('')}${editions.length>4?tool(state.allEditions?'Стиснути EDITION':'Усі EDITION · '+editions.length,'all-editions'):''}</div><footer><span class="health-${h.kind}">${healthGlyph[h.kind]} ${h.label}</span><button type="button" class="tool" data-model-detail="${esc(route)}">Всі дані ↗</button></footer></section>`;
+  return `<section class="analysis-inspector" tabindex="-1"><header><span>CUT / ${esc(providerName(m.provider))}</span><button type="button" class="favorite" data-fav="${esc(route)}" aria-pressed="${state.favs.includes(route)}" aria-label="В обране">☆</button></header><h2>${esc(cutTitle(route))}</h2><p class="analysis-id">${esc(m.id)}</p><div class="inspector-score"><strong>${q?num(q.score):'—'}</strong><span>${esc((labels[state.role]||state.role))}<small>Зважена оцінка тестів / 100</small></span></div>${q?`<div class="test-mini-bars">${Object.entries(q.weights).map(([k,w])=>`<div><span>${esc(k)} <small>${Math.round(w*100)}%</small></span><i><b style="width:${q.record.scores[k]}%"></b></i><strong>${num(q.record.scores[k])}</strong></div>`).join('')}</div><p class="evidence-note">${esc(q.record.id)} · ${esc(q.record.effort||'режим джерела')}<br><a href="${esc(q.record.url)}" target="_blank" rel="noreferrer">${esc(q.record.source)} ↗</a> · ${esc(q.record.release)}. Оцінка — орієнтир для ролі, не тест провайдера.</p>`:'<p class="evidence-note">Для цієї ролі та версії немає повного набору тестів. Окремі виміри показано нижче.</p>'}${capabilityMarkup(m)}${evidenceDeck(m)}<div class="inspector-editions"><small>EDITION · ВХІД / ВИХІД $/1M</small>${[...editions].sort((a,b)=>(opPriceValue(a)??Infinity)-(opPriceValue(b)??Infinity)).slice(0,state.allEditions?editions.length:4).map(x=>`<button type="button" data-analyze="${esc(x.provider+'/'+x.id)}"><b>${esc(providerName(x.provider))}</b><span>${priceMarkup(x)}</span></button>`).join('')}${editions.length>4?tool(state.allEditions?'Стиснути EDITION':'Усі EDITION · '+editions.length,'all-editions'):''}</div><footer><span class="health-${h.kind}">${healthGlyph[h.kind]} ${h.label}</span><button type="button" class="tool" data-model-detail="${esc(route)}">Всі дані ↗</button></footer></section>`;
  }
  function evidenceSourceLine(m){const c=evidenceCoverage(m);return [...c.sources.map(s=>({'Artificial Analysis':'AA','LiveBench':'LiveBench','LiveCodeBench':'LiveCodeBench','Arena':'Arena'}[s]||s)),...(c.claims?['Заяви розробника']:[])].join(' · ')||'Без зіставлених тестів';}
  function evidenceCoverageLine(rows){const counts={independent:0,developer:0,unknown:0};for(const m of rows)counts[evidenceCoverage(m).kind]++;return `${rows.length} CUTS · незалежні дані: ${counts.independent} · лише заяви: ${counts.developer} · без даних: ${counts.unknown}`;}
@@ -768,7 +906,7 @@
  }
  function historyBins(points){if(!points.length)return [];const start=Math.min(...points.map(x=>x.timestamp)),end=Math.max(...points.map(x=>x.timestamp)),map=new Map(points.map(x=>[x.timestamp,x])),out=[];for(let t=Math.max(start,end-167*3600000);t<=end;t+=3600000)out.push(map.get(t)||{timestamp:t,gap:true});return out;}
  function historySurface(){
-  const stats=source.insights?.stats||{},o=stats.overall||{},bins=historyBins(stats.timeSeries||[]),metric=state.historyMetric,labelsM={requests:'Запити',tokens:'Токени',errors:'Помилки',cost:'API $'},index=Math.max(0,Math.min(state.historyIndex??bins.length-1,bins.length-1)),active=bins[index],peak=Math.max(1,...bins.map(b=>b[metric]||0)),models=[...(stats.byModel||[])].sort((a,b)=>(b[state.historySort]||0)-(a[state.historySort]||0)),max=Math.max(1,...models.map(m=>m[state.historySort]||0));
+  const stats=source.insights?.stats||{},o=stats.overall||{},bins=historyBins(stats.timeSeries||[]),metric=state.historyMetric,labelsM={requests:'Запити',tokens:'Токени',errors:'Помилки',cost:'API $'},selected=bins.findIndex(b=>b.timestamp===state.historyAt),index=selected>=0?selected:Math.max(0,bins.length-1),active=bins[index],peak=Math.max(1,...bins.map(b=>b[metric]||0)),models=[...(stats.byModel||[])].sort((a,b)=>(b[state.historySort]||0)-(a[state.historySort]||0)),max=Math.max(1,...models.map(m=>m[state.historySort]||0));
   return `<section class="history-surface"><div class="surface-controls">${opSelect('history-metric','Сигнал',metric,Object.entries(labelsM))}<label class="history-shuttle"><span>ПОЗИЦІЯ <output>${active?new Date(active.timestamp).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'}):'—'}</output></span><input id="history-position" type="range" min="0" max="${Math.max(1,bins.length-1)}" value="${index}" step="1" aria-label="Позиція в історії" ${!bins.length?'disabled':''}></label><span class="history-period">${o.firstTimestamp?timeLabel(o.firstTimestamp/1000)+' — '+timeLabel(o.lastTimestamp/1000):'Ще немає вимірів'}<small>${esc(stats.scope||'OMP')} · оновлено ${timeLabel(stats.at)}</small></span></div><div class="history-lcd" data-lcd-screen="history"><div class="history-counter"><span>${active?timeLabel(active.timestamp/1000):'НЕМАЄ ДАНИХ'}</span><strong>${num(active?.[metric])}</strong><small>${active?.gap?'Немає виміру':labelsM[metric]+' за годину'}</small></div><div class="history-tape" aria-label="Погодинна історія OMP">${bins.map((b,i)=>`<button type="button" data-history-bin="${i}" class="${index===i?'active':''} ${b.gap?'gap':''}" aria-pressed="${index===i}" aria-label="${esc(timeLabel(b.timestamp/1000)+' · '+num(b[metric])+' '+labelsM[metric])}"><i style="height:${b.gap?0:Math.max(1,(b[metric]||0)/peak*100)}%"></i><span>${new Date(b.timestamp).getHours()===0?new Date(b.timestamp).getDate()+'д':new Date(b.timestamp).getHours()}</span></button>`).join('')}</div><div class="history-sample"><span>ЦЯ ГОДИНА</span><span>Запити <b>${num(active?.requests)}</b></span><span>Помилки <b>${num(active?.errors)}</b></span><span>Токени <b>${num(active?.tokens)}</b></span><span>API ≈ $ <b>${num(active?.cost)}</b></span>${ManaDisplay.colourControl('history','Історія роботи')}</div></div><p class="section-engraving history-total-label">УВЕСЬ ПЕРІОД ЗВІТУ</p><div class="transport-counters"><div><span>ЗАПИТІВ</span><b>${num(o.totalRequests)}</b></div><div><span>ПОМИЛКИ</span><b>${num(o.failedRequests)} <small>${o.errorRate!=null?num(o.errorRate*100)+'%':'—'}</small></b></div><div><span>КЕШ</span><b>${o.cacheRate!=null?num(o.cacheRate*100)+'%':'—'}</b></div><div><span>ПЕРШИЙ ТОКЕН</span><b>${o.avgTtft!=null?num(o.avgTtft/1000)+' с':'—'}</b></div><div><span>ШВИДКІСТЬ</span><b>${num(o.avgTokensPerSecond)} <small>ток/с</small></b></div></div><div class="surface-controls"><span class="section-engraving">ВНЕСОК МОДЕЛЕЙ · ВЕСЬ ПЕРІОД</span>${opSelect('history-sort','Вимір',state.historySort,[['totalRequests','Запити'],['totalCost','API оцінка'],['avgTokensPerSecond','Швидкість'],['failedRequests','Помилки']])}</div><div class="mixdown">${models.map(m=>`<div class="mix-channel"><span class="mix-label"><b>${esc(short(m.model))}</b><small>${esc(providerName(m.provider))}</small></span><span class="mix-meter"><i style="width:${(m[state.historySort]||0)/max*100}%"></i></span><strong>${num(m[state.historySort])}</strong><span class="mix-detail">${num(m.failedRequests)} помилок · ${num(m.avgTokensPerSecond)} ток/с · ${m.avgTtft!=null?num(m.avgTtft/1000)+' с':'—'}</span></div>`).join('')||'<p class="empty-state">Статистика ще не зібрана</p>'}</div><p class="evidence-note">${source.demo?'Синтетичні дані DEMO.':'Реальні агрегати OMP, не журнал окремих задач.'} Погодинний вибір змінює верхній вимір; внесок моделей — за весь період. API $ — оцінка за тарифами, не платіж підписки. ${esc(stats.error||'')}</p><div class="catalog-splices"><h3>Зміни колекції</h3>${source.changes.slice(-8).reverse().map(c=>`<div><span>${c.kind==='new'?'+':'−'}</span><b>${esc(cutTitle(c.route))}</b><small>${esc(providerName(split(c.route).provider))} · ${timeLabel(c.at)}</small></div>`).join('')||'<p class="evidence-note">Після першого знімка змін немає.</p>'}</div></section>`;
  }
  root.addEventListener('pointerdown',e=>{
@@ -779,14 +917,14 @@
  });
  function cancelCutGesture(){if(cutGesture){const g=cutGesture;cutGesture=null;g.ghost?.remove();root.classList.remove('cut-dragging');g.target?.classList.remove('cut-drop-target');if(root.hasPointerCapture(g.pointer))root.releasePointerCapture(g.pointer);}render();}
  root.addEventListener('pointerup',e=>{
-  if(cutGesture?.pointer===e.pointerId){const g=cutGesture;cutGesture=null;g.ghost?.remove();root.classList.remove('cut-dragging');g.target?.classList.remove('cut-drop-target');if(root.hasPointerCapture(g.pointer))root.releasePointerCapture(g.pointer);if(g.active){suppressClipClick=true;if(g.target){const d=g.target.dataset,button=g.target.querySelector('[data-edit]'),target=d.action==='add-mobile'?{role:state.role,index:chain(state.role).length,group:'role'}:{role:d.nodeRole||d.edit||button?.dataset.edit,index:Number(d.index??button?.dataset.index),group:d.group||button?.dataset.group||'role'};if(g.route){state.picker=null;commitCut(g.route,{...target,profile:state.profile,expected:chain(target.role,target.group)[target.index]??null});}else placeCut(g.key,target);}else render();}}
+  if(cutGesture?.pointer===e.pointerId){const g=cutGesture;cutGesture=null;g.ghost?.remove();root.classList.remove('cut-dragging');g.target?.classList.remove('cut-drop-target');if(root.hasPointerCapture(g.pointer))root.releasePointerCapture(g.pointer);if(g.active){suppressNextClick();if(g.target){const d=g.target.dataset,button=g.target.querySelector('[data-edit]'),target=d.action==='add-mobile'?{role:state.role,index:chain(state.role).length,group:'role'}:{role:d.nodeRole||d.edit||button?.dataset.edit,index:Number(d.index??button?.dataset.index),group:d.group||button?.dataset.group||'role'};if(g.route){state.picker=null;commitCut(g.route,{...target,profile:state.profile,expected:chain(target.role,target.group)[target.index]??null});}else placeCut(g.key,target);}else render();}}
  });
  root.addEventListener('pointercancel',()=>{if(cutGesture)cancelCutGesture();});
  root.addEventListener('lostpointercapture',()=>{if(cutGesture)cancelCutGesture();});
  window.addEventListener('blur',()=>{if(cutGesture)cancelCutGesture();});
  root.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&!e.defaultPrevented&&!state.modal&&!state.picker&&!e.target.matches('select')&&state.armedCut){e.preventDefault();state.armedCut=null;state.cutTarget=null;state.opFeedback='Вставку скасовано.';render();(win.querySelector('#cut-query')||win.querySelector('[data-op-switch=cuts]'))?.focus({preventScroll:true});return;}
-  if(e.key==='Escape'&&cutGesture){e.preventDefault();cancelCutGesture();return;}
+  if(e.key==='Escape'&&cutGesture){e.preventDefault();if(cutGesture.active)suppressClipClick=true;cancelCutGesture();return;}
  });
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
@@ -795,25 +933,28 @@
   if(b.dataset.cut){if(state.cutTarget)placeCut(b.dataset.cut,state.cutTarget);else{state.armedCut=b.dataset.cut;state.opFeedback='CUT обрано. Натисни місце на плівці або «+», щоб вставити.';if(state.view!=='profiles')state.view='profiles';if(narrowSurface())state.cuts=false;render();if(narrowSurface()){win.querySelector('.cut-placement [data-action=cancel-cut]')?.focus({preventScroll:true});scrollToControl(win.querySelector('.cut-placement'));}}return;}
   if(b.dataset.action==='cancel-cut'){state.armedCut=null;state.cutTarget=null;render();win.querySelector('[data-op-switch=cuts]')?.focus({preventScroll:true});return;}
   if(b.dataset.analyze){state.analyze=b.dataset.analyze;state.allEditions=false;render();win.querySelector(`.ledger-cut[data-analyze="${CSS.escape(b.dataset.analyze)}"]`)?.focus({preventScroll:true});return;}if(b.dataset.action==='all-editions'){state.allEditions=!state.allEditions;render();return;}
-  if(b.hasAttribute('data-history-bin')){state.historyIndex=Number(b.dataset.historyBin);render();return;}
+  if(b.hasAttribute('data-history-bin')){state.historyAt=historyBins(source.insights?.stats?.timeSeries||[])[Number(b.dataset.historyBin)]?.timestamp;render();return;}
   if(b.dataset.action==='meters-mobile'){state.mobileMeters=!state.mobileMeters;render();win.querySelector('[data-action=meters-mobile]')?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-close'){state.cuts=false;state.armedCut=null;state.cutTarget=null;render();}
   if(b.dataset.action==='cuts-more'){state.cutLimit=(state.cutLimit||60)+60;render();}
  });
  // Click-to-place provides the same operation without dragging (phone / keyboard).
  root.addEventListener('click',e=>{if(!state.armedCut||e.target.closest('[data-cut],[data-slot-actions],select,.effort-control'))return;const target=e.target.closest('[data-edit],[data-action=add-mobile]');if(!target||target.disabled)return;e.preventDefault();e.stopImmediatePropagation();const d=target.dataset;placeCut(state.armedCut,d.action==='add-mobile'?{role:state.role,index:chain(state.role).length,group:'role'}:{role:d.edit,index:Number(d.index),group:d.group||'role'});},true);
- root.addEventListener('change',e=>{const id=e.target.id,value=e.target.value;if(id==='history-position'){state.historyIndex=Number(value);render();win.querySelector('#history-position')?.focus({preventScroll:true});return;}const map={'cut-provider':'cutProvider','cut-health':'cutHealth','op-role':'role','op-sort':'catalogSort','op-scope':'catalogMode','op-source':'benchSource','op-release':'benchRelease','op-evidence':'catalogEvidence','history-metric':'historyMetric','history-sort':'historySort'};if(map[id]){state[map[id]]=value;state.page=0;if(id==='op-scope')state.catalogProvider='all';if(id==='op-source')state.benchRelease=[...new Set(source.insights.benchmarks.records.filter(b=>b.source===value).map(b=>b.release))].sort().at(-1)||'';state.analyze=null;store();render();win.querySelector('#'+id)?.focus({preventScroll:true});}});
+ root.addEventListener('change',e=>{const id=e.target.id,value=e.target.value;if(id==='history-position'){state.historyAt=historyBins(source.insights?.stats?.timeSeries||[])[Number(value)]?.timestamp;render();win.querySelector('#history-position')?.focus({preventScroll:true});return;}const map={'cut-provider':'cutProvider','cut-health':'cutHealth','op-role':'role','op-sort':'catalogSort','op-scope':'catalogMode','op-source':'benchSource','op-release':'benchRelease','op-evidence':'catalogEvidence','history-metric':'historyMetric','history-sort':'historySort'};if(map[id]){state[map[id]]=value;state.page=0;if(id==='op-scope')state.catalogProvider='all';if(id==='op-source')state.benchRelease=[...new Set(source.insights.benchmarks.records.filter(b=>b.source===value).map(b=>b.release))].sort().at(-1)||'';state.analyze=null;store();render();win.querySelector('#'+id)?.focus({preventScroll:true});}});
  root.addEventListener('input',e=>{if(e.target.id==='history-position'){const bins=historyBins(source.insights?.stats?.timeSeries||[]),at=bins[Number(e.target.value)];e.target.previousElementSibling.querySelector('output').textContent=at?new Date(at.timestamp).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'}):'—';}});
- function storeOperator(){try{localStorage.setItem('mana-operator',JSON.stringify({health:state.health,drawerHeight:state.drawerHeight}));}catch{}}
+ function storeOperator(){try{localStorage.setItem('mana-operator',JSON.stringify({health:state.health,...(Number.isFinite(state.drawerHeight)?{drawerHeight:state.drawerHeight,drawerResized:true}:{})}));}catch{}}
  function decorateHealth(surface=win){win.classList.toggle('health-on',state.health);if(!state.health||!surface)return;for(const node of surface.querySelectorAll('[data-node-role],.tree-line,[data-health-route]')){const d=node.dataset,button=node.querySelector('[data-edit]'),role=d.nodeRole||button?.dataset.edit,index=Number(d.index??button?.dataset.index),group=d.group||button?.dataset.group||'role',route=d.healthRoute||(role?chain(role,group)[index]:null);if(!route||poolName(route))continue;const h=opRouteHealth(route);node.dataset.health=h.kind;const strip=document.createElement('span');strip.className='tape-health-strip';strip.style.setProperty('--health-left',(h.remaining??100)+'%');strip.title=h.label+(h.remaining!=null?' · залишок '+num(h.remaining)+'%':'');strip.setAttribute('aria-hidden','true');node.append(strip);const meta=node.querySelector('.cut-meta,.node-meta,.tree-meta,[data-edit] small');if(meta){const badge=document.createElement('span');badge.className='tape-health';badge.textContent=healthGlyph[h.kind];badge.title=h.label;badge.setAttribute('aria-label',h.label);meta.prepend(badge);}}}
 
  function lightSwitch(){const light=document.documentElement.dataset.theme!=='dark';return `<button type="button" class="light-switch light-rocker" data-theme-toggle role="switch" aria-label="Світла тема" aria-checked="${light}" title="${light?'Вимкнути світло · темна тема':'Увімкнути світло · світла тема'}"><span class="light-rocker-bed" aria-hidden="true"><span class="light-rocker-cap"><i></i></span></span><span class="encoder-label" aria-hidden="true">світло</span></button>`;}
  function focusSelector(el){
   if(!el)return '';if(el.id)return '#'+CSS.escape(el.id);
   if(el.matches('.profile-menu summary'))return '.profile-menu summary';
+  // The DeepSeek switch flips its value; a chosen provider card disappears into the provider selector.
+  if(el.hasAttribute('data-profile-mode'))return '[data-profile-mode]';
+  if(el.hasAttribute('data-catalog-provider'))return '#catalog-provider';
   const prefix=el.closest('.picker')?'.picker ':el.closest('.modal')?'.modal ':'';
   if(el.name)return prefix+'[name="'+CSS.escape(el.name)+'"]';
-  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-display','data-lcd-colour','data-view','data-model-detail'].find(key=>el.hasAttribute(key));
+  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-display','data-lcd-colour','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-select-step'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
   return attr?prefix+'['+attr+'="'+CSS.escape(el.getAttribute(attr))+'"]'+['data-index','data-group','data-direction','data-lcd-part'].filter(key=>el.hasAttribute(key)).map(key=>'['+key+'="'+CSS.escape(el.getAttribute(key))+'"]').join(''):'';
  }
  function render(){
@@ -839,7 +980,7 @@
   ${source.demo?'<div class="demo-banner" role="status">DEMO · ізольовані тестові профілі. Реальні рахунки не підключені.</div>':''}${operatorDock()}${state.view==='profiles'&&reports.length?`${tool('Ліміти · '+reports.length,'meters-mobile','tray-toggle mobile-meter-key',`aria-expanded="${!!state.mobileMeters}" aria-controls="meter-bank"`)}<div class="meter-bank" id="meter-bank" data-mobile-expanded="${!!state.mobileMeters}">${opQuota()}</div>`:''}
   ${state.error&&state.modal!=='conflict'?`<div class="error-banner" role="alert">${esc(state.error)} ${tool('×','clear-error','icon-only','aria-label="Закрити повідомлення"')}</div>`:''}
   ${source.refresh.error?`<div class="error-banner">${esc(source.refresh.error)}</div>`:''}
-  <main class="content operator-surface" data-surface="${state.view}">${state.view==='dashboard'?historySurface():state.view==='profiles'?`<div class="transport-bar">${catalog.some(m=>deepseek(m.provider+'/'+m.id))||modeOff()?modeBar():''}</div>`+profileView():operatorCatalog()}</main>${cutsTray()}
+  <main class="content operator-surface" data-surface="${state.view}">${state.view==='dashboard'?historySurface():state.view==='profiles'?`<div class="transport-bar">${catalog.some(m=>deepseek(m.provider+'/'+m.id))||modeOff()?modeBar():''}${modeProblems()}</div>`+profileView():operatorCatalog()}</main>${cutsTray()}
   <footer class="bottom"><span>${roleKeys.length} ролей · ${profileKeys.length} профілів · ${dirty.length?dirty.length+' із чернетками':'усе збережено'}</span><span>${state.view==='dashboard'?'Ліміти · 5 хв / каталог · 15 хв':'Зміни для нових запусків OMP'}</span></footer>${pickerMarkup()}${modalMarkup()}${state.toast?`<div class="toast" role="status">${esc(state.toast)}</div>`:''}`;
   win.dataset.tapeContext=state.view+'|'+state.profile+(state.view==='profiles'&&win.clientWidth<=900?'|'+state.role:'');
   ForgeTape.fit(win);resizeDrawer(state.drawerHeight);decorateHealth();
@@ -852,7 +993,7 @@
   if(state.modal){const layer=win.querySelector('.modal-layer'),form=layer.querySelector('form');layer.scrollTop=layerScroll;if(form&&form.id===oldForm?.id)for(const saved of formValues){const el=form.elements.namedItem(saved.name);if(el){el.value=saved.value;if(typeof saved.checked==='boolean')el.checked=saved.checked;}}const target=modalFocus?layer.querySelector(modalFocus):!wasModal?layer.querySelector('input,button'):null;target?.focus({preventScroll:true});if(target&&selection&&typeof target.setSelectionRange==='function')target.setSelectionRange(...selection);}
   if(state.view==='profiles')for(const row of win.querySelectorAll('.graph-row:not(.vibe-row)')){const r=row.querySelector('[data-focus-role]')?.dataset.focusRole;if(r&&state.profile!=='standard'&&!Object.hasOwn(source.presets[state.profile]?.modelRoles||{},r))row.querySelector('.role-name').title='Основна модель успадкована зі Standard';}
   if(state.picker){fitPicker();const x=state.picker;for(const el of win.querySelectorAll(`[data-edit="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`))el.closest('.node,.tree-line')?.classList.add('editing');}
-  if(!state.modal&&controlFocus){const target=[...win.querySelectorAll(controlFocus)].find(el=>el.getClientRects().length&&!el.disabled);target?.focus({preventScroll:true});if(target&&selection&&typeof target.setSelectionRange==='function')target.setSelectionRange(...selection);}
+  if(!state.modal&&controlFocus){const target=[...win.querySelectorAll(controlFocus)].find(el=>el.getClientRects().length&&!el.disabled&&el.matches('button,select,input,textarea,summary,a[href],[tabindex]'));target?.focus({preventScroll:true});if(target&&selection&&typeof target.setSelectionRange==='function')target.setSelectionRange(...selection);}
   if(!state.modal&&focused?.matches('.cut-tools'))focusPickerMove(state.picker?.focusDirection||1);
   if(!state.modal&&wasModal)[...win.querySelectorAll(modalReturnFocus||'.tabs .active')].find(el=>el.getClientRects().length)?.focus({preventScroll:true});
   try{if(poolsDirty())sessionStorage.setItem(storageKey('forge-pool-draft'),JSON.stringify({original:poolOriginal,value:poolDraft,revision:poolRevision}));else sessionStorage.removeItem(storageKey('forge-pool-draft'));sessionStorage.setItem(storageKey('forge-drafts'),JSON.stringify(Object.fromEntries(dirty.map(k=>[k,{original:original[k],value:profiles[k],revision:source.revisions[k]}]))));}catch{}
@@ -893,7 +1034,7 @@
    if(action==='all-stats'){state.statsLimit=10000;render();}
    if(action==='clear-error'){state.error='';render();}
    if(action==='discard-reload'){if(!confirm('Скинути всі незбережені чернетки й завантажити поточні файли?'))return;state.modal=null;state.error='';editHistory.profiles.clear();await reload(true);}
-   if(action==='export-draft'){const blob=new Blob([JSON.stringify(Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:source.revisions[k],changes:diff(k)}])),null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();URL.revokeObjectURL(url);}
+   if(action==='export-draft'){const drafts=Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:source.revisions[k],changes:diff(k)}]));if(poolsDirty())drafts['@free-pools']={revision:poolRevision,pools:poolDraft};const blob=new Blob([JSON.stringify(drafts,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   }catch(err){if(state.modal){state.modalError=err.message;}else state.error=err.message;render();}
  });
  root.addEventListener('input',e=>{if(!e.target.matches('#clone-form input,#rename-form input'))return;if(e.target.form.id==='clone-form')state.cloneName=e.target.value;else state.renameName=e.target.value;checkProfileName(e.target.form);state.modalError='';win.querySelector('.modal > .error-banner')?.remove();});
@@ -905,14 +1046,14 @@
  root.addEventListener('change',e=>{if(e.target.id==='project-choice'&&!state.saving){store();state.switchingProject=true;const url=new URL(location.href);url.searchParams.set('project',e.target.value);location.assign(url);}});
  window.addEventListener('offline',()=>{state.offline=true;state.error='Немає мережі. Чернетки залишаються у цьому вікні; збереження потребує сервера.';render();});
  window.addEventListener('online',()=>{state.error='';pollState();});
- Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(Number.isFinite(saved?.drawerHeight))state.drawerHeight=saved.drawerHeight;}catch{}
- state.syncVibe=true;state.statsLimit=8;state.favs=source.favs||[];state.error='';state.modalError='';
+ Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(saved?.drawerResized===true&&Number.isFinite(saved.drawerHeight))state.drawerHeight=saved.drawerHeight;}catch{}
+ state.syncVibe=true;state.statsLimit=8;state.favs=source.favs||[];favSaved=state.favs;state.error='';state.modalError='';
  try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(profiles[v.profile])state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;source.revisions[k]=v.revision;}}}catch{}
  try{const draft=JSON.parse(sessionStorage.getItem(storageKey('forge-pool-draft'))||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
  for(const [k,v] of Object.entries(profiles)){v.forgeMode??=copy(source.profileModes?.[k]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});original[k].forgeMode??=copy(v.forgeMode);}
  if(!profiles[state.profile])state.profile='standard';
  rebuild();render();
  if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
- setInterval(()=>{if(document.hidden)return;for(const el of win.querySelectorAll('[data-reset]')){const at=Number(el.dataset.reset);el.textContent=resetCountdown(at);el.title=resetTitle(at);el.closest('.quota-reading,.quota-window')?.classList.toggle('waiting-reset',at>0&&at<=Date.now());}const timeline=win.querySelector('.tariff-timeline');if(timeline&&!timeline.contains(document.activeElement))timeline.innerHTML=tariffTimeline();},30000);
+ setInterval(()=>{if(document.hidden)return;let passed=false;for(const el of win.querySelectorAll('[data-reset]')){const at=Number(el.dataset.reset),waiting=at>0&&at<=Date.now();el.textContent=resetCountdown(at);el.title=resetTitle(at);el.closest('.meter-window')?.classList.toggle('waiting-reset',waiting);if(waiting&&!resetsSeen.has(at)){resetsSeen.add(at);passed=true;}}if(passed){pendingRender=true;scheduleBackgroundWork();}const timeline=win.querySelector('.tariff-timeline');if(timeline&&!timeline.contains(document.activeElement))timeline.innerHTML=tariffTimeline();},30000);
  setInterval(pollState,15000);
 })();

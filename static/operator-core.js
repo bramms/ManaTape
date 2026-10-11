@@ -55,7 +55,8 @@ const ManaOperator=(()=>{
   return id.includes(family)||(family==='anthropic'&&id.includes('claude'))||(family==='google'&&id.includes('gemini'))||(family==='openai'&&/gpt|o[134]-/.test(id));
  }
  function health(model,reports,disabled=[],now=Date.now()){
-  if(disabled.includes(model.provider)||model.expired||model.status==='missing')return {kind:'empty',label:'Недоступна'};
+  // Unavailable (disabled, expired, DELETED) is not the same state as an exhausted quota.
+ if(disabled.includes(model.provider)||model.expired||model.status==='missing')return {kind:'unavailable',label:'Недоступна'};
   if(model.local===true)return {kind:'local',label:'GPU · без квоти'};
   const accounts=reports.filter(r=>r.provider===model.provider);
   if(accounts.length>1)return {kind:'unknown',label:'Кілька акаунтів · пул невідомий'};

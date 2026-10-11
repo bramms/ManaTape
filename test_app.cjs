@@ -18,6 +18,16 @@ function roleContext(context){
  runInNewContext(['roleInfo','roleFallbacks','knownAgents','agentInfo','agentSource','shortText','isCustomAgent','agentModelText','agentModelAlias'].map(appFunction).join('\n'),context);
  return context;
 }
+// The real lane-edit path: setChain with OFF routing, agent aliases, default inheritance and agent sync.
+const CHAIN=['workers','agentValues','agentLink','vibeAlias','aliasRole','resolveAlias','baseChain','inheritsDefault','oldSetChain','agentFromResolved','writeAgent','thinkingOff','withNotes','setChain','syncAgentTails','applyModeEdit','modeList','modeScope'];
+function chainContext(context,extra=[]){
+ const notices=context.notices||[];
+ Object.assign(context,{notices,chainNotes:[],notify:context.notify||(s=>notices.push(s)),projectionPending:context.projectionPending||(()=>false),modeView:context.modeView||(()=>null),
+  deepseek:context.deepseek||(r=>/deepseek/.test(r)&&!/free/.test(r)),state:{syncVibe:true,...context.state}});
+ roleContext(context);
+ runInNewContext([...CHAIN,...extra].filter(name=>!Object.hasOwn(context,name)).map(appFunction).join('\n'),context);
+ return context;
+}
 
 test('all search fields propagate clearing and defer result updates during composition',()=>{
  const calls=[],state={picker:{query:'old',limit:80},analyze:'old',page:3};
@@ -112,17 +122,19 @@ test('a committed select or idle CUT toolbar receives preview without allowing b
 });
 
 test('two CUT moves wait for the new projection and move the same CUT in DeepSeek OFF',()=>{
- const settings={overrides:{}},view=routes=>({views:{role:{writer:{routes,substituted:true}}}});
+ const profile={modelRoles:{writer:'p/deepseek'},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}},settings={alternatives:['p/A','p/B','p/C'],overrides:{}};
+ const view=routes=>({views:{role:{writer:{routes,substituted:true,paused:[{index:0}],refs:routes.map(route=>({kind:'replacement',route,key:'role:writer'}))}}}});
  let plan={data:view(['p/A','p/B','p/C'])};
- const context={state:{profile:'standard',picker:{role:'writer',group:'role',index:0}},
-  modeOff:()=>true,diff:()=>[{}],activePlan:()=>plan,modeSettings:()=>settings,modeScope:()=> 'role:writer',
+ const context={p:()=>profile,state:{profile:'standard',picker:{role:'writer',group:'role',index:0}},
+  modeOff:()=>true,diff:()=>[{}],activePlan:()=>plan,modeSettings:()=>settings,
   focusPickerMove:()=>{},split:route=>({raw:route}),render:()=>{plan={pending:true,previous:plan.data};}};
- runInNewContext(['modeView','chain','setChain','pickerActionsPending','movePickerCut'].map(appFunction).join('\n'),roleContext(context));
+ runInNewContext(['modeView','chain','projectionPending','pickerActionsPending','movePickerCut'].map(appFunction).join('\n'),chainContext(context));
  context.movePickerCut(1);assert.deepEqual(Array.from(settings.overrides['role:writer']),['p/B','p/A','p/C']);
  context.movePickerCut(1);assert.deepEqual(Array.from(settings.overrides['role:writer']),['p/B','p/A','p/C'],'repeat while pending cannot read the old projection');
  assert.equal(context.state.picker.index,1);
  plan={data:view([...settings.overrides['role:writer']])};context.movePickerCut(1);
  assert.deepEqual(Array.from(settings.overrides['role:writer']),['p/B','p/C','p/A']);assert.equal(context.state.picker.index,2);
+ assert.deepEqual(profile.modelRoles,{writer:'p/deepseek'},'reordering replacements never touches the real chain');
 });
 
 test('an older in-flight preview cannot overwrite a newer explicit preview with the same configuration key',async()=>{
@@ -159,15 +171,17 @@ test('linked agents show role inheritance instead of pretending a primary pool i
  profile.retry.modelFallback=false;assert.match(context.agentLinkedTrack('scout'),/резерви вимкнено/);
 });
 
-test('editing a role copies only explicit agent tails and keeps singleton inheritance intact',()=>{
- const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/b']}},task:{agentModelOverrides:{one:'@reader',two:['@reader'],custom:['@reader','p/c'],other:['p/x','p/y']}}};
- const context={p:()=>profile,state:{syncVibe:true},modeView:()=>null};
- runInNewContext(['workers','agentValues','agentLink','vibeAlias','oldSetChain','setChain'].map(appFunction).join('\n'),roleContext(context));
+test('editing a role syncs only agent lists that mirrored its fallbacks and keeps singleton inheritance intact',()=>{
+ const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/b']}},task:{agentModelOverrides:{one:'@reader',two:['@reader'],mirror:['@reader','p/b'],custom:['@reader','p/c'],other:['p/x','p/y']}}};
+ const context=chainContext({p:()=>profile,state:{syncVibe:true,opFeedback:''}});
  context.setChain('reader',['p/new','p/next']);
  assert.equal(profile.task.agentModelOverrides.one,'@reader');assert.deepEqual(profile.task.agentModelOverrides.two,['@reader']);
- assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['@reader','p/next']);assert.deepEqual(profile.task.agentModelOverrides.other,['p/x','p/y']);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.mirror),['@reader','p/next'],'a list that repeated the role follows it');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['@reader','p/c'],'an own list is never overwritten');
+ assert.deepEqual(profile.task.agentModelOverrides.other,['p/x','p/y']);
+ assert.match(context.state.opFeedback,/mirror/);assert.doesNotMatch(context.state.opFeedback,/custom/);
  context.state.syncVibe=false;context.setChain('reader',['p/later','p/last']);
- assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['@reader','p/next']);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.mirror),['@reader','p/next']);
 });
 
 test('copying an inherited agent preserves normal routes and DeepSeek settings as one undoable edit',()=>{
@@ -177,7 +191,7 @@ test('copying an inherited agent preserves normal routes and DeepSeek settings a
   source:{freePools:{'free-fast':['p/free1','p/free2']}},poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined,
   modeOff:()=>true,modeView:()=>({}),diff:()=>[],chain:()=>['p/replacement','mana-pool/free-fast','p/extra'],modeSettings:()=>profile.forgeMode,render:()=>history.observe('one',profile,true,baseline),win:{querySelectorAll:()=>[]},scrollToControl:()=>{},notify:()=>assert.fail('valid conversion must work')};
  history.observe('one',profile,false);
- runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
+ runInNewContext(['agentValues','agentLink','baseChain','projectionPending','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
  context.copyAgentRole('custom');
  assert.equal(context.state.poolPanel,false,'conversion must activate the profile Undo/Save scope');
  assert.deepEqual(Array.from(profile.task.agentModelOverrides.custom),['p/deepseek','mana-pool/free-fast','p/extra']);
@@ -191,7 +205,7 @@ test('copying an agent refuses to silently add default fallbacks or truncate a l
  for(const long of [false,true]){
   const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:long?Array.from({length:30},(_,i)=>'p/'+i):[],default:['p/default']}},task:{agentModelOverrides:{custom:'@reader'}}};
   const notices=[],before=JSON.stringify(profile),context={p:()=>profile,state:{},roleKeys:['reader'],modeOff:()=>false,chain:()=>[profile.modelRoles.reader,...profile.retry.fallbackChains.reader],poolName:()=>undefined,notify:s=>notices.push(s)};
-  runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
+  runInNewContext(['agentValues','agentLink','baseChain','projectionPending','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
   context.copyAgentRole('custom');assert.equal(JSON.stringify(profile),before);assert.equal(notices.length,1);
   assert.match(notices[0],long?/30 CUTS/:/default/);
  }
@@ -201,7 +215,7 @@ test('agent conversion waits for OFF preview and rejects an OFF singleton with d
  const profile={modelRoles:{reader:'p/a'},retry:{fallbackChains:{reader:['p/deepseek'],default:['p/default']}},task:{agentModelOverrides:{custom:'@reader'}}};
  let pending=true;const notices=[],before=JSON.stringify(profile),context={p:()=>profile,state:{profile:'one'},roleKeys:['reader'],modeOff:()=>true,
   modeView:()=>({}),diff:()=>[{}],activePlan:()=>pending?{pending:true}:{data:{}},chain:()=>['p/a'],poolName:()=>undefined,notify:s=>notices.push(s)};
- runInNewContext(['agentValues','agentLink','baseChain','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
+ runInNewContext(['agentValues','agentLink','baseChain','projectionPending','copyAgentRole'].map(appFunction).join('\n'),roleContext(context));
  context.copyAgentRole('custom');assert.match(notices.pop(),/Дочекайся/);
  pending=false;context.copyAgentRole('custom');assert.match(notices.pop(),/default/);assert.equal(JSON.stringify(profile),before);
 });
@@ -228,7 +242,9 @@ test('operator preferences no longer persist the removed meter scale',()=>{
  let saved;
  const context={state:{meters:'full',health:false,drawerHeight:280},localStorage:{setItem:(key,value)=>{assert.equal(key,'mana-operator');saved=JSON.parse(value);}}};
  runInNewContext(appFunction('storeOperator'),context);context.storeOperator();
- assert.deepEqual(saved,{health:false,drawerHeight:280});
+ assert.deepEqual(saved,{health:false,drawerHeight:280,drawerResized:true});
+ context.state.drawerHeight=undefined;context.storeOperator();
+ assert.deepEqual(saved,{health:false},'no user resize, no stored height');
 });
 
 test('rerender restores the same LCD dial rather than switching foreground to background',()=>{
@@ -241,22 +257,28 @@ test('rerender restores the same LCD dial rather than switching foreground to ba
  }
 });
 
-function drawerHarness(preferred=500){
- const events={},properties={},attrs={},captures=new Set(),stored=[];
+function drawerHarness(preferred=500,{innerWidth=1280,innerHeight=900,scrollbar=0,cssMax=Infinity,dock=null}={}){
+ const events={},properties={},attrs={},captures=new Set(),stored=[],page={};
  const surface={left:34,right:1246,top:400},state={drawerHeight:preferred};
- const drawer={style:{},getBoundingClientRect:()=>({height:parseFloat(properties['--cuts-height'])}),querySelector:key=>({offsetHeight:key==='.drawer-head'?40:50})};
+ // A fixed drawer: its containing block is the window minus a classic scrollbar.
+ const drawer={style:{},getBoundingClientRect:()=>({height:parseFloat(properties['--cuts-height']),right:context.window.innerWidth-scrollbar-parseFloat(drawer.style.right||'16px')}),querySelector:key=>({offsetHeight:key==='.drawer-head'?40:50})};
  const grip={id:'cuts-resize',parentElement:drawer,focus:()=>{},closest:()=>grip,setAttribute:(key,value)=>{attrs[key]=value;}};
+ const dockNode={offsetHeight:dock?.height||0,getBoundingClientRect:()=>surface};
  const context={state,root:{style:{setProperty:(key,value)=>{properties[key]=value;}},
   addEventListener:(key,handler)=>{events[key]=handler;},setPointerCapture:id=>captures.add(id),
   hasPointerCapture:id=>captures.has(id),releasePointerCapture:id=>captures.delete(id)},
-  win:{querySelector:key=>key==='.cuts-drawer'?drawer:key==='#cuts-resize'?grip:{getBoundingClientRect:()=>surface}},
-  window:{innerWidth:1280,innerHeight:900,addEventListener:()=>{}},getComputedStyle:()=>({bottom:'12px'}),
+  win:{querySelector:key=>key==='.cuts-drawer'?drawer:key==='#cuts-resize'?grip:key==='.operator-dock'?dockNode:{getBoundingClientRect:()=>surface}},
+  window:{innerWidth,innerHeight,addEventListener:()=>{}},
+  getComputedStyle:node=>node===dockNode?{position:dock?'sticky':'relative',top:(dock?.top??0)+'px'}:{bottom:'12px',right:drawer.style.right||'16px',maxHeight:Number.isFinite(cssMax)?cssMax+'px':'none'},
   render:()=>{},localStorage:{setItem:(_key,value)=>stored.push(JSON.parse(value))}};
+ // The page scroller: its client box excludes the classic scrollbar and follows the window.
+ context.document={documentElement:{get clientWidth(){return context.window.innerWidth-scrollbar;},get clientHeight(){return context.window.innerHeight;},
+  style:{setProperty:(key,value)=>{page[key]=value;},removeProperty:key=>{delete page[key];}}}};
  const start=source.indexOf(' let drawerGesture=null;'),end=source.indexOf('\n function placeCut(',start);
  runInNewContext(source.slice(start,end)+'\n'+appFunction('storeOperator'),context);
  context.resizeDrawer(state.drawerHeight);
  const event=(pointerId,clientY)=>({pointerId,clientY,button:0,target:grip,preventDefault:()=>{}});
- return {context,state,surface,drawer,grip,properties,attrs,stored,events,event};
+ return {context,state,surface,drawer,grip,properties,attrs,stored,events,event,page};
 }
 
 test('CUTS keeps its chosen height across opening positions and temporary viewport limits',()=>{
@@ -310,7 +332,7 @@ test('resetting a built-in role creates removals and Undo restores its assignmen
  const profile=structuredClone(baseline),context=roleContext({builtinRoles:[{id:'smol'}],state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},copy:structuredClone,modeSettings:()=>profile.forgeMode,renderCache:null,
   render:()=>history.observe('standard',profile,true,baseline)});
- runInNewContext(['resetRole','workers','diff'].map(appFunction).join('\n'),context);
+ context.focusLane=()=>{};runInNewContext(['resetRole','workers','diff'].map(appFunction).join('\n'),context);
  history.observe('standard',profile,false);context.resetRole('smol');
  assert.deepEqual(Array.from(context.diff('standard'),v=>JSON.parse(JSON.stringify(v))),[
   {path:['modelRoles','smol'],remove:true},{path:['retry','fallbackChains','smol'],remove:true}]);
@@ -334,7 +356,7 @@ test('built-in agents display native defaults without materializing override lis
  const builtinAgents=[{id:'scout',model:'@smol',description:'Read only'},{id:'security-reviewer',model:null},{id:'task',model:'@task'}];
  const profile={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{custom:['p/unknown']}}},before=JSON.stringify(profile);
  const context=roleContext({source:{agents:builtinAgents},p:()=>profile,roleKeys:['smol','task'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
- runInNewContext(['workers','agentValues','agentTier','agentName','automaticSlot','agentDefaultTrack','baseChain','vibeAlias','oldSetChain'].map(appFunction).join('\n'),context);
+ context.chainNotes=[];runInNewContext(['workers','agentValues','agentTier','agentName','automaticSlot','agentDefaultTrack','aliasRole','resolveAlias','baseChain','vibeAlias','oldSetChain','agentFromResolved','writeAgent'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.workers()),['scout','security-reviewer','task','custom']);
  for(const mobile of [false,true]){
   const html=context.agentDefaultTrack('scout',mobile);
@@ -351,7 +373,7 @@ test('resetting a built-in agent emits removal and supports Undo and preset inhe
  const baseline={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{scout:['p/own']}},forgeMode:{overrides:{'vibe:scout':['p/alt']}}};
  const profile=structuredClone(baseline),context=roleContext({source:{agents:[{id:'scout',model:'@smol'}]},state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>profile.forgeMode,copy:structuredClone,render:()=>{},renderCache:null});
- runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
+ context.focusLane=()=>{};runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
  const {ForgeHistory}=require('./static/tape.js'),history=new ForgeHistory();history.observe('standard',profile,false);
  context.resetAgent('scout');history.observe('standard',profile,true,baseline);
  assert.equal(profile.task.agentModelOverrides.scout,undefined);assert.equal(profile.modelRoles.smol,'p/fast');
@@ -388,7 +410,7 @@ test('pool picker and tap insertion accept more than 30 FREE CUTS and still reje
   chain:role=>[...poolDraft[role]],poolName:()=>null,modeOff:()=>false,routeWarning:()=>false,
   notify:s=>notices.push(s),narrowSurface:()=>false,short:s=>s,providerName:s=>s,render:()=>{}};
  roleContext(context);
-  runInNewContext(['acceptsRoleModel','setChain','commitCut'].map(appFunction).join('\n'),context);
+  runInNewContext(['acceptsRoleModel','thinkingOff','withNotes','setChain','carryEffort','commitCut'].map(appFunction).join('\n'),context);
  context.commitCut(routes[30],{role:'free-good',group:'pool',index:30,profile:'standard',expected:null});
  assert.equal(poolDraft['free-good'].length,31);assert.equal(poolDraft['free-good'][30],routes[30]);
  context.setChain('free-good',routes,'pool');assert.equal(poolDraft['free-good'].length,40);
@@ -423,7 +445,7 @@ test('removing an orphaned agent override emits a removal',()=>{
  const baseline={modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{gone:['p/old']}}};
  const profile=structuredClone(baseline),context=roleContext({source:{agents:[]},state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>({overrides:{}}),copy:structuredClone,render:()=>{},renderCache:null});
- runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
+ context.focusLane=()=>{};runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
  context.resetAgent('gone');
  assert.equal(profile.task.agentModelOverrides.gone,undefined);
  assert.ok(context.diff('standard').some(c=>c.remove&&c.path.join('.')==='task.agentModelOverrides.gone'));
@@ -432,6 +454,7 @@ test('removing an orphaned agent override emits a removal',()=>{
 
 test('off is separate from supported reasoning efforts in every CUT select',()=>{
  const context={catalogMap:new Map([['p/model',{reasoning:true,thinking:['medium','xhigh']}],['p/duplicate',{thinking:['off','medium']}],['p/plain',{reasoning:false}]])};
+ context.esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  runInNewContext(appFunction('options'),context);
  const values=(value,raw)=>Array.from(context.options(value,raw).matchAll(/value="([^" ]*)"/g),m=>m[1]);
  assert.deepEqual(values('off','p/model'),['','off','medium','xhigh']);
@@ -440,4 +463,277 @@ test('off is separate from supported reasoning efforts in every CUT select',()=>
  assert.deepEqual(values('','p/plain'),['','off']);
  assert.ok(values('','p/unknown').includes('off'));
  assert.ok(values('high','p/model').includes('high'),'retain a saved unsupported value for manual correction');
+});
+
+// Regressions for the lane-edit, drawer and focus fixes (review 2026-10-12).
+test('BUG2-A: copying one CUT into a role does not overwrite a diverged agent list with the whole role lane',()=>{
+ const profile={modelRoles:{composer:'p/ds'},retry:{fallbackChains:{composer:['p/atlas','p/good','p/fast']}},
+  task:{agentModelOverrides:{team:['@composer','p/fast'],mirror:['@composer','p/atlas','p/good','p/fast']}}};
+ const context=chainContext({p:()=>profile,state:{syncVibe:true}});
+ assert.equal(context.setChain('composer',['p/ds','p/atlas','p/good','p/fast','p/canvas']),true);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['@composer','p/fast'],'agent-specific list must not become a copy of the role lane');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.mirror),['@composer','p/atlas','p/good','p/fast','p/canvas'],'a list that mirrored the role may follow it');
+ assert.match(context.state.opFeedback,/агентах: mirror$/);
+});
+
+test('BUG2-D/H3: an agent edit keeps its @role reference where it ends up and never writes the role',()=>{
+ const profile={modelRoles:{composer:'p/ds'},retry:{fallbackChains:{}},task:{agentModelOverrides:{team:['@composer','p/fast']}}};
+ const context=chainContext({p:()=>profile});
+ // Lane drag onto the head: transferCut(chain(src), ['p/ds','p/fast'], i, 0, false)
+ context.setChain('team',['p/canvas','p/ds','p/fast'],'vibe');
+ assert.equal(profile.modelRoles.composer,'p/ds','the role lane keeps its primary');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['p/canvas','@composer','p/fast']);
+ // Shift+← on FREE FAST: a reorder moves the reference, not the role's model.
+ profile.task.agentModelOverrides.team=['@composer','p/fast'];
+ context.setChain('team',['p/fast','p/ds'],'vibe');
+ assert.equal(profile.modelRoles.composer,'p/ds');assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['p/fast','@composer']);
+ // Replacing the head in place (pick, thinking, collection) makes an own CUT and says so.
+ profile.task.agentModelOverrides.team=['@composer','p/fast'];context.state.opFeedback='';
+ context.setChain('team',['p/ds:off','p/fast'],'vibe');
+ assert.equal(profile.modelRoles.composer,'p/ds');assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['p/ds:off','p/fast']);
+ assert.match(context.state.opFeedback,/@composer у team замінено власним CUT; роль не змінена/);
+});
+
+test('L1: removing the last own candidate turns the list into role inheritance, and the line says so',()=>{
+ const profile={modelRoles:{composer:'p/ds'},retry:{fallbackChains:{composer:['p/x']}},task:{agentModelOverrides:{team:['@composer','p/fast']}}};
+ const context=chainContext({p:()=>profile});
+ context.setChain('team',['p/ds'],'vibe');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['@composer']);
+ assert.match(context.state.opFeedback,/team тепер успадковує @composer разом із резервами ролі/);
+});
+
+function offLane(){
+ // composer: [DeepSeek, atlas, FREE GOOD]; OFF puts the profile replacements on DeepSeek's place.
+ const profile={modelRoles:{composer:'p/deepseek'},retry:{fallbackChains:{composer:['p/atlas','mana-pool/free-good']}},task:{agentModelOverrides:{}},
+  forgeMode:{mode:'no-deepseek',alternatives:['p/r1','p/r2'],overrides:{}}};
+ const view={routes:['p/r1','p/r2','p/atlas','mana-pool/free-good'],substituted:true,paused:[{index:0,route:'p/deepseek',primary:true}],
+  refs:[{kind:'replacement',route:'p/r1',key:'role:composer'},{kind:'replacement',route:'p/r2',key:'role:composer'},{kind:'base',index:1,route:'p/atlas',key:'role:composer'},{kind:'base',index:2,route:'mana-pool/free-good',key:'role:composer',pool:'mana-pool/free-good'}]};
+ const context=chainContext({p:()=>profile,state:{syncVibe:false},modeView:()=>view,modeSettings:()=>profile.forgeMode,poolName:r=>r.startsWith('mana-pool/')?r.slice(10):undefined});
+ return {profile,view,context,replacements:()=>Array.from(profile.forgeMode.overrides['role:composer']||profile.forgeMode.alternatives),chain:()=>[profile.modelRoles.composer,...profile.retry.fallbackChains.composer]};
+}
+
+test('BUG2-C: a drop on a DeepSeek-OFF lane adds one CUT instead of copying the whole visible lane into replacements',()=>{
+ const profile={modelRoles:{composer:'p/deepseek'},retry:{fallbackChains:{composer:['p/atlas','mana-pool/free-good']}},task:{agentModelOverrides:{}},
+  forgeMode:{mode:'no-deepseek',alternatives:['p/r1','p/r2'],overrides:{}}};
+ const view={routes:['p/r1','p/r2','p/atlas','mana-pool/free-good'],substituted:true,
+  refs:[{kind:'replacement'},{kind:'replacement'},{kind:'base',index:1},{kind:'base',index:2}]};
+ const context=chainContext({p:()=>profile,state:{syncVibe:false},modeView:()=>view,modeSettings:()=>profile.forgeMode,modeScope:(r,g)=>g+':'+r});
+ context.setChain('composer',[...view.routes,'p/canvas']);   // "+ резерв" drop
+ const replacements=profile.forgeMode.overrides['role:composer']||profile.forgeMode.alternatives;
+ assert.ok(!replacements.includes('p/atlas')&&!replacements.includes('mana-pool/free-good'),'base CUTS must not be copied into the replacement list: '+JSON.stringify(replacements));
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.composer),['p/atlas','mana-pool/free-good','p/canvas'],'the dropped CUT becomes a real fallback');
+});
+
+test('BUG2-C: OFF edits route each CUT by its source and the dropped CUT survives switching ON',()=>{
+ let lane=offLane();
+ // Reordering replacements stays in the replacement list; the real chain is untouched.
+ lane.context.setChain('composer',['p/r2','p/r1','p/atlas','mana-pool/free-good'],'role',{moved:0});
+ assert.deepEqual(lane.replacements(),['p/r2','p/r1']);assert.deepEqual(lane.chain(),['p/deepseek','p/atlas','mana-pool/free-good']);
+ // A drop before the replacement block goes before DeepSeek in the real chain.
+ lane=offLane();lane.context.setChain('composer',['p/new','p/r1','p/r2','p/atlas','mana-pool/free-good']);
+ assert.deepEqual(lane.chain(),['p/new','p/deepseek','p/atlas','mana-pool/free-good']);assert.deepEqual(lane.replacements(),['p/r1','p/r2']);
+ // A drop inside the block is a normal CUT right after it, never a replacement.
+ lane=offLane();lane.context.setChain('composer',['p/r1','p/new','p/r2','p/atlas','mana-pool/free-good']);
+ assert.deepEqual(lane.chain(),['p/deepseek','p/new','p/atlas','mana-pool/free-good']);assert.deepEqual(lane.replacements(),['p/r1','p/r2']);
+ // A drop on a base CUT inserts before it.
+ lane=offLane();lane.context.setChain('composer',['p/r1','p/r2','p/atlas','p/new','mana-pool/free-good']);
+ assert.deepEqual(lane.chain(),['p/deepseek','p/atlas','p/new','mana-pool/free-good']);
+ // A collection replacement of a ⇄ CUT replaces it in the replacement list.
+ lane=offLane();lane.context.setChain('composer',['p/r1','p/other','p/atlas','mana-pool/free-good']);
+ assert.deepEqual(lane.replacements(),['p/r1','p/other']);assert.deepEqual(lane.chain(),['p/deepseek','p/atlas','mana-pool/free-good']);
+ // Thinking on a base CUT changes that CUT in the real chain.
+ lane=offLane();lane.context.setChain('composer',['p/r1','p/r2','p/atlas:high','mana-pool/free-good']);
+ assert.deepEqual(lane.chain(),['p/deepseek','p/atlas:high','mana-pool/free-good']);assert.equal(lane.profile.forgeMode.overrides['role:composer'],undefined);
+ // Removing a replacement edits only the replacement list.
+ lane=offLane();lane.context.setChain('composer',['p/r2','p/atlas','mana-pool/free-good']);
+ assert.deepEqual(lane.replacements(),['p/r2']);assert.deepEqual(lane.chain(),['p/deepseek','p/atlas','mana-pool/free-good']);
+ // A base CUT moved into the block crosses it as a whole; a replacement cannot leave its block.
+ lane=offLane();lane.context.setChain('composer',['p/r1','p/atlas','p/r2','mana-pool/free-good'],'role',{moved:1});
+ assert.deepEqual(lane.chain(),['p/atlas','p/deepseek','mana-pool/free-good']);assert.match(lane.context.state.opFeedback,/одним блоком/);
+ lane=offLane();assert.equal(lane.context.setChain('composer',['p/r1','p/atlas','p/r2','mana-pool/free-good'],'role',{moved:2}),false);
+ assert.deepEqual(lane.chain(),['p/deepseek','p/atlas','mana-pool/free-good']);assert.deepEqual(lane.replacements(),['p/r1','p/r2']);assert.match(lane.context.notices.at(-1),/одним блоком/);
+ // A dropped CUT that is already a ⇄ replacement (transferCut moves the exact route) still becomes a real fallback.
+ lane=offLane();lane.context.setChain('composer',['p/r1','p/atlas','mana-pool/free-good','p/r2'],'role',{inserted:3});
+ assert.deepEqual(lane.chain(),['p/deepseek','p/atlas','mana-pool/free-good','p/r2']);assert.deepEqual(lane.replacements(),['p/r1','p/r2'],'the replacement list keeps it');
+ assert.equal(lane.profile.forgeMode.overrides['role:composer'],undefined);
+});
+
+test('BUG2-C: an OFF agent lane keeps its @role head and role-owned replacements',()=>{
+ const profile={modelRoles:{composer:'p/deepseek'},retry:{fallbackChains:{}},task:{agentModelOverrides:{team:['@composer','p/fast']}},forgeMode:{mode:'no-deepseek',alternatives:['p/r1','p/r2'],overrides:{}}};
+ const view={routes:['p/r1','p/r2','p/fast'],alias:'@composer',substituted:true,paused:[{index:0,route:'p/deepseek',primary:true}],
+  refs:[{kind:'base',index:0,route:'p/deepseek',key:'vibe:team'},{kind:'replacement',route:'p/r2',key:'role:composer'},{kind:'base',index:1,route:'p/fast',key:'vibe:team'}]};
+ const context=chainContext({p:()=>profile,modeView:()=>view,modeSettings:()=>profile.forgeMode});
+ context.setChain('team',['p/r1','p/r2','p/fast','p/canvas'],'vibe');
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['@composer','p/fast','p/canvas']);
+ assert.equal(profile.modelRoles.composer,'p/deepseek');assert.deepEqual(profile.forgeMode.overrides,{});
+});
+
+test('BUG2-B: default fallbacks are marked inherited and an edit that copies them says so',()=>{
+ const profile={modelRoles:{plan:'p/a',image:'p/img'},retry:{fallbackChains:{default:['p/x','p/y']}},task:{agentModelOverrides:{}}};
+ const context=chainContext({p:()=>profile,builtinRoles:[{id:'default'},{id:'plan'},{id:'image',defaultFallbacks:false}]},['inheritedSlot']);
+ assert.deepEqual([0,1,2].map(i=>context.inheritedSlot('plan',i)),[false,true,true]);
+ assert.equal(context.inheritedSlot('default',1),false);assert.equal(context.inheritedSlot('image',1),false);
+ // Replacing only the primary keeps following default.
+ context.setChain('plan',['p/b','p/x','p/y']);
+ assert.equal(profile.modelRoles.plan,'p/b');assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'plan'));assert.equal(context.state.opFeedback,undefined);
+ // Adding a fallback has to copy the inherited chain: one explicit, reported change.
+ context.setChain('plan',['p/b','p/x','p/y','p/new']);
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.plan),['p/x','p/y','p/new']);
+ assert.match(context.state.opFeedback,/Резерви default скопійовано в plan/);
+ assert.equal(context.inheritedSlot('plan',1),false,'own fallbacks are no longer inherited');
+ // In OFF, only base CUTS from the default chain are inherited.
+ delete profile.retry.fallbackChains.plan;
+ context.modeView=()=>({refs:[{kind:'replacement'},{kind:'base',index:1},{kind:'base',index:2}]});
+ assert.deepEqual([0,1,2].map(i=>context.inheritedSlot('plan',i)),[false,true,true]);
+ context.modeView=()=>({refs:[{kind:'base',index:0},{kind:'replacement'},{kind:'base',index:1}]});
+ assert.deepEqual([0,1,2].map(i=>context.inheritedSlot('plan',i)),[false,false,true]);
+});
+
+test('H4: roles without thinking get no effort suffix from a drop, pick or replacement',()=>{
+ const builtinRoles=[{id:'judge',thinking:false},{id:'composer'}];
+ const profile={modelRoles:{judge:'p/j',composer:'p/c'},retry:{fallbackChains:{judge:['p/old:high']}},task:{agentModelOverrides:{}},forgeMode:{alternatives:[],overrides:{}}};
+ const context=chainContext({p:()=>profile,builtinRoles,split:r=>{const m=r.match(/:(off|low|high)$/);return {raw:m?r.slice(0,-m[0].length):r,effort:m?.[1]||''};},modeSettings:()=>profile.forgeMode},['chain']);
+ context.setChain('judge',['p/j','p/old:high','p/atlas:high']);
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.judge),['p/old:high','p/atlas'],'only the inserted CUT is normalised; a saved value stays visible for manual correction');
+ assert.match(context.state.opFeedback,/thinking прибрано: judge/);
+ context.setChain('judge',['p/new:off','p/old:high','p/atlas']);assert.equal(profile.modelRoles.judge,'p/new');
+ context.setChain('composer',['p/c','p/atlas:high']);assert.deepEqual(Array.from(profile.retry.fallbackChains.composer),['p/atlas:high']);
+ context.setChain('role:judge',['p/alt:low'],'alternatives');assert.deepEqual(Array.from(profile.forgeMode.overrides['role:judge']),['p/alt']);
+});
+
+test('M11/H4: a replacement keeps thinking off and only efforts the new model lists',()=>{
+ const context={catalogMap:new Map([['p/listed',{thinking:['low','high']}],['p/ext',{thinking:{mode:'effort',efforts:['medium']}}],['p/plain',{reasoning:false}]])};
+ runInNewContext(appFunction('carryEffort'),context);
+ assert.equal(context.carryEffort('off','p/plain'),'off');assert.equal(context.carryEffort('off','p/unknown'),'off');
+ assert.equal(context.carryEffort('high','p/listed'),'high');assert.equal(context.carryEffort('medium','p/listed'),'');
+ assert.equal(context.carryEffort('medium','p/ext'),'medium');assert.equal(context.carryEffort('','p/listed'),'');
+});
+
+test('H2: a failed OFF preview unlocks editing, a pending one refuses index edits without mutating',()=>{
+ const profile={modelRoles:{composer:'p/a'},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}};
+ let plan={pending:true};
+ const context=chainContext({p:()=>profile,state:{profile:'standard'},modeOff:()=>true,diff:()=>[{}],activePlan:()=>plan},['projectionPending','pickerActionsPending']);
+ delete context.projectionPending;runInNewContext(['projectionPending','pickerActionsPending'].map(appFunction).join('\n'),context);
+ assert.equal(context.projectionPending(),true);
+ assert.equal(context.setChain('composer',['p/a','p/b']),false);assert.deepEqual(profile.retry.fallbackChains,{});assert.match(context.notices.at(-1),/розраховується/);
+ context.state.picker={group:'role'};assert.equal(context.pickerActionsPending(),true);
+ plan={error:'422'};assert.equal(context.projectionPending(),false,'an error never leaves the tape locked');assert.equal(context.pickerActionsPending(),false);
+ assert.equal(context.setChain('composer',['p/a','p/b']),true);assert.deepEqual(Array.from(profile.retry.fallbackChains.composer),['p/b']);
+ plan=null;assert.equal(context.projectionPending(),true,'an edit before its preview starts still waits');
+ context.diff=()=>[];assert.equal(context.projectionPending(),false);
+});
+
+test('M9: the DeepSeek replacement list rejects paid DeepSeek in either mode',()=>{
+ const settings={alternatives:['p/a'],overrides:{}},context=chainContext({p:()=>({}),modeSettings:()=>settings});
+ assert.equal(context.setChain('profile',['p/a','p/deepseek-v4'],'alternatives'),false);
+ assert.deepEqual(settings.alternatives,['p/a']);assert.match(context.notices.at(-1),/без платного DeepSeek/);
+ assert.equal(context.setChain('profile',['p/a','p/deepseek-free'],'alternatives'),true);
+});
+
+test('H1: a blur-time change with an unchanged query keeps the results under the pointer',()=>{
+ const calls=[],state={picker:{query:'Research',limit:80},cutQuery:'Swift',catalogQuery:'Canvas',query:'x',analyze:'kept',page:2};
+ const context={state,composing:false,refreshSearch:id=>calls.push(id)};
+ runInNewContext(appFunction('searchInput'),context);
+ for(const [id,value] of [['picker-search','Research'],['cut-query','Swift'],['catalog-query','Canvas'],['role-query','x']])context.searchInput({id,value},true);
+ assert.deepEqual(calls,[]);assert.equal(state.picker.limit,80);assert.equal(state.analyze,'kept');assert.equal(state.page,2);
+ context.searchInput({id:'cut-query',value:'Swift D'},true);assert.deepEqual(calls,['cut-query'],'a changed value still refreshes');
+});
+
+test('M7: availability refresh is not a profile change',()=>{
+ const base={modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{}},forgeMode:{mode:'no-deepseek'}};
+ const context={original:{standard:base},profiles:{standard:{...structuredClone(base),forgeRefresh:3}},renderCache:null,knownAgents:()=>[],
+  state:{profile:'standard',modeRefresh:{}},source:{revisions:{standard:'r'}},modeSettings:()=>base.forgeMode,copy:structuredClone};
+ runInNewContext(['workers','diff','modeBody','modeKey'].map(appFunction).join('\n'),context);
+ assert.deepEqual(Array.from(context.diff('standard')),[]);
+ const before=context.modeKey();context.state.modeRefresh.standard=1;assert.notEqual(context.modeKey(),before,'↻ asks for a new projection');
+});
+
+test('M8/M12: select options are escaped and the profile list keeps a stable order',()=>{
+ const context={esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),catalogMap:new Map(),
+  state:{profile:'long-tape'},profileKeys:['standard','long-tape','without-deepseek'],prettyProfile:s=>s==='standard'?'Standard':s};
+ runInNewContext(['options','profileOptions'].map(appFunction).join('\n'),context);
+ assert.doesNotMatch(context.options('x"><b>',''),/<b>/);
+ assert.deepEqual([...context.profileOptions().matchAll(/value="([^"]+)"/g)].map(m=>m[1]),['standard','long-tape','without-deepseek']);
+ assert.match(context.profileOptions(),/value="long-tape" selected/);
+});
+
+test('M10: an armed CUT is placed even after the drawer filters hide it',()=>{
+ const committed=[],notices=[];
+ const context={state:{profile:'standard',freeCuts:true,cutQuery:'nothing'},catalogMap:new Map([['p/swift',{provider:'p',available:true}],['p/gone',{provider:'p',available:true,status:'missing'}]]),
+  source:{providers:[]},poolName:()=>undefined,routeWarning:r=>r==='p/gone',chain:()=>['p/old'],commitCut:(route,target)=>committed.push([route,target.expected]),notify:s=>notices.push(s)};
+ runInNewContext(appFunction('placeCut'),context);
+ context.placeCut('p/swift',{role:'curator',index:0,group:'role'});assert.deepEqual(committed,[['p/swift','p/old']]);
+ context.placeCut('p/gone',{role:'curator',index:0,group:'role'});assert.equal(committed.length,1);assert.match(notices[0],/недоступний/);
+});
+
+test('M5/M6: focus returns to real controls after a re-render',()=>{
+ const context={CSS:{escape:s=>s}};
+ runInNewContext(appFunction('focusSelector'),context);
+ const control=attrs=>({matches:()=>false,closest:()=>null,hasAttribute:key=>Object.hasOwn(attrs,key),getAttribute:key=>attrs[key]});
+ assert.equal(context.focusSelector(control({'data-profile-mode':'no-deepseek'})),'[data-profile-mode]','the switch flips its value');
+ assert.equal(context.focusSelector(control({'data-history-bin':'4'})),'[data-history-bin="4"]');
+ assert.equal(context.focusSelector(control({'data-provider-toggle':'demo'})),'[data-provider-toggle="demo"]');
+ assert.equal(context.focusSelector(control({'data-catalog-provider':'demo'})),'#catalog-provider');
+ assert.equal(context.focusSelector(control({'data-action':'','data-agent-copy':'team'})),'[data-agent-copy="team"]','an empty data-action does not send focus to the first such key');
+ const seen=[],button={getClientRects:()=>[1],focus:()=>seen.push('button')};
+ const picker={win:{querySelectorAll:selector=>{seen.push(selector);return selector.startsWith('button[')?[button]:[{getClientRects:()=>[1],focus:()=>seen.push('div')},button];}},CSS:{escape:s=>s},chain:()=>[]};
+ runInNewContext(appFunction('pickerFocus'),picker);
+ assert.equal(picker.pickerFocus({role:'judge',index:0,group:'role'}),true);assert.equal(seen.at(-1),'button');assert.match(seen[0],/^button\[data-edit="judge"\]\[data-index="0"\]/);
+});
+
+test('L4/L5: @role:effort aliases resolve with their thinking and a route without provider stays whole',()=>{
+ const context={poolName:()=>undefined,p:()=>({modelRoles:{default:'p/model:low'}})};
+ runInNewContext(['split','aliasRole','resolveAlias'].map(appFunction).join('\n'),context);
+ assert.equal(context.resolveAlias('@default:high'),'p/model:high');assert.equal(context.resolveAlias('@default'),'p/model:low');
+ assert.equal(context.resolveAlias('@missing'),'@missing');assert.equal(context.aliasRole('@default:high'),'default');
+ assert.deepEqual({...context.split('gpt-4o')},{raw:'gpt-4o',provider:'',id:'gpt-4o',effort:''});
+ assert.deepEqual({...context.split('p/m:off')},{raw:'p/m',provider:'p',id:'m',effort:'off'});
+});
+
+test('L6: tariff ticks follow local hours in a half-hour time zone',()=>{
+ const tz=process.env.TZ;process.env.TZ='Asia/Kolkata';
+ try{
+  const context={resetCountdown:()=> '↻ 1г',esc:s=>String(s),ManaDisplay:{colourControl:()=>''},Intl,Date};
+  runInNewContext(appFunction('tariffTimeline'),context);
+  const html=context.tariffTimeline(Date.UTC(2026,9,12,13,40));   // 19:10 in Kolkata
+  const ticks=[...html.matchAll(/<span class="[^"]*" style="left:[^%]+%"><b>(\d\d)<\/b>/g)].map(m=>m[1]);
+  assert.equal(ticks[0],'12');assert.ok(ticks.every(t=>Number(t)%4===0),'ticks sit on whole local hours: '+ticks);
+  assert.match(html,/зараз 19:10/);
+  const ranges=[...html.matchAll(/tariff-range (peak|offpeak)" style="left:([\d.e-]+)%;width:([\d.e-]+)%/g)].map(m=>[m[1],Number(m[2]),Number(m[3])]);
+  assert.equal(ranges[0][1],0);assert.ok(Math.abs(ranges.reduce((n,r)=>n+r[2],0)-100)<1e-6,'ranges cover the axis exactly');
+ }finally{if(tz===undefined)delete process.env.TZ;else process.env.TZ=tz;}
+});
+
+test('L9: queued background work waits for the tab or the field instead of polling every 200 ms',()=>{
+ const timers=[];
+ const context={pendingModeResults:new Map(),pendingRender:true,backgroundRefreshPending:true,backgroundReloading:false,backgroundTimer:null,interactionBusy:()=>true,
+  document:{hidden:true,activeElement:null},setTimeout:()=>timers.push(1),clearTimeout:()=>{},pollState:()=>{}};
+ runInNewContext(appFunction('flushBackgroundWork'),context);
+ context.flushBackgroundWork();assert.equal(timers.length,0,'hidden tab');
+ context.document={hidden:false,activeElement:{matches:s=>s==='input,textarea'}};context.flushBackgroundWork();assert.equal(timers.length,0,'typing');
+ context.document={hidden:false,activeElement:{matches:()=>false}};context.flushBackgroundWork();assert.equal(timers.length,1,'other busy states still retry');
+});
+
+test('BUG1-1: the default CUTS height is not frozen from the first window that opened the drawer',()=>{
+ const h=drawerHarness(null,{innerHeight:500});
+ assert.equal(h.attrs['aria-valuenow'],215,'a small window shows a smaller default');
+ h.context.storeOperator();
+ assert.ok(!Number.isFinite(h.stored.at(-1).drawerHeight),'an untouched default must not be persisted as a user choice');
+ h.context.window.innerHeight=1080;h.context.resizeDrawer(h.state.drawerHeight);
+ assert.equal(h.attrs['aria-valuenow'],290,'a larger window gets the normal default again');
+});
+
+test('BUG1-5: the drawer right edge follows the deck, not the scrollbar-inclusive innerWidth',()=>{
+ const h=drawerHarness(300,{innerWidth:1280,scrollbar:15});
+ assert.equal(h.drawer.style.right,'19px');
+});
+
+test('BUG1-2/4/6: the CSS max-height and the sticky dock bound the drawer, and scrolling keeps targets above it',()=>{
+ let h=drawerHarness(2000,{innerHeight:900,cssMax:780});
+ assert.equal(h.attrs['aria-valuemax'],780,'JS follows the computed CSS max-height');assert.equal(h.attrs['aria-valuenow'],780);
+ h=drawerHarness(2000,{innerHeight:900,dock:{top:8,height:72}});
+ assert.equal(h.attrs['aria-valuemax'],900-12-88,'the sticky dock stays uncovered');
+ h.events.keydown({key:'End',target:h.grip,preventDefault:()=>{}});assert.equal(h.attrs['aria-valuenow'],800);
+ assert.equal(h.page['scroll-padding-bottom'],(12+800+12)+'px');
+ h.context.win.querySelector=()=>null;h.context.resizeDrawer(300);assert.equal(h.page['scroll-padding-bottom'],undefined,'a closed drawer leaves no padding');
 });

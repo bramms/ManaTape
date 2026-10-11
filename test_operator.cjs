@@ -57,7 +57,7 @@ test('free routes need their own quota and multiple accounts stay unassigned',()
  assert.equal(op.health({...m,free:false},[r,r],[],now).kind,'unknown');
 });
 
-test('local GPUs have a neutral non-subscription state, without claiming uptime',()=>{assert.equal(op.health({provider:'my-local',id:'local',local:true},[],[],now).kind,'local');assert.equal(op.health({provider:'my-local',id:'local',local:true},[],['my-local'],now).kind,'empty');});
+test('local GPUs have a neutral non-subscription state, without claiming uptime',()=>{assert.equal(op.health({provider:'my-local',id:'local',local:true},[],[],now).kind,'local');assert.equal(op.health({provider:'my-local',id:'local',local:true},[],['my-local'],now).kind,'unavailable');});
 
 test('catalog evidence reports the best complete measurement and its tested effort',()=>{
  const records=[{id:'m-low',effort:'low',scores:{a:50}},{id:'m-max',effort:'max',scores:{a:90}}],weights={a:1};
@@ -115,4 +115,11 @@ test('provider evidence admits the exact zero-cost model without a free suffix',
  const verified={...model,freeEvidence:'https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash'};
  assert.equal(op.isFreeModel(verified),true);assert.equal(op.isPaidDeepSeek(route+':high',verified),false);
  for(const cost of [{},{input:0,output:1},{input:1,output:0},{input:0,output:0,cacheRead:1},{input:0,output:0,cacheWrite:1}])assert.equal(op.isFreeModel({...verified,cost}),false);
+});
+
+test('unavailable routes are not reported as an exhausted quota',()=>{
+ const reports=[{provider:'p',at:now/1000,limits:[{remaining:80}]}];
+ for(const model of [{provider:'p',id:'m',expired:true},{provider:'p',id:'m',status:'missing'}])assert.deepEqual(op.health(model,reports,[],now),{kind:'unavailable',label:'Недоступна'});
+ assert.equal(op.health({provider:'p',id:'m'},reports,['p'],now).kind,'unavailable');
+ assert.equal(op.health({provider:'p',id:'m'},[{...reports[0],limits:[{remaining:0}]}],[],now).kind,'empty');
 });
