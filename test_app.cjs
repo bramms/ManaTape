@@ -48,7 +48,7 @@ test('a background response cannot replace a draft after focus or a write change
  for(const reason of ['interaction','write']){
   let resolve,scheduled=0;
   const snapshot={base:{remote:true}},draft={local:true},context={
-   backgroundReloading:false,backgroundRefreshPending:false,writeEpoch:0,
+   backgroundReloading:false,backgroundRefreshPending:false,writeEpoch:0,stateTag:'',
    source:snapshot,profiles:{standard:draft},endpoint:x=>x,
    busy:false,interactionBusy:()=>context.busy,scheduleBackgroundWork:()=>scheduled++,
    fetch:()=>new Promise(done=>{resolve=done;})
@@ -82,7 +82,7 @@ test('pending writes block polling until every request settles, including a fail
 test('an unchanged background snapshot only advances the tariff clock, without repainting',async()=>{
  const snapshot={base:{},tariff:{at:1,next:100,peak:false},insights:{usage:{reports:[]}}};
  const fresh=structuredClone(snapshot);fresh.tariff.at=2;
- const context={backgroundReloading:false,writeEpoch:0,source:snapshot,state:{offline:false},renderedAt:Date.now(),
+ const context={backgroundReloading:false,writeEpoch:0,stateTag:'',source:snapshot,state:{offline:false},renderedAt:Date.now(),
   endpoint:x=>x,interactionBusy:()=>false,normalizeProfile:x=>x,fetch:async()=>({ok:true,json:async()=>fresh}),
   render:()=>assert.fail('unchanged polling must not render')};
  runInNewContext(appFunction('snapshotFingerprint').trim()+'\n'+appFunction('reload'),context);
@@ -258,17 +258,19 @@ test('rerender restores the same LCD dial rather than switching foreground to ba
 });
 
 function drawerHarness(preferred=500,{innerWidth=1280,innerHeight=900,scrollbar=0,cssMax=Infinity,dock=null}={}){
- const events={},properties={},attrs={},captures=new Set(),stored=[],page={};
+ const events={},properties={},attrs={},captures=new Set(),stored=[],page={},frames=[];
  const surface={left:34,right:1246,top:400},state={drawerHeight:preferred};
  // A fixed drawer: its containing block is the window minus a classic scrollbar.
- const drawer={style:{},getBoundingClientRect:()=>({height:parseFloat(properties['--cuts-height']),right:context.window.innerWidth-scrollbar-parseFloat(drawer.style.right||'16px')}),querySelector:key=>({offsetHeight:key==='.drawer-head'?40:50})};
+ const drawer={style:{},getBoundingClientRect:()=>({height:parseFloat(drawer.style.height),right:context.window.innerWidth-scrollbar-parseFloat(drawer.style.right||'16px')}),querySelector:key=>({offsetHeight:key==='.drawer-head'?40:50})};
+ const deck={style:{setProperty:(key,value)=>{deck.style[key]=value;},removeProperty:key=>{delete deck.style[key];}},getBoundingClientRect:()=>surface};
  const grip={id:'cuts-resize',parentElement:drawer,focus:()=>{},closest:()=>grip,setAttribute:(key,value)=>{attrs[key]=value;}};
  const dockNode={offsetHeight:dock?.height||0,getBoundingClientRect:()=>surface};
  const context={state,root:{style:{setProperty:(key,value)=>{properties[key]=value;}},
   addEventListener:(key,handler)=>{events[key]=handler;},setPointerCapture:id=>captures.add(id),
   hasPointerCapture:id=>captures.has(id),releasePointerCapture:id=>captures.delete(id)},
-  win:{querySelector:key=>key==='.cuts-drawer'?drawer:key==='#cuts-resize'?grip:key==='.operator-dock'?dockNode:{getBoundingClientRect:()=>surface}},
+  win:{querySelector:key=>key==='.cuts-drawer'?drawer:key==='#cuts-resize'?grip:key==='.operator-dock'?dockNode:deck},
   window:{innerWidth,innerHeight,addEventListener:()=>{}},
+  requestAnimationFrame:fn=>frames.push(fn),cancelAnimationFrame:id=>{frames[id-1]=null;},
   getComputedStyle:node=>node===dockNode?{position:dock?'sticky':'relative',top:(dock?.top??0)+'px'}:{bottom:'12px',right:drawer.style.right||'16px',maxHeight:Number.isFinite(cssMax)?cssMax+'px':'none'},
   render:()=>{},localStorage:{setItem:(_key,value)=>stored.push(JSON.parse(value))}};
  // The page scroller: its client box excludes the classic scrollbar and follows the window.
@@ -278,7 +280,9 @@ function drawerHarness(preferred=500,{innerWidth=1280,innerHeight=900,scrollbar=
  runInNewContext(source.slice(start,end)+'\n'+appFunction('storeOperator'),context);
  context.resizeDrawer(state.drawerHeight);
  const event=(pointerId,clientY)=>({pointerId,clientY,button:0,target:grip,preventDefault:()=>{}});
- return {context,state,surface,drawer,grip,properties,attrs,stored,events,event,page};
+ // Moves are coalesced to one write per animation frame.
+ const flush=()=>{for(const fn of frames.splice(0))fn?.();};
+ return {context,state,surface,drawer,deck,grip,properties,attrs,stored,events,event,page,frames,flush};
 }
 
 test('CUTS keeps its chosen height across opening positions and temporary viewport limits',()=>{
@@ -294,9 +298,13 @@ test('CUTS keeps its chosen height across opening positions and temporary viewpo
 
 test('CUTS resize starts at the visible edge, commits locally, and Escape restores the previous preference',()=>{
  const h=drawerHarness(800);h.context.window.innerHeight=500;h.context.resizeDrawer(h.state.drawerHeight);
- h.events.pointerdown(h.event(1,60));h.events.pointermove(h.event(1,100));
+ h.events.pointerdown(h.event(1,60));h.events.pointermove(h.event(1,90));h.events.pointermove(h.event(1,100));
+ assert.equal(h.attrs['aria-valuenow'],440,'a move only records the height; the write waits for the frame');
+ assert.equal(h.frames.length,1,'several moves share one animation frame');h.flush();
  assert.equal(h.attrs['aria-valuenow'],400,'drag must start from the clamped 440px edge, not the hidden 800px preference');
- h.events.pointerdown(h.event(2,100));h.events.pointermove(h.event(2,180));
+ assert.equal(h.drawer.style.height,'400px');assert.equal(h.deck.style['padding-bottom'],'424px','the deck keeps its content above the drawer');
+ assert.equal(Object.keys(h.properties).length,0,'no inherited custom property is written on the window root');
+ h.events.pointerdown(h.event(2,100));h.events.pointermove(h.event(2,180));h.flush();
  assert.equal(h.attrs['aria-valuenow'],400,'a second pointer must not replace the active resize');
  h.events.keydown({key:'Escape',preventDefault:()=>{}});
  assert.equal(h.state.drawerHeight,800);assert.equal(h.attrs['aria-valuenow'],440);assert.equal(h.stored.length,0);
@@ -694,7 +702,7 @@ test('L6: tariff ticks follow local hours in a half-hour time zone',()=>{
  const tz=process.env.TZ;process.env.TZ='Asia/Kolkata';
  try{
   const context={resetCountdown:()=> '↻ 1г',esc:s=>String(s),ManaDisplay:{colourControl:()=>''},Intl,Date};
-  runInNewContext(appFunction('tariffTimeline'),context);
+  runInNewContext(appFunction('dateFormat')+'\n'+appFunction('tariffTimeline'),context);
   const html=context.tariffTimeline(Date.UTC(2026,9,12,13,40));   // 19:10 in Kolkata
   const ticks=[...html.matchAll(/<span class="[^"]*" style="left:[^%]+%"><b>(\d\d)<\/b>/g)].map(m=>m[1]);
   assert.equal(ticks[0],'12');assert.ok(ticks.every(t=>Number(t)%4===0),'ticks sit on whole local hours: '+ticks);
@@ -736,4 +744,139 @@ test('BUG1-2/4/6: the CSS max-height and the sticky dock bound the drawer, and s
  h.events.keydown({key:'End',target:h.grip,preventDefault:()=>{}});assert.equal(h.attrs['aria-valuenow'],800);
  assert.equal(h.page['scroll-padding-bottom'],(12+800+12)+'px');
  h.context.win.querySelector=()=>null;h.context.resizeDrawer(300);assert.equal(h.page['scroll-padding-bottom'],undefined,'a closed drawer leaves no padding');
+});
+
+// A minimal DOM for the region engine: comments, elements, attributes, fragments and <template> parsing.
+function fakeDocument(){
+ const doc={activeElement:null};
+ class FakeNode{
+  constructor(nodeType){this.nodeType=nodeType;this.parentNode=null;this.childNodes=[];}
+  get firstChild(){return this.childNodes[0]||null;}
+  get nextSibling(){const s=this.parentNode?.childNodes;return s?s[s.indexOf(this)+1]||null:null;}
+  get isConnected(){let n=this;while(n.parentNode)n=n.parentNode;return n===doc.body;}
+  get firstElementChild(){return this.childNodes.find(n=>n.nodeType===1)||null;}
+  remove(){if(!this.parentNode)return;const s=this.parentNode.childNodes;s.splice(s.indexOf(this),1);this.parentNode=null;if(doc.activeElement&&!doc.activeElement.isConnected)doc.activeElement=doc.body;}
+  insertBefore(node,ref){
+   if(node.nodeType===11){for(const c of [...node.childNodes])this.insertBefore(c,ref);return node;}
+   node.remove();node.parentNode=this;const at=ref?this.childNodes.indexOf(ref):this.childNodes.length;this.childNodes.splice(at,0,node);return node;
+  }
+  replaceChildren(...nodes){for(const c of [...this.childNodes])c.remove();for(const n of nodes)this.insertBefore(n,null);}
+ }
+ class FakeElement extends FakeNode{
+  constructor(tag){super(1);this.tagName=tag.toUpperCase();this.attrs=new Map();}
+  get attributes(){return [...this.attrs].map(([name,value])=>({name,value}));}
+  getAttribute(name){return this.attrs.has(name)?this.attrs.get(name):null;}
+  setAttribute(name,value){this.attrs.set(name,String(value));}
+  removeAttribute(name){this.attrs.delete(name);}
+  focus(){doc.activeElement=this;}
+  set innerHTML(html){this.content=parse(html);}
+ }
+ const comment=data=>Object.assign(new FakeNode(8),{data}),text=data=>Object.assign(new FakeNode(3),{data});
+ function parse(html){
+  const root=new FakeNode(11),stack=[root],voids=new Set(['input','br','img']);
+  for(const m of html.matchAll(/<!--([\s\S]*?)-->|<\/([a-z0-9-]+)>|<([a-z0-9-]+)((?:\s+[^\s=>]+(?:="[^"]*")?)*)\s*>|([^<]+)/gi)){
+   const top=stack.at(-1);
+   if(m[1]!==undefined)top.insertBefore(comment(m[1]),null);
+   else if(m[2])stack.pop();
+   else if(m[3]){const el=new FakeElement(m[3]);for(const a of m[4].matchAll(/([^\s=>]+)(?:="([^"]*)")?/g))el.setAttribute(a[1],a[2]??'');top.insertBefore(el,null);if(!voids.has(m[3].toLowerCase()))stack.push(el);}
+   else top.insertBefore(text(m[5]),null);
+  }
+  return root;
+ }
+ doc.body=new FakeElement('body');doc.activeElement=doc.body;
+ doc.createElement=tag=>new FakeElement(tag);
+ return doc;
+}
+function regionHost(){
+ const doc=fakeDocument(),host=doc.createElement('div');doc.body.insertBefore(host,null);
+ const context={document:doc};runInNewContext(appFunction('leaf')+'\n'+appFunction('box')+'\n'+appFunction('createRegions'),context);
+ const elements=node=>node.childNodes.filter(n=>n.nodeType===1);
+ return {doc,host,context,regions:context.createRegions(host,doc),elements,find:(node,tag)=>{const out=[];const walk=n=>{for(const c of n.childNodes){if(c.nodeType===1&&c.tagName===tag.toUpperCase())out.push(c);walk(c);}};walk(node);return out;}};
+}
+
+test('region diff keeps unchanged regions and replaces only the changed leaf',()=>{
+ const {host,context:{leaf,box},regions,elements,find}=regionHost();
+ const tree=rows=>[leaf('top','<header class="top">T</header>'),box('lanes','<div class="graph">',rows.map(([key,value])=>leaf('row:'+key,`<div class="row">${value}</div>`))),leaf('toast','')];
+ const first=regions.render(tree([['a','1'],['b','2'],['c','3']]));
+ assert.ok(first.all,'the first render mounts the whole window');
+ const [header,graph]=elements(host),[a,b,c]=elements(graph);
+ const out=regions.render(tree([['a','1'],['b','changed'],['c','3']]));
+ assert.ok(!out.all);assert.deepEqual([...out.replaced],['row:b']);
+ assert.equal(elements(host)[0],header,'an unchanged region keeps its element');
+ assert.equal(elements(host)[1],graph,'a container with the same child keys is kept');
+ const [a2,b2,c2]=elements(graph);
+ assert.equal(a2,a);assert.equal(c2,c);assert.notEqual(b2,b);assert.equal(b2.childNodes[0].data,'changed');
+ assert.equal(find(host,'div').filter(el=>el.getAttribute('class')==='row').length,3,'no duplicates or leftovers');
+ const again=regions.render(tree([['a','1'],['b','changed'],['c','3']]));
+ assert.equal(again.inserted.length+again.morphed.length,0,'an identical render does no DOM work');
+});
+
+test('region diff keeps focus in a kept input and only patches a container opening tag',()=>{
+ const {doc,host,context:{leaf,box},regions,elements}=regionHost();
+ const tree=(pending,query)=>[box('desk',`<div class="desktop-graph ${pending?'mode-pending':''}" ${pending?'aria-busy="true"':''}>`,[leaf('search',`<label><input id="q" value="${query}"></label>`),leaf('row','<div class="row">x</div>')])];
+ regions.render(tree(false,''));
+ const desk=elements(host)[0],input=elements(elements(desk)[0])[0];
+ input.focus();desk.setAttribute('style','--clip-width: 99px');
+ // The user typed; the live input already shows it, so the leaf is adopted, not rebuilt.
+ regions.adopt(leaf('search','<label><input id="q" value="ab"></label>'));
+ const out=regions.render(tree(true,'ab'));
+ assert.deepEqual([...out.replaced],['desk']);assert.equal(out.morphed.length,1);assert.equal(out.morphed[0],desk);assert.equal(out.inserted.length,0);
+ assert.equal(elements(host)[0],desk);assert.equal(desk.getAttribute('class'),'desktop-graph mode-pending');assert.equal(desk.getAttribute('aria-busy'),'true');
+ assert.equal(desk.getAttribute('style'),'--clip-width: 99px','attributes owned by script stay untouched');
+ assert.equal(doc.activeElement,input,'focus, selection and IME stay in the kept input');assert.ok(input.isConnected);
+ regions.render(tree(false,'ab'));assert.equal(desk.getAttribute('aria-busy'),null);
+});
+
+test('region diff rebuilds a container when its children change and supports partial updates',()=>{
+ const {host,context:{leaf,box},regions,elements}=regionHost();
+ const tree=keys=>[box('list','<ul class="l">',keys.map(k=>leaf('i:'+k,`<li>${k}</li>`))),leaf('toast','<p>hi</p>')];
+ regions.render(tree(['a','b']));const list=elements(host)[0];
+ const out=regions.render(tree(['a','b','c']));
+ assert.deepEqual([...out.replaced],['list']);assert.notEqual(elements(host)[0],list);assert.equal(elements(elements(host)[0]).length,3);
+ const toast=elements(host)[1],update=regions.update(leaf('toast',''));
+ assert.deepEqual([...update.replaced],['toast']);assert.ok(!toast.isConnected);assert.equal(elements(host).length,1);
+ assert.equal(regions.update(leaf('missing','<p></p>')),null,'an unmounted region is not created by a partial update');
+ regions.invalidate('i:a');const kept=elements(elements(host)[0]);
+ regions.render(tree(['a','b','c']));
+ const now=elements(elements(host)[0]);assert.notEqual(now[0],kept[0],'an invalidated region is rebuilt');assert.equal(now[1],kept[1]);
+});
+
+test('a replaced control gives focus back to its rebuilt twin; a kept one is left alone',()=>{
+ let focused=null;
+ const twin={getClientRects:()=>[1],disabled:false,matches:()=>true,focus(){focused=this;},setSelectionRange(...args){this.range=args;}};
+ const hidden={getClientRects:()=>[],disabled:false,matches:()=>true,focus(){focused=this;}};
+ const context={win:{querySelectorAll:selector=>selector==='#q'?[hidden,twin]:[]}};
+ runInNewContext(appFunction('restoreFocus'),context);
+ context.restoreFocus({selector:'#q',focused:{isConnected:true},selection:[1,2,'none']});
+ assert.equal(focused,null,'the focused control survived the patch');
+ context.restoreFocus({selector:'#q',focused:{isConnected:false},selection:[1,2,'none']});
+ assert.equal(focused,twin);assert.deepEqual(twin.range,[1,2,'none']);
+});
+
+test('an unchanged poll is revalidated with the ETag and a 304 does no work',async()=>{
+ let request;
+ const snapshot={base:{},insights:{usage:{reports:[]}}};
+ const context={backgroundReloading:false,writeEpoch:0,stateTag:'W/"tag"',source:snapshot,state:{offline:false},renderedAt:Date.now(),pendingRender:false,
+  endpoint:x=>x,interactionBusy:()=>false,fetch:async(url,options)=>{request=options;return {status:304,ok:false};},
+  render:()=>assert.fail('a 304 must not render'),scheduleBackgroundWork:()=>assert.fail('a 304 must not queue a render'),json:()=>assert.fail('no body')};
+ runInNewContext(appFunction('reload'),context);
+ await context.reload(false,false,true);
+ assert.equal(request.headers['If-None-Match'],'W/"tag"');assert.equal(request.cache,'no-store');
+ assert.equal(context.source,snapshot);assert.equal(context.pendingRender,false);assert.equal(context.backgroundReloading,false);
+ context.state.offline=true;context.scheduleBackgroundWork=()=>{};await context.reload(false,false,true);
+ assert.equal(context.state.offline,false);assert.equal(context.pendingRender,true,'coming back online repaints once');
+});
+
+test('a CUTS search keystroke filters the cached collection instead of the whole catalogue',()=>{
+ let scanned=0;
+ const catalog=Array.from({length:40},(_,i)=>({provider:'p',id:'m'+i,name:(i%2?'Alpha ':'Beta ')+i,available:true}));
+ const state={profile:'one',cutTarget:null,cutProvider:'all',freeCuts:false,cutHealth:'all',cutQuery:'alp'};
+ const context={state,catalog,dataVersion:1,opReportCache:[],source:{providers:[]},p:()=>({}),providerName:id=>id,searchMemo:new WeakMap(),
+  routeWarning:()=>{scanned++;return false;},priceInfo:()=>({kind:'paid'}),opHealth:()=>({kind:'healthy'}),acceptsRoleModel:()=>true,vibeAlias:()=>'',collate:(a,b)=>a.localeCompare(b)};
+ runInNewContext(['searchText','queryWords','matchesWords','searchKey','collectionBase','collectionCuts'].map(appFunction).join('\n'),context);
+ assert.equal(context.collectionCuts().length,20);assert.equal(scanned,40);
+ for(const q of ['alph','alpha 1','beta','']){state.cutQuery=q;context.collectionCuts();}
+ assert.equal(scanned,40,'typing does not re-run the collection filters');
+ assert.deepEqual(Array.from(context.collectionCuts().slice(0,2),m=>m.name),['Alpha 1','Alpha 11'],'the cached order is the collation order');
+ state.freeCuts=true;context.priceInfo=()=>({kind:'free'});context.collectionCuts();assert.equal(scanned,80,'a filter change rebuilds it once');
 });
