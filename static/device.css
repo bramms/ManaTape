@@ -50,7 +50,7 @@
  /* emitters and identity — theme independent */
  --led-green:#2fe07a;--led-amber:#ffb428;--led-red:#ff4a3d;--led-blue:#4aa0ff;--led-orange:#ff6a26;
  --op-orange:#ef5b25;
- --pc-ds:#2f6fe0;--pc-stu:#e3a12f;--pc-cld:#7a56d0;--pc-gpu:#1c7f4e;--pc-free:#12807d;--pc-fast:#3f8f9e;--pc-x:#5f666e;
+ --pc-ds:#2f6fe0;--pc-stu:#e3a12f;--pc-cld:#7a56d0;--pc-gpu:#1c7f4e;--pc-free:#12807d;--pc-fast:#3f8f9e;--pc-x:#5f666e;--pc-p5:#a23b72;--pc-p6:#3d6e2e;--pc-p7:#8a5a12;
  --del:#C62D1F;
  --grain-light:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .29 0 0 0 0 .24 0 0 0 0 .17 .3 0 0 0 -.1'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
  --grain-dark:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.004 .7' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .09 0 0 0 -.03'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -404,7 +404,7 @@
 /* labelled form field (editor trays): silk label + recessed window; entered value = ink, placeholder = silk-2 italic-free but lighter */
 .field{display:grid;gap:6px;min-width:0;align-content:start}
 .field__lab{font:650 var(--fs-label)/1.15 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
-.field__win{position:relative;border-radius:var(--r-md);background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-2)}
+.field__win{display:block;position:relative;border-radius:var(--r-md);background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-2)}
 .field__win::after{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;box-shadow:var(--ring);transition:opacity var(--t-fast);pointer-events:none}
 .field__win:focus-within::after{opacity:1}
 .field input,.field textarea{all:unset;box-sizing:border-box;display:block;width:100%;min-height:36px;padding:9px 12px;font:400 var(--fs-data)/1.4 var(--font-mono);color:var(--ink)}
@@ -526,8 +526,8 @@
 .tariff__dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--s-acc);box-shadow:0 0 6px rgb(var(--s-acc-c)/.9);margin-right:6px;vertical-align:1px}
 .tariff__dot.is-peak{background:var(--s-bad);box-shadow:0 0 6px rgb(var(--s-bad-c)/.9)}
 .tariff__plot{position:relative;height:34px;margin-top:4px}
-.tariff__bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(24,1fr);gap:2px;align-items:end}
-.tariff__bars i{display:block;height:44%;border-radius:1px;background:var(--s-acc);box-shadow:0 0 5px rgb(var(--s-acc-c)/calc(var(--s-glow)*.9))}
+.tariff__bars{position:absolute;inset:0}
+.tariff__bars i{position:absolute;bottom:0;left:var(--l,0);width:max(1px,calc(var(--w,4.1667%) - 2px));height:44%;border-radius:1px;background:var(--s-acc);box-shadow:0 0 5px rgb(var(--s-acc-c)/calc(var(--s-glow)*.9))}
 .tariff__bars i.pk{height:100%;background:repeating-linear-gradient(135deg,var(--s-bad) 0 1.6px,rgb(var(--s-bad-c)/.28) 1.6px 3.4px);box-shadow:none}
 .tariff__bars i.past{opacity:.34}
 .tariff__now{position:absolute;top:-6px;bottom:-3px;left:calc(var(--x,0)*100%);width:2px;margin-left:-1px;background:var(--s-ink);box-shadow:0 0 6px rgb(var(--s-ink-c)/.8)}
@@ -643,9 +643,10 @@
 .lg__sw i{position:absolute;inset:0}
 
 /* ---------- 16 · CUT — one tape segment: provider edge, name, meta, HEALTH bar; one look on every surface ---------- */
-.cut{--pc:var(--pc-x);position:relative;flex:0 0 var(--cut-w);width:var(--cut-w);max-width:100%;min-width:0;height:var(--cut-h);margin-right:3px;border-radius:var(--r-sm);padding:7px 10px 0 13px;color:var(--tape-ink);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;outline:none;
+.cut{--pc:var(--pc-x);position:relative;flex:0 0 var(--cut-w);width:var(--cut-w);max-width:100%;min-width:0;height:var(--cut-h);margin-right:3px;border-radius:var(--r-sm);padding:7px 10px 0 13px;color:var(--tape-ink);cursor:grab;touch-action:manipulation;user-select:none;-webkit-user-select:none;outline:none;
  background:linear-gradient(180deg,var(--tape-sheen),transparent 38%),repeating-linear-gradient(180deg,var(--tape-line) 0 1px,transparent 1px 3px),linear-gradient(180deg,var(--tape-hi),var(--tape) 55%,var(--tape-lo));
  box-shadow:var(--el-raised-1);transition:opacity var(--t-med),transform var(--t-med) var(--e-out)}
+.cut[data-p=p5],.tag[data-p=p5]{--pc:var(--pc-p5)}.cut[data-p=p6],.tag[data-p=p6]{--pc:var(--pc-p6)}.cut[data-p=p7],.tag[data-p=p7]{--pc:var(--pc-p7)}
 .cut[data-p=ds]{--pc:var(--pc-ds)}.cut[data-p=stu]{--pc:var(--pc-stu)}.cut[data-p=cld]{--pc:var(--pc-cld)}.cut[data-p=gpu]{--pc:var(--pc-gpu)}.cut[data-p=free]{--pc:var(--pc-free)}
 .cut__edge{position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:var(--r-sm) 0 0 var(--r-sm);background:linear-gradient(180deg,color-mix(in srgb,var(--pc) 70%,#fff),var(--pc) 40%)}
 .cut__name{display:block;font:700 var(--fs-data)/1.25 var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:2px}
@@ -655,7 +656,8 @@
 .cut__tail{flex:none;white-space:pre}
 .cut--free .cut__name{padding-right:40px}
 .cut--more .cut__name{padding-right:26px}
-.cut--free.cut--more .cut__name{padding-right:64px}
+.cut--free.cut--more .cut__name{padding-right:40px}
+.cut--free.cut--more .cut__meta{padding-right:26px}
 .cut__meta{display:flex;align-items:center;gap:6px;margin-top:4px;min-width:0;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);white-space:nowrap}
 .cut__think{min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* thinking as a small detented selector on the tape (24px hit, 20px visible: the transparent border is part of the target) */
@@ -663,6 +665,10 @@ select.cut__think{appearance:none;-webkit-appearance:none;height:24px;margin:-2p
  font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);
  background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(-45deg,transparent 50%,currentColor 50%),linear-gradient(180deg,rgb(var(--sh)/calc(.07*var(--sha))),rgb(var(--sh)/calc(.03*var(--sha))));
  background-size:4px 4px,4px 4px,100% 100%;background-position:calc(100% - 9px) 7px,calc(100% - 5px) 7px,0 0;background-repeat:no-repeat;box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.14*var(--sha)))}
+/* the caret shows under the hand or the focus; the padding stays, so hovering never relayouts the tape */
+select.cut__think{padding-right:13px;background-size:0 0,0 0,100% 100%}
+@media (hover:hover){select.cut__think:hover{background-size:4px 4px,4px 4px,100% 100%}}
+select.cut__think:focus-visible{background-size:4px 4px,4px 4px,100% 100%}
 select.cut__think:focus-visible{outline:2px solid var(--focus);outline-offset:0}
 /* ⋯ : a permanent small key (24px), never hover-only */
 .cut__more{all:unset;position:absolute;top:4px;right:4px;width:24px;height:22px;border-radius:5px;display:grid;place-items:center;cursor:pointer;color:var(--tape-ink-2);font:700 13px/1 var(--font-mono);
@@ -691,7 +697,7 @@ select.cut__think:focus-visible{outline:2px solid var(--focus);outline-offset:0}
 /* stamps: FREE (kept when HEALTH is off; never for an unknown tariff), DELETED (solid red), заміна ⇄, поточний */
 .stamp{display:inline-block;font:700 var(--fs-label)/1 var(--font-mono);letter-spacing:.04em;padding:2px 4px;border-radius:var(--r-xs);color:var(--ok-ink);box-shadow:inset 0 0 0 1.5px currentColor;white-space:nowrap}
 .cut .stamp--free{position:absolute;top:5px;right:6px;transform:rotate(-3deg);opacity:.92}
-.cut--more .stamp--free{right:32px}
+.cut--more:not(.cut--free) .stamp--free{right:32px}
 .stamp--del{color:#fff;background:var(--del);box-shadow:none}
 .cut .stamp--del{margin-left:auto}
 .stamp--repl{color:var(--warn-ink)}
@@ -959,6 +965,151 @@ button.cut__name.cut__name--split{display:flex}
 }
 /* phone touch targets: keys and lane keys never below 44px tall */
 @media (max-width:760px) and (pointer:coarse){.key__cap{min-height:38px}.key--sq .key__cap{width:40px;height:38px}}
+
+/* ---------- 25b · APP WIRING — states and parts the app needs on top of the components ---------- */
+/* LED that follows its key's latched state (HEALTH, CUTS, FREE CUTS, Ліміти, drawer title): flipping patches attributes only */
+.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::before,
+.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::after,
+.tray__title[aria-expanded=true] .led[data-latch]::before,.tray__title[aria-expanded=true] .led[data-latch]::after{opacity:1}
+.key.is-spinning svg{animation:key-spin 1s linear infinite}
+@keyframes key-spin{to{transform:rotate(360deg)}}
+.status__row--sub{margin-top:2px}
+.status__row--sub .status__note{color:var(--danger)}
+/* dock: the feedback line takes the free middle; the ⋯ menu drops from its key */
+.dock__msg{flex:1 1 0;min-width:120px;display:flex;align-items:center}
+@media (min-width:1181px){.dock{flex-wrap:nowrap}}
+@media (max-width:1180px){.dock__msg{order:9;flex-basis:100%}.dock__ctx{margin-left:auto}}
+.dock__ctx{flex:none}
+.dock__msg .msg{flex:1;min-width:0}
+.msg .key{flex:none;margin-left:auto}
+.dock__menu{position:relative;flex:none}
+.dock__menu>summary{list-style:none}
+.dock__menu>summary::-webkit-details-marker{display:none}
+.dock__menu[open]>summary .key__cap{transform:translateY(1px)}
+.dock__menu[open]>summary .key__cap::before{opacity:.2}.dock__menu[open]>summary .key__cap::after{opacity:.8}
+.dock__menu>.menu{top:calc(100% + 8px);left:0;width:240px}
+.sel--proj{flex:0 1 360px;min-width:200px}.sel--prof{flex:0 1 290px;min-width:180px}
+/* the brand is a link: no underline; its logo parts are blocks */
+.brand{text-decoration:none;color:inherit;border-radius:var(--r-md)}
+.brand:focus-visible{outline:none;box-shadow:var(--ring)}
+.logo,.logo__glass,.reel{display:block}
+/* a row of screens shares one height: chins line up, the shorter glass simply has more black */
+.screens{align-items:stretch}
+.screen__win{flex:1;display:flex;min-width:0}.screen__gasket{flex:1;display:flex;min-width:0}.glass{flex:1;min-width:0}
+.ruler__cols{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
+.boot{display:grid;justify-items:start;gap:12px;padding:24px 4px;min-height:160px}
+.boot .screen{width:min(420px,100%)}
+/* surface keys keep a fixed width so the latched one never shifts its neighbours */
+.strip>.keybed .key__cap{min-width:118px;justify-content:flex-start}
+/* deck */
+.deck__note{white-space:nowrap}
+.poolkey .key__cap{min-height:40px;gap:10px;padding:0 14px 0 12px}
+.poolkey .key__sub{margin-top:2px}
+.deck__notices{display:grid;gap:4px;padding:0 4px 10px}
+.deck__notices .msg{white-space:normal;min-height:24px}
+.deck__body.is-pending .lanes{opacity:.78;transition:opacity var(--t-med)}
+.is-armed .socket::after{opacity:.4}
+.lanes+.subhead{margin-top:16px}
+.subhead .key{margin-left:2px}
+.lane__label{display:grid;gap:2px;min-width:0}
+.lane__sub{font:400 var(--fs-hint)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane__key[aria-current=true]{box-shadow:var(--el-pressed),inset 0 1px 0 var(--bevel-hi)}
+.lane__key:focus-visible,.socket:focus-visible,.cut__more:focus-visible,button.cut__name:focus-visible,button.cut:focus-visible,.tray__title:focus-visible,.leader:focus-visible{outline:none}
+.lane__tools{display:flex;gap:6px;margin-left:auto;flex:none;padding-left:10px}
+.lane__mode{margin-right:8px}
+.lane__mode .key__cap{font:700 var(--fs-label)/1 var(--font-mono);color:var(--warn-ink)}
+.lane__groove>.key.patch{flex:none}
+.lane__groove>.chip{flex:none}
+.leader+.key.patch,.leader+.lane__note{margin-left:8px}
+/* a fallback inherited from `default`: the same CUT, outlined by a printed dashed frame */
+.cut[data-inherited]{outline:1.5px dashed color-mix(in srgb,var(--tape-ink-2) 55%,transparent);outline-offset:-4px}
+.lg__inh{display:inline-block;width:22px;height:12px;border-radius:3px;outline:1.5px dashed var(--ink-2);outline-offset:-3px}
+/* HEALTH: unavailable (provider off / expired / DELETED) is neither unknown nor exhausted */
+.hs--off{color:var(--ink-off)}
+.hb--off i{background:repeating-linear-gradient(135deg,var(--tape-ink-2) 0 1px,transparent 1px 4px);opacity:.55}
+.health-off .lg--h{display:none}
+.lg--off{display:none;color:var(--ink-2)}
+.health-off .lg--off{display:inline-flex}
+.legend .seam--v{height:14px;align-self:center;margin:0 2px}
+.legend .stamp--repl{padding:1px 3px}
+.lg__note{margin-left:auto;white-space:normal}
+/* editors above the tape (stage C1b moves them into the drawer family) */
+.editor{margin:0 0 12px;padding:10px 12px 12px;display:grid;gap:8px}
+.editor:focus{outline:none}
+.editor__head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:34px}
+.editor__head .sel{flex:0 1 320px}
+.editor__note{margin:0}
+.editor__skipped>summary{cursor:pointer;list-style:none}
+.editor__skipped>summary::-webkit-details-marker{display:none}
+.cut-grid{display:flex;flex-wrap:wrap;align-items:center;gap:14px 6px;margin:0;padding:10px 6px 6px;list-style:none;border-radius:var(--r-md);background:linear-gradient(180deg,var(--groove-hi),var(--groove));box-shadow:var(--el-recess-1)}
+.cut-grid[hidden]{display:none}
+.cut-grid .socket{position:relative;right:auto;margin:0;box-shadow:var(--el-recess-2)}
+.cut-grid .cut{margin:0}
+/* screens */
+.screens__key{display:none}
+.key__lbl{display:inline-flex;align-items:center;gap:8px}
+.screen__legend{flex:1;display:grid;gap:2px;justify-items:center;text-align:center;margin:0;color:var(--ink-2)}
+.screen__legend>span{white-space:nowrap}
+.screen--wide{width:100%}
+.screen--wide .wins{flex-wrap:wrap}
+.wins--sample .win{width:auto;flex:1 1 120px}
+.g-head__sel{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.g-head .g-name{flex:none;max-width:62%}
+.g-head .g-age{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.g-plot__tick{position:absolute;top:0;bottom:0;left:calc(var(--x,0)*100%);width:1px;background:rgb(var(--s-dim-c)/.22);pointer-events:none}
+.g-plot__x--abs{position:relative;display:block;height:14px}
+.g-plot__x--abs>span{position:absolute;left:calc(var(--x,0)*100%);transform:translateX(-50%);white-space:nowrap}
+.g-kv--btn{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:6px;min-width:0;min-height:24px;cursor:pointer;border-radius:3px}
+.g-kv--btn:focus-visible{outline:2px solid var(--s-ink);outline-offset:1px}
+.g-kv--btn[aria-current=true]>span:first-child{text-decoration:underline;text-underline-offset:3px}
+.g-insp__id{overflow-wrap:anywhere}
+.screen--insp .g{max-height:min(72vh,720px);overflow:auto;scrollbar-width:thin}
+.history-fader{display:grid;gap:2px;min-width:200px;flex:1}
+@media (max-width:1300px){.tariff{width:172px}.tariff__head .g-hint{display:none}
+ .screen--ds .screen__chin{gap:6px}.screen--ds .enc-wrap{gap:6px}.screen--ds .slide{gap:6px}.screen--ds .screen__chin .key:not(.key--sq) .key__cap{padding:0 8px}}
+/* drawer */
+.tray__count .rd{min-width:3ch}
+.tray__more{grid-column:1/-1;display:flex;justify-content:center;padding-top:4px}
+.toast{--toast-b:58px}
+/* form fields: a native <select> in a field window */
+.field__win select{appearance:none;-webkit-appearance:none;display:block;width:100%;min-height:36px;padding:0 36px 0 12px;border:0;border-radius:var(--r-md);background:transparent;font:400 var(--fs-data)/1 var(--font-mono);color:var(--ink);cursor:pointer}
+.field__win:has(select)::before{content:"";position:absolute;right:14px;top:50%;margin-top:-2px;border:4.5px solid transparent;border-top:5.5px solid var(--ink-2);pointer-events:none}
+@media (max-width:760px){
+ .screens__key{display:flex;width:100%}
+ .dock .sel{flex:1 1 100%;min-width:0}
+ .screens[data-mobile-expanded=false] .screen:not(.screen--ds){display:none}
+ .screen__legend{display:none}
+ .dock__menu>.menu{position:fixed;left:8px!important;right:8px;width:auto;top:auto;bottom:8px}
+ .dock__msg{flex-basis:100%;order:5}
+ .deck__note{display:none}
+ .deck__tools .key{flex:1 1 auto}
+ .lane__tools{padding-left:0;margin:0;justify-content:stretch}.lane__tools .key{flex:1}
+ .lane--link .lane__groove{flex-direction:row;flex-wrap:wrap}
+ .tray__hint--target{display:inline;max-width:none}
+ /* phone drawer: filters in two compact rows; the whole body scrolls, so results are never squeezed out */
+ .tray__body{overflow:auto;overscroll-behavior:contain;padding:4px 10px 10px}
+ .tray__filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+ .tray__filters .sel>.silk{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ .tray__filters .search{grid-column:1/-1}
+ .tray__filters>.key{justify-self:stretch}.tray__filters>.key .key__cap{width:100%}
+ .tray__grid{flex:none;overflow:visible;min-height:120px}
+ .g-bars__plot{gap:1px;grid-auto-columns:minmax(1px,1fr)}
+ .history-fader{min-width:0;flex-basis:100%}
+ .strip>.keybed .key__cap{min-width:0;justify-content:center}
+ .strip>.status .status__row--sub .status__note{display:inline}
+ .subhead{flex-wrap:wrap}.subhead .print{white-space:normal;flex-basis:100%;order:3}.subhead__rule{display:none}.subhead .key{white-space:normal}.subhead .key .key__cap{white-space:normal;text-align:left}
+ /* phone CUT: the full name wraps to two lines (head and tail flow together) */
+ button.cut__name.cut__name--split,.cut__name.cut__name--split{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow-wrap:anywhere}
+ .cut__head,.cut__tail{display:inline;white-space:normal;overflow:visible}
+}
+
+/* ---------- 25c · COEXISTENCE with the legacy sheets (style/theme/tape/operator.css) — delete with them in C1c ---------- */
+#forge-direct{background:none;font:inherit;letter-spacing:normal;color:inherit;min-height:0}
+#forge-window{container:forge/inline-size}
+#forge-direct :is(.sel select,select.cut__think,.field__win select){appearance:none;-webkit-appearance:none}
+#forge-direct .sel select{display:block}
+:is(.key,.socket,.slide,.tgl,.cut__more,.lane__key,.tray__title,button.cut,.g-kv--btn):disabled{opacity:1}
+.device .surface:not([data-surface=profiles]){padding-top:2px}
 
 /* ---------- 26 · MOTION, FOCUS, FORCED COLOURS ---------- */
 ::view-transition-old(root),::view-transition-new(root){animation-duration:.5s;animation-timing-function:var(--e-io)}

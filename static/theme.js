@@ -1,28 +1,37 @@
-/* One dimmer drives the materials; switching themes never rebuilds the editor. */
+/* «Світло»: the lever flips first (screen.js, .tgl), then the theme cross-fades in one View Transition and the
+   screens power on. No custom property is animated on the root; switching themes never rebuilds the editor. */
 (()=>{
  const root=document.documentElement,system=matchMedia('(prefers-color-scheme: dark)'),reduced=matchMedia('(prefers-reduced-motion: reduce)');
- let preference=null,timer;
+ let preference=null;
  try{const stored=localStorage.getItem('forge-theme');if(['light','dark'].includes(stored))preference=stored;}catch{}
- function apply(theme,animate=false){
-  clearTimeout(timer);
-  if(animate&&!reduced.matches){root.dataset.lightMotion=theme==='light'?'on':'off';root.classList.add('light-changing');getComputedStyle(root).getPropertyValue('--lamp');}
-  else{root.classList.remove('light-changing');delete root.dataset.lightMotion;}
+ const TABLE={light:'#D9D5CD',dark:'#16171A'};
+ function apply(theme){
   root.dataset.theme=theme;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content',theme==='light'?'#e9ece6':'#303639');
-  for(const button of document.querySelectorAll('[data-theme-toggle]')){
-   button.setAttribute('aria-checked',String(theme==='light'));
-   button.title=theme==='light'?'Вимкнути світло · темна тема':'Увімкнути світло · світла тема';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content',TABLE[theme]);
+  for(const toggle of document.querySelectorAll('[data-theme-toggle]')){
+   toggle.setAttribute('aria-checked',String(theme==='light'));
+   toggle.title=(theme==='light'?'Світло · вниз — темна тема':'Темно · вгору — світла тема')+' · Space / Enter, ↑ / ↓';
   }
-  if(animate)timer=setTimeout(()=>{root.classList.remove('light-changing');delete root.dataset.lightMotion;},1350);
+ }
+ // The lever already sits in its stop: one cross-fade of the whole page, then the glass powers on.
+ function switchTo(theme){
+  if(root.dataset.theme===theme)return;
+  const run=()=>apply(theme);
+  if(document.startViewTransition&&!reduced.matches&&!document.hidden)document.startViewTransition(run);else run();
+  window.ManaScreen?.boot();
+ }
+ // A theme that changes elsewhere (the system, another tab) flips the levers first, as a hand would.
+ function follow(theme){
+  const levers=[...document.querySelectorAll('.tgl[data-theme-toggle]')].map(el=>window.ManaScreen?.toggle(el,theme==='light'));
+  Promise.all(levers).then(()=>switchTo(theme));
  }
  apply(preference||(system.matches?'dark':'light'));
- document.addEventListener('click',event=>{
-  if(!event.target.closest('[data-theme-toggle]'))return;
-  preference=root.dataset.theme==='dark'?'light':'dark';
+ document.addEventListener('mana:toggle',event=>{
+  if(!event.target.closest?.('[data-theme-toggle]'))return;
+  preference=event.detail.checked?'light':'dark';
   try{localStorage.setItem('forge-theme',preference);}catch{}
-  apply(preference,true);
+  const theme=preference;event.detail.settled.then(()=>{if(preference===theme)switchTo(theme);});
  });
- system.addEventListener('change',()=>{if(!preference)apply(system.matches?'dark':'light',true);});
- addEventListener('storage',event=>{if(event.key==='forge-theme'){preference=['light','dark'].includes(event.newValue)?event.newValue:null;apply(preference||(system.matches?'dark':'light'),true);}});
- reduced.addEventListener('change',()=>{if(reduced.matches)apply(root.dataset.theme);});
+ system.addEventListener('change',()=>{if(!preference)follow(system.matches?'dark':'light');});
+ addEventListener('storage',event=>{if(event.key==='forge-theme'){preference=['light','dark'].includes(event.newValue)?event.newValue:null;follow(preference||(system.matches?'dark':'light'));}});
 })();

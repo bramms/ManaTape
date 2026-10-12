@@ -68,7 +68,7 @@ test('pending writes block polling until every request settles, including a fail
   document:{hidden:false,documentElement:{dataset:{}},activeElement:null},win:{querySelector:()=>null},
   composing:false,pointerHeld:false,nativeSelectBusy:false,drag:null,cutGesture:null,drawerGesture:null,
   fetch:()=>new Promise(resolve=>responses.push(resolve)),scheduleBackgroundWork:()=>scheduled++};
- runInNewContext(appFunction('api')+'\n'+appFunction('interactionBusy'),context);
+ runInNewContext(appFunction('api')+'\n'+appFunction('problemText')+'\n'+appFunction('interactionBusy'),context);
  const first=context.api('/api/favs',{}),second=context.api('/api/favs',{});
  assert.ok(context.interactionBusy());assert.equal(context.activeWrites,2);
  responses[0]({ok:true,json:async()=>({})});await first;
@@ -159,11 +159,11 @@ test('save replaces a queued preview even when a changed token requires another 
 test('linked agents show role inheritance instead of pretending a primary pool is a startup list',()=>{
  const profile={modelRoles:{reader:'mana-pool/free-fast'},retry:{modelFallback:true},task:{agentModelOverrides:{reviewer:'@reader',scout:['@reader'],external:'@advisor',task:['@reader','p/backup']}}};
  const context=roleContext({p:()=>profile,roleKeys:['reader'],esc:s=>s,tool:()=>'',poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined});
- runInNewContext(['agentValues','agentLink','agentTier','agentName','agentRemove','agentLinkedTrack'].map(appFunction).join('\n'),context);
- for(const worker of ['reviewer','scout'])for(const mobile of [false,true]){
-  const html=context.agentLinkedTrack(worker,mobile);
+ runInNewContext(['led','key','agentValues','agentLink','agentTier','agentName','agentKey','agentRemove','patchKey','agentLinkedTrack'].map(appFunction).join('\n'),context);
+ for(const worker of ['reviewer','scout']){
+  const html=context.agentLinkedTrack(worker);
   assert.match(html,/Успадковує @reader/);assert.match(html,/Основна й резерви ролі/);
-  assert.match(html,/data-agent-role="reader"/);assert.doesNotMatch(html,/FREE FAST|data-edit=|16 CUTS/);
+  assert.match(html,/class="key patch" data-agent-role="reader"/,'a patch key, not a link');assert.doesNotMatch(html,/FREE FAST|data-edit=|16 CUTS|↗/);
  }
  assert.equal(context.agentLink('task'),'');assert.match(context.agentName('task'),/Vibe GOOD/);
  assert.match(context.agentName('sonic'),/Vibe FAST/);assert.doesNotMatch(context.agentName('reviewer'),/Vibe/);
@@ -220,22 +220,27 @@ test('agent conversion waits for OFF preview and rejects an OFF singleton with d
  pending=false;context.copyAgentRole('custom');assert.match(notices.pop(),/default/);assert.equal(JSON.stringify(profile),before);
 });
 
-test('quota display stays compact, keeps complete family labels and gives each account a stable LCD control',()=>{
- const ManaDisplay=require('./static/display.js');
+test('quota screens stay compact, keep complete family labels and give each account a stable screen and its own ТОН encoder',()=>{
+ const ManaScreen=require('./static/screen.js');
  let reports=[{provider:'google-antigravity',account:4,limits:['Anthropic','Claude','Google','OpenAI'].map(label=>({label:label+' 7 day',window:'7 day',remaining:50}))},
   {provider:'commandcode',account:5,limits:[]},{provider:'google-antigravity',account:6,limits:[]}];
- const context={state:{meters:'full'},usageReports:()=>reports,providerName:id=>id,esc:String,ManaDisplay,
-  op:{pace:()=>({kind:'unknown'})},timeLabel:()=>'',reportAge:()=>'',opPaceText:()=>'',opForecast:()=>'',resetTitle:()=>'',resetCountdown:()=>'',num:String};
- runInNewContext(appFunction('limitLabel')+'\n'+appFunction('opQuota'),context);
+ const context={state:{meters:'full'},opReportCache:null,usageReports:()=>reports,providerName:id=>id,providerCode:id=>id.slice(0,3).toUpperCase(),providerSlot:()=>'stu',esc:String,ManaScreen,
+  catalog:[],deepSeekCatalog:false,modeOff:()=>false,deepseek:()=>false,
+  op:{pace:()=>({kind:'unknown'})},timeLabel:()=>'',reportAge:()=>'',opPaceText:()=>'',opForecast:()=>'',resetTitle:()=>'',resetCountdown:()=>'',microDuration:()=>'',num:String};
+ runInNewContext(['led','limitLabel','winCell','screenHead','quotaScreen','usageScreens','hueEncoder'].map(appFunction).join('\n')+
+  "\nconst SCREEN_HUE={stu:250};const screenHue=()=>250;const GLASS_OPEN=['<div class=\"screen__win\">','<div class=\"screen__gasket\">','<div class=\"glass\">'];const glass=inner=>GLASS_OPEN.join('')+inner+'</div></div></div>';const segments=()=>0;const screenId=r=>r.provider==='@tariff'?'tariff':'quota:'+r.provider+':'+r.account;const winsMarkup=(r,name)=>r.limits.length?'<div class=\"wins\">'+r.limits.map(l=>winCell(l,r,name)).join('')+'</div>':'<div class=\"g-empty\"></div>';",context);
  assert.equal(context.limitLabel({label:'Claude & GPT shared · 7 day',window:'7 day'}),'Claude & GPT shared · 7 днів');
- const markup=context.opQuota();
- assert.match(markup,/class="meter-bridge micro"/);assert.doesNotMatch(markup,/scale-key|data-op-switch="meters"|\bFULL\b/);
- for(const family of ['Anthropic','Claude','Google','OpenAI'])assert.ok(markup.includes(`<span class="mw-label">${family} · 7 днів</span>`));
- const ids=html=>[...html.matchAll(/data-lcd-screen="([^"]+)"/g)].map(match=>match[1]);
- assert.deepEqual(ids(markup),['quota:google-antigravity:1','quota:commandcode:1','quota:google-antigravity:2']);
- for(const id of ids(markup))assert.ok(markup.includes(`data-lcd-colour="${id}"`),'each LCD has its own control');
+ const markup=()=>context.usageScreens().rows.map(r=>context.quotaScreen(r,'')).join('');
+ const html=markup();
+ assert.doesNotMatch(html,/scale-key|data-op-switch="meters"|\bFULL\b|data-lcd-colour/);
+ for(const family of ['Anthropic','Claude','Google','OpenAI'])assert.ok(html.includes(`<span class="win__l">${family} · 7 днів</span>`));
+ const ids=h=>[...h.matchAll(/class="screen"[^>]*data-screen="([^"]+)"/g)].map(match=>match[1]);
+ assert.deepEqual(ids(html),['quota:google-antigravity:1','quota:commandcode:1','quota:google-antigravity:2']);
+ for(const id of ids(html))assert.ok(html.includes(`data-knob="hue" data-screen-hue="${id}"`),'each screen has its own ТОН encoder, on the chin');
+ assert.ok(!/<div class="g"[^]*data-knob/.test(html.split('screen__chin')[0]),'no control on the glass');
+ assert.match(html,/google-antigravity #2/,'a second account is numbered once, in its name');
  reports=[{provider:'other',account:1,limits:[]},...reports.map((report,i)=>({...report,account:i+2}))];
- assert.deepEqual(ids(context.opQuota()).filter(id=>!id.startsWith('quota:other:')),ids(markup),'an unrelated provider cannot change existing LCD preferences');
+ assert.deepEqual(ids(markup()).filter(id=>!id.startsWith('quota:other:')),ids(html),'an unrelated provider cannot change existing screen preferences');
 });
 
 test('operator preferences no longer persist the removed meter scale',()=>{
@@ -247,73 +252,72 @@ test('operator preferences no longer persist the removed meter scale',()=>{
  assert.deepEqual(saved,{health:false},'no user resize, no stored height');
 });
 
-test('rerender restores the same LCD dial rather than switching foreground to background',()=>{
+test('rerender restores focus to the same screen ТОН encoder and the brightness knob',()=>{
  const context={CSS:{escape:s=>s}};
  runInNewContext(appFunction('focusSelector'),context);
- for(const part of ['background','foreground']){
-  const attrs={'data-lcd-colour':'history','data-lcd-part':part};
-  const control={matches:()=>false,closest:()=>null,hasAttribute:key=>Object.hasOwn(attrs,key),getAttribute:key=>attrs[key]};
-  assert.equal(context.focusSelector(control),`[data-lcd-colour="history"][data-lcd-part="${part}"]`);
- }
+ const control=attrs=>({matches:()=>false,closest:()=>null,hasAttribute:key=>Object.hasOwn(attrs,key),getAttribute:key=>attrs[key]});
+ assert.equal(context.focusSelector(control({'data-knob':'hue','data-screen-hue':'history'})),'[data-knob="hue"][data-screen-hue="history"]');
+ assert.equal(context.focusSelector(control({'data-knob':'hue','data-screen-hue':'quota:p:2'})),'[data-knob="hue"][data-screen-hue="quota:p:2"]');
+ assert.equal(context.focusSelector(control({'data-knob':'brightness'})),'[data-knob="brightness"]');
+ assert.equal(context.focusSelector(control({'data-fold-toggle':'smol'})),'[data-fold-toggle="smol"]');
 });
 
-function drawerHarness(preferred=500,{innerWidth=1280,innerHeight=900,scrollbar=0,cssMax=Infinity,dock=null}={}){
- const events={},properties={},attrs={},captures=new Set(),stored=[],page={},frames=[];
- const surface={left:34,right:1246,top:400},state={drawerHeight:preferred};
- // A fixed drawer: its containing block is the window minus a classic scrollbar.
- const drawer={style:{},getBoundingClientRect:()=>({height:parseFloat(drawer.style.height),right:context.window.innerWidth-scrollbar-parseFloat(drawer.style.right||'16px')}),querySelector:key=>({offsetHeight:key==='.drawer-head'?40:50})};
- const deck={style:{setProperty:(key,value)=>{deck.style[key]=value;},removeProperty:key=>{delete deck.style[key];}},getBoundingClientRect:()=>surface};
- const grip={id:'cuts-resize',parentElement:drawer,focus:()=>{},closest:()=>grip,setAttribute:(key,value)=>{attrs[key]=value;}};
- const dockNode={offsetHeight:dock?.height||0,getBoundingClientRect:()=>surface};
- const context={state,root:{style:{setProperty:(key,value)=>{properties[key]=value;}},
-  addEventListener:(key,handler)=>{events[key]=handler;},setPointerCapture:id=>captures.add(id),
-  hasPointerCapture:id=>captures.has(id),releasePointerCapture:id=>captures.delete(id)},
-  win:{querySelector:key=>key==='.cuts-drawer'?drawer:key==='#cuts-resize'?grip:key==='.operator-dock'?dockNode:deck},
+function drawerHarness(preferred=500,{innerWidth=1280,innerHeight=900,scrollbar=0,lip=46,open=true}={}){
+ const events={},attrs={},captures=new Set(),stored=[],page={},frames=[],classes=new Set();
+ const body={left:34,width:1212},state={drawerHeight:preferred,cuts:open};
+ // A fixed drawer in a fixed port: the port follows the device body; the spacer after the body equals the drawer.
+ const tray={style:{},classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c)},getBoundingClientRect:()=>({height:parseFloat(tray.style.height)}),closest:()=>tray};
+ const grip={id:'cuts-resize',focus:()=>{},closest:key=>key==='.tray'?tray:grip,setAttribute:(key,value)=>{attrs[key]=value;}};
+ const port={style:{},querySelector:key=>key==='.tray'?tray:key==='#cuts-resize'?grip:null},spacer={style:{}},device={getBoundingClientRect:()=>({left:body.left,width:body.width})};
+ const context={state,root:{addEventListener:(key,handler)=>{events[key]=handler;},setPointerCapture:id=>captures.add(id),hasPointerCapture:id=>captures.has(id),releasePointerCapture:id=>captures.delete(id)},
+  win:{querySelector:key=>key==='.tray-port'?port:key==='.tray-spacer'?spacer:key==='.device'?device:null},
   window:{innerWidth,innerHeight,addEventListener:()=>{}},
   requestAnimationFrame:fn=>frames.push(fn),cancelAnimationFrame:id=>{frames[id-1]=null;},
-  getComputedStyle:node=>node===dockNode?{position:dock?'sticky':'relative',top:(dock?.top??0)+'px'}:{bottom:'12px',right:drawer.style.right||'16px',maxHeight:Number.isFinite(cssMax)?cssMax+'px':'none'},
-  render:()=>{},localStorage:{setItem:(_key,value)=>stored.push(JSON.parse(value))}};
- // The page scroller: its client box excludes the classic scrollbar and follows the window.
+  getComputedStyle:()=>({getPropertyValue:key=>key==='--lip'?String(lip):''}),
+  render:()=>{},narrowSurface:()=>false,matchMedia:()=>({matches:false}),paintRegions:()=>{},leaf:(key,html)=>({key,html}),touched:()=>false,setTimeout,clearTimeout,
+  localStorage:{setItem:(_key,value)=>stored.push(JSON.parse(value))}};
+ // The page scroller: its client box excludes a classic scrollbar and follows the window.
  context.document={documentElement:{get clientWidth(){return context.window.innerWidth-scrollbar;},get clientHeight(){return context.window.innerHeight;},
   style:{setProperty:(key,value)=>{page[key]=value;},removeProperty:key=>{delete page[key];}}}};
- const start=source.indexOf(' let drawerGesture=null;'),end=source.indexOf('\n function placeCut(',start);
+ const start=source.indexOf(' let drawerGesture=null'),end=source.indexOf('\n function placeCut(',start);
  runInNewContext(source.slice(start,end)+'\n'+appFunction('storeOperator'),context);
  context.resizeDrawer(state.drawerHeight);
  const event=(pointerId,clientY)=>({pointerId,clientY,button:0,target:grip,preventDefault:()=>{}});
  // Moves are coalesced to one write per animation frame.
  const flush=()=>{for(const fn of frames.splice(0))fn?.();};
- return {context,state,surface,drawer,deck,grip,properties,attrs,stored,events,event,page,frames,flush};
+ return {context,state,body,tray,port,spacer,grip,attrs,stored,events,event,page,frames,flush,classes};
 }
 
 test('CUTS keeps its chosen height across opening positions and temporary viewport limits',()=>{
  const h=drawerHarness();
- assert.equal(h.attrs['aria-valuenow'],500);assert.equal(h.drawer.style.left,'34px');assert.equal(h.drawer.style.right,'34px');
- h.surface.top=-1200;h.context.resizeDrawer(h.state.drawerHeight);
- assert.equal(h.attrs['aria-valuenow'],500,'page scroll must not affect drawer height');
+ assert.equal(h.attrs['aria-valuenow'],500);assert.equal(h.tray.style.height,'500px');
+ assert.equal(h.port.style.left,'34px');assert.equal(h.port.style.width,'1212px','exactly as wide as the body');
+ h.context.resizeDrawer(h.state.drawerHeight);assert.equal(h.attrs['aria-valuenow'],500,'a re-placement keeps the height');
  h.context.window.innerHeight=420;h.context.resizeDrawer(h.state.drawerHeight);
- assert.equal(h.attrs['aria-valuenow'],360);assert.equal(h.state.drawerHeight,500,'clamping is temporary');
+ assert.equal(h.attrs['aria-valuenow'],200,'≈220px of page stays visible above it');assert.equal(h.state.drawerHeight,500,'clamping is temporary');
  h.context.window.innerHeight=900;h.context.resizeDrawer(h.state.drawerHeight);
  assert.equal(h.attrs['aria-valuenow'],500);
 });
 
 test('CUTS resize starts at the visible edge, commits locally, and Escape restores the previous preference',()=>{
  const h=drawerHarness(800);h.context.window.innerHeight=500;h.context.resizeDrawer(h.state.drawerHeight);
+ assert.equal(h.attrs['aria-valuenow'],280);
  h.events.pointerdown(h.event(1,60));h.events.pointermove(h.event(1,90));h.events.pointermove(h.event(1,100));
- assert.equal(h.attrs['aria-valuenow'],440,'a move only records the height; the write waits for the frame');
+ assert.equal(h.attrs['aria-valuenow'],280,'a move only records the height; the write waits for the frame');
+ assert.ok(h.classes.has('is-resizing'),'no slide transition under the hand');
  assert.equal(h.frames.length,1,'several moves share one animation frame');h.flush();
- assert.equal(h.attrs['aria-valuenow'],400,'drag must start from the clamped 440px edge, not the hidden 800px preference');
- assert.equal(h.drawer.style.height,'400px');assert.equal(h.deck.style['padding-bottom'],'424px','the deck keeps its content above the drawer');
- assert.equal(Object.keys(h.properties).length,0,'no inherited custom property is written on the window root');
+ assert.equal(h.attrs['aria-valuenow'],240,'drag starts from the clamped 280px edge, not the hidden 800px preference');
+ assert.equal(h.tray.style.height,'240px');assert.equal(h.spacer.style.height,'268px','the spacer keeps every lane scrollable above the drawer');
+ assert.deepEqual(Object.keys(h.page),['scroll-padding-bottom'],'no custom property is written on the root');
  h.events.pointerdown(h.event(2,100));h.events.pointermove(h.event(2,180));h.flush();
- assert.equal(h.attrs['aria-valuenow'],400,'a second pointer must not replace the active resize');
+ assert.equal(h.attrs['aria-valuenow'],240,'a second pointer must not replace the active resize');
  h.events.keydown({key:'Escape',preventDefault:()=>{}});
- assert.equal(h.state.drawerHeight,800);assert.equal(h.attrs['aria-valuenow'],440);assert.equal(h.stored.length,0);
+ assert.equal(h.state.drawerHeight,800);assert.equal(h.attrs['aria-valuenow'],280);assert.equal(h.stored.length,0);assert.ok(!h.classes.has('is-resizing'));
  h.events.pointerdown(h.event(1,60));h.events.pointermove(h.event(1,100));h.events.pointerup(h.event(1,100));
- assert.equal(h.stored.at(-1).drawerHeight,400);
+ assert.equal(h.stored.at(-1).drawerHeight,240);assert.equal(h.stored.at(-1).drawerResized,true);
  h.events.keydown({key:'ArrowDown',target:h.grip,preventDefault:()=>{}});
- assert.equal(h.attrs['aria-valuenow'],368);assert.equal(h.stored.at(-1).drawerHeight,368);
+ assert.equal(h.attrs['aria-valuenow'],216);assert.equal(h.stored.at(-1).drawerHeight,216);
 });
-
 
 test('built-in roles stay visible with empty assignments without changing drafts',()=>{
  const builtinRoles=[{id:'default'},{id:'smol'},{id:'image',kinds:['image'],thinking:false,defaultFallbacks:false}];
@@ -364,13 +368,12 @@ test('built-in agents display native defaults without materializing override lis
  const builtinAgents=[{id:'scout',model:'@smol',description:'Read only'},{id:'security-reviewer',model:null},{id:'task',model:'@task'}];
  const profile={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{custom:['p/unknown']}}},before=JSON.stringify(profile);
  const context=roleContext({source:{agents:builtinAgents},p:()=>profile,roleKeys:['smol','task'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
- context.chainNotes=[];runInNewContext(['workers','agentValues','agentTier','agentName','automaticSlot','agentDefaultTrack','aliasRole','resolveAlias','baseChain','vibeAlias','oldSetChain','agentFromResolved','writeAgent'].map(appFunction).join('\n'),context);
+ context.chainNotes=[];runInNewContext(['led','workers','agentValues','agentTier','agentName','agentKey','patchKey','socketKey','agentDefaultTrack','aliasRole','resolveAlias','baseChain','vibeAlias','oldSetChain','agentFromResolved','writeAgent'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.workers()),['scout','security-reviewer','task','custom']);
- for(const mobile of [false,true]){
-  const html=context.agentDefaultTrack('scout',mobile);
-  assert.match(html,/Типово в OMP/);assert.match(html,/data-group="vibe"/);assert.match(html,/Обрати CUT для агента: scout/);assert.match(html,/data-agent-role="smol"/);
-  assert.doesNotMatch(context.agentDefaultTrack('security-reviewer',mobile),/data-agent-role=/);
- }
+ const html=context.agentDefaultTrack('scout');
+ assert.match(html,/<div class="leader"[^>]*><b>Типово в OMP<\/b>/,'leader tape, not a CUT');assert.doesNotMatch(html,/class="cut/);
+ assert.match(html,/class="socket" data-edit="scout" data-index="0" data-group="vibe"/);assert.match(html,/Обрати CUT для агента: scout/);assert.match(html,/class="key patch" data-agent-role="smol"/);
+ assert.doesNotMatch(context.agentDefaultTrack('security-reviewer'),/data-agent-role=/);
  assert.equal(JSON.stringify(profile),before);assert.equal(context.baseChain('scout','vibe').length,0);
  context.oldSetChain('scout',['p/own'],'vibe');
  assert.deepEqual(Array.from(profile.task.agentModelOverrides.scout),['p/own']);
@@ -434,17 +437,15 @@ test('custom agents show their source, own model default and remain removable wh
   {id:'reviewer',model:'@slow',description:'Custom reviewer',source:'project',overrides:true}];
  const profile={modelRoles:{slow:'p/slow'},retry:{fallbackChains:{}},task:{agentModelOverrides:{gone:['p/old']}}};
  const context=roleContext({source:{agents},p:()=>profile,roleKeys:['slow','smol'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
- runInNewContext(['workers','agentValues','agentTier','agentName','agentRemove','automaticSlot','agentDefaultTrack'].map(appFunction).join('\n'),context);
+ runInNewContext(['led','key','workers','agentValues','agentTier','agentName','agentKey','agentRemove','patchKey','socketKey','agentDefaultTrack'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.workers()),['scout','designer','helper','reviewer','gone']);
  assert.match(context.agentName('designer'),/проєкт/);assert.match(context.agentName('helper'),/користувач/);
  assert.doesNotMatch(context.agentName('scout'),/проєкт|користувач/);assert.match(context.agentName('reviewer'),/замінює штатного/);
- for(const mobile of [false,true]){
-  const html=context.agentDefaultTrack('designer',mobile);
-  assert.match(html,/UI designer/);assert.match(html,/успадковує модель сесії/);assert.doesNotMatch(html,/data-agent-role=/);
-  const list=context.agentDefaultTrack('helper',mobile);
-  assert.match(list,/@slow → p\/own:high/);assert.doesNotMatch(list,/data-agent-role=/);
-  assert.match(context.agentDefaultTrack('reviewer',mobile),/data-agent-role="slow"/);
- }
+ const html=context.agentDefaultTrack('designer');
+ assert.match(html,/UI designer/);assert.match(html,/успадковує модель сесії/);assert.doesNotMatch(html,/data-agent-role=/);
+ const list=context.agentDefaultTrack('helper');
+ assert.match(list,/@slow → p\/own:high/);assert.doesNotMatch(list,/data-agent-role=/);
+ assert.match(context.agentDefaultTrack('reviewer'),/data-agent-role="slow"/);
  assert.match(context.agentRemove('gone'),/data-reset-agent="gone"/);
  assert.equal(context.agentRemove('designer'),'');
 });
@@ -698,17 +699,19 @@ test('L4/L5: @role:effort aliases resolve with their thinking and a route withou
  assert.deepEqual({...context.split('p/m:off')},{raw:'p/m',provider:'p',id:'m',effort:'off'});
 });
 
-test('L6: tariff ticks follow local hours in a half-hour time zone',()=>{
+test('L6: tariff ticks follow local hours in a half-hour time zone; the bars cover the axis and peak is not only a hue',()=>{
  const tz=process.env.TZ;process.env.TZ='Asia/Kolkata';
  try{
-  const context={resetCountdown:()=> '↻ 1г',esc:s=>String(s),ManaDisplay:{colourControl:()=>''},Intl,Date};
+  const context={resetCountdown:()=> '↻ 1г',esc:s=>String(s),source:{tariff:{note:''}},Intl,Date};
   runInNewContext(appFunction('dateFormat')+'\n'+appFunction('tariffTimeline'),context);
   const html=context.tariffTimeline(Date.UTC(2026,9,12,13,40));   // 19:10 in Kolkata
-  const ticks=[...html.matchAll(/<span class="[^"]*" style="left:[^%]+%"><b>(\d\d)<\/b>/g)].map(m=>m[1]);
+  const ticks=[...html.matchAll(/<span style="left:[\d.]+%">(\d\d)<\/span>/g)].map(m=>m[1]);
   assert.equal(ticks[0],'12');assert.ok(ticks.every(t=>Number(t)%4===0),'ticks sit on whole local hours: '+ticks);
-  assert.match(html,/зараз 19:10/);
-  const ranges=[...html.matchAll(/tariff-range (peak|offpeak)" style="left:([\d.e-]+)%;width:([\d.e-]+)%/g)].map(m=>[m[1],Number(m[2]),Number(m[3])]);
-  assert.equal(ranges[0][1],0);assert.ok(Math.abs(ranges.reduce((n,r)=>n+r[2],0)-100)<1e-6,'ranges cover the axis exactly');
+  assert.match(html,/зараз 19:10/);assert.match(html,/class="tariff"/);assert.doesNotMatch(html,/data-lcd-colour|colourControl/);
+  const bars=[...html.matchAll(/<i class="([^"]*)" style="--l:([\d.e-]+)%;--w:([\d.e-]+)%"/g)].map(m=>[m[1],Number(m[2]),Number(m[3])]);
+  assert.equal(bars[0][1],0);assert.ok(Math.abs(bars.reduce((n,r)=>n+r[2],0)-100)<.01,'bars cover the axis exactly');
+  assert.ok(bars.some(b=>/\bpk\b/.test(b[0]))&&bars.some(b=>!/\bpk\b/.test(b[0])),'peak hours are their own (tall, hatched) bars');
+  assert.ok(bars.filter(b=>/past/.test(b[0])).length>0,'past hours are dimmed');
  }finally{if(tz===undefined)delete process.env.TZ;else process.env.TZ=tz;}
 });
 
@@ -731,19 +734,23 @@ test('BUG1-1: the default CUTS height is not frozen from the first window that o
  assert.equal(h.attrs['aria-valuenow'],290,'a larger window gets the normal default again');
 });
 
-test('BUG1-5: the drawer right edge follows the deck, not the scrollbar-inclusive innerWidth',()=>{
+test('BUG1-5: the drawer follows the body, not the scrollbar-inclusive innerWidth; a phone gets 8px edges',()=>{
  const h=drawerHarness(300,{innerWidth:1280,scrollbar:15});
- assert.equal(h.drawer.style.right,'19px');
+ assert.equal(h.port.style.left,'34px');assert.equal(h.port.style.width,'1212px');
+ const phone=drawerHarness(300,{innerWidth:390,scrollbar:0});
+ assert.equal(phone.port.style.left,'8px');assert.equal(phone.port.style.width,'374px');
 });
 
-test('BUG1-2/4/6: the CSS max-height and the sticky dock bound the drawer, and scrolling keeps targets above it',()=>{
- let h=drawerHarness(2000,{innerHeight:900,cssMax:780});
- assert.equal(h.attrs['aria-valuemax'],780,'JS follows the computed CSS max-height');assert.equal(h.attrs['aria-valuenow'],780);
- h=drawerHarness(2000,{innerHeight:900,dock:{top:8,height:72}});
- assert.equal(h.attrs['aria-valuemax'],900-12-88,'the sticky dock stays uncovered');
- h.events.keydown({key:'End',target:h.grip,preventDefault:()=>{}});assert.equal(h.attrs['aria-valuenow'],800);
- assert.equal(h.page['scroll-padding-bottom'],(12+800+12)+'px');
- h.context.win.querySelector=()=>null;h.context.resizeDrawer(300);assert.equal(h.page['scroll-padding-bottom'],undefined,'a closed drawer leaves no padding');
+test('BUG1-2/4/6: the drawer leaves ≈220px of page, scrolling keeps targets above it, and a closed drawer leaves its lip',()=>{
+ const h=drawerHarness(2000,{innerHeight:900});
+ assert.equal(h.attrs['aria-valuemax'],680,'the page above the drawer stays visible');assert.equal(h.attrs['aria-valuenow'],680);
+ h.events.keydown({key:'Home',target:h.grip,preventDefault:()=>{}});assert.equal(h.attrs['aria-valuenow'],180);
+ h.events.keydown({key:'End',target:h.grip,preventDefault:()=>{}});assert.equal(h.attrs['aria-valuenow'],680);
+ assert.equal(h.page['scroll-padding-bottom'],(680+12)+'px');assert.equal(h.spacer.style.height,(680+28)+'px');
+ h.state.cuts=false;h.context.resizeDrawer(h.state.drawerHeight);
+ assert.equal(h.spacer.style.height,(46+28)+'px','closed: the spacer keeps room for the lip with the transport');assert.equal(h.page['scroll-padding-bottom'],(46+12)+'px');
+ const phone=drawerHarness(300,{lip:92,open:false});assert.equal(phone.spacer.style.height,(92+28)+'px','a phone lip has two rows');
+ h.context.win.querySelector=()=>null;h.context.resizeDrawer(300);assert.equal(h.page['scroll-padding-bottom'],undefined,'no drawer leaves no padding');
 });
 
 // A minimal DOM for the region engine: comments, elements, attributes, fragments and <template> parsing.
@@ -879,4 +886,77 @@ test('a CUTS search keystroke filters the cached collection instead of the whole
  assert.equal(scanned,40,'typing does not re-run the collection filters');
  assert.deepEqual(Array.from(context.collectionCuts().slice(0,2),m=>m.name),['Alpha 1','Alpha 11'],'the cached order is the collation order');
  state.freeCuts=true;context.priceInfo=()=>({kind:'free'});context.collectionCuts();assert.equal(scanned,80,'a filter change rebuilds it once');
+});
+
+// Device templates (stage C1a): fold, leader, transport on the drawer front, attribute-only switches, name tails.
+const flat=r=>r.children?r.open+r.children.map(flat).join('')+'</'+/^<([a-z0-9-]+)/i.exec(r.open)[1]+'>':r.html;
+function laneContext(chains,open=[]){
+ const context={roleKeys:Object.keys(chains),labels:{},state:{profile:'standard',role:'default'},source:{presets:{}},esc:s=>String(s),openFolds:new Set(open),
+  chain:r=>chains[r]||[],modeTag:()=>'',node:(role,r,i)=>`<div class="cut" data-node-role="${role}" data-index="${i}"></div>`,agentKey:()=>'',agentListNote:()=>'',agentInfo:()=>null,agentRemove:()=>''};
+ runInNewContext(['led','socketKey','laneKey','graphRow','laneGroups','foldOf','laneGraph','leaf','box'].map(appFunction).join('\n'),context);
+ return context;
+}
+
+test('an unconfigured role is leader tape with a socket, never a CUT',()=>{
+ const context=laneContext({default:[],slow:[],composer:['p/a']});
+ const leader=context.graphRow('slow',1);
+ assert.match(leader,/class="lane lane--inherit"/);assert.match(leader,/<div class="leader"[^>]*><b>Типово в OMP<\/b>/);
+ assert.match(leader,/class="socket" data-edit="slow" data-index="0" data-group="role"/);assert.match(leader,/основна<\/button>/);
+ assert.doesNotMatch(leader,/class="cut/);assert.match(leader,/class="led" data-c="green"/,'LED off: OMP default');
+ const own=context.graphRow('composer',2);
+ assert.match(own,/class="cut" data-node-role="composer" data-index="0"/);assert.match(own,/data-edit="composer" data-index="1" data-group="role"[^>]*>.*резерв<\/button>/);
+ assert.match(own,/class="led is-on" data-c="green"/,'LED on: own CUTS');
+});
+
+test('a run of three or more inherited lanes folds into one printed row; default and short runs never fold',()=>{
+ let context=laneContext({default:[],smol:[],slow:[],vision:[],plan:[],composer:['p/a'],tiny:[],task:[],judge:['p/b']});
+ assert.deepEqual(JSON.parse(JSON.stringify(context.laneGroups())),[{role:'default'},{fold:['smol','slow','vision','plan']},{role:'composer'},{role:'tiny'},{role:'task'},{role:'judge'}]);
+ assert.equal(context.foldOf('vision'),'smol');assert.equal(context.foldOf('tiny'),'');
+ let tree=context.laneGraph(),keys=Array.from(tree.children,c=>c.key);
+ assert.deepEqual(keys,['p/row:default','p/fold:smol','p/foldlanes:smol','p/row:composer','p/row:tiny','p/row:task','p/row:judge']);
+ const row=tree.children[1].html,lanes=tree.children[2];
+ assert.match(row,/data-fold-toggle="smol" aria-expanded="false"/);assert.match(row,/02–05/);assert.match(row,/Показати <span class="rd"[^>]*>4<\/span>/);assert.match(row,/smol · slow · vision · plan/);
+ assert.match(lanes.open,/class="fold__lanes" id="fold-smol"/);assert.deepEqual(Array.from(lanes.children,c=>c.key),['p/row:smol','p/row:slow','p/row:vision','p/row:plan'],'folded lanes stay real lanes (sockets, focus)');
+ context=laneContext({default:[],smol:[],slow:[],vision:[],composer:['p/a']},['smol']);
+ tree=context.laneGraph();
+ assert.match(tree.children[2].open,/fold__lanes is-open/,'an opened fold is remembered');assert.match(tree.children[1].html,/aria-expanded="true"/);assert.match(tree.children[1].html,/Сховати/);
+});
+
+test('the transport lives on the drawer front only, with its scope; the dock has no Undo, Redo or Save',()=>{
+ const SVG={undo:'',redo:'',close:'',more:'',search:'',refresh:''};
+ const state={view:'profiles',profile:'standard',changes:3,saving:false,poolPanel:false,modePanel:false,cuts:false,health:true,cutProvider:'all',cutHealth:'all',freeCuts:false,cutQuery:'',opFeedback:'',error:''};
+ const context={SVG,state,esc:s=>String(s??''),prettyProfile:s=>s==='standard'?'Standard':s,source:{projects:[{id:'x',name:'X'}],projectId:'x',modeConflicts:[],modeRecovery:null},profileKeys:['standard'],
+  editHistory:{available:()=>({undo:true,redo:false})},poolsDirty:()=>false,activePlan:()=>null,collectionCuts:()=>[1,2],opProviderItems:()=>[['all','Усі']],healthNames:{healthy:'Є запас'},
+  narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,poolNames:{},poolName:()=>undefined,cutTitle:r=>r,providerName:r=>r,split:r=>({provider:r})};
+ runInNewContext(['led','key','leaf','box','selWin','opSwitchKey','opSwitchFace','switchRegion','poolActionContext','transportParts','trayOpen','drawerHint','armedMarkup','drawerSearch','drawerCount','cutsTray','profileMenu','dockSwitches','operatorFeedback','operatorDock'].map(appFunction).join('\n'),context);
+ const tray=flat(context.cutsTray()),dock=flat(context.operatorDock());
+ assert.match(tray,/class="tray__lip"[\s\S]*class="tray__transport transport"[\s\S]*data-action="undo"[\s\S]*data-action="redo"[\s\S]*class="transport__state"[\s\S]*class="key key--action" data-action="save"/);
+ assert.match(tray,/3 зміни/);assert.match(tray,/data-action="redo"[^>]*disabled/);
+ assert.doesNotMatch(dock,/data-action="(undo|redo|save|pool-save)"/,'no transport on the dock');
+ context.state.poolPanel=true;context.poolsDirty=()=>true;
+ const pools=flat(context.cutsTray());
+ assert.match(pools,/class="transport__scope">пули</);assert.match(pools,/data-action="pool-undo"/);assert.match(pools,/data-action="pool-save"/);
+ assert.match(tray,/<section class="tray" id="cuts-collection"/,'a closed drawer still shows its lip');
+});
+
+test('reopen patches only a container opening tag: HEALTH or search never rebuild the tape',()=>{
+ const {host,context:{leaf,box},regions,find}=regionHost();
+ const deck=open=>[box('deck',open,[leaf('row:a','<div class="lane">A</div>'),leaf('row:b','<div class="lane">B</div>')])];
+ regions.render(deck('<section class="deck">'));
+ const lanes=find(host,'div'),section=find(host,'section')[0];
+ const out=regions.reopen('deck','<section class="deck health-off">');
+ assert.equal(section.getAttribute('class'),'deck health-off');assert.equal(out.inserted.length,0);
+ assert.deepEqual(find(host,'div'),lanes,'children are untouched');
+ regions.render(deck('<section class="deck health-off">'));assert.deepEqual(find(host,'div'),lanes,'a later render agrees with the reopened tag');
+ assert.equal(regions.reopen('missing','<div>'),null);
+});
+
+test('CUT names keep their distinguishing tail when they are truncated',()=>{
+ const context={};runInNewContext(appFunction('nameParts'),context);
+ const parts=n=>Array.from(context.nameParts(n));
+ assert.deepEqual(parts('DEMO · Aurora 01 Free'),['DEMO · Aurora',' 01 Free']);
+ assert.deepEqual(parts('Qwen3 Coder 480B'),['Qwen3 Coder',' 480B']);
+ assert.deepEqual(parts('deepseek-demo-free'),['deepseek-demo','-free']);
+ assert.deepEqual(parts('editor-long-context-multilingual-edition'),['editor-long-context-multilingual-edition','']);
+ assert.deepEqual(parts('GPT 5'),['GPT',' 5']);
 });
