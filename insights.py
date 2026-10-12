@@ -142,6 +142,20 @@ def commandcode_report(payload):
         'at': iso_time(usage.get('updatedAt')), 'plan': '', 'source': 'CodexBar · Mac'}
 
 
+def merge_shared(limits):
+    """One shared pool can arrive once per model family (Antigravity reports «Claude & GPT (shared)»
+    under both anthropic and openai ids); identical readings are the same window."""
+    merged = {}
+    for limit in limits:
+        same = tuple(limit.get(k) for k in ('label', 'window', 'remaining', 'resets', 'starts', 'durationMs', 'status', 'tier'))
+        if same in merged:
+            first = merged[same] = {**merged[same]}
+            first['models'] = list(first.get('models') or []) + [m for m in limit.get('models') or [] if m not in (first.get('models') or [])]
+        else:
+            merged[same] = limit
+    return list(merged.values())
+
+
 def usage_report(report, account):
     """One native `omp usage` report; a malformed one raises and is skipped alone."""
     limits = []
@@ -157,17 +171,7 @@ def usage_report(report, account):
             'resets': window.get('resetsAt'), 'starts': window.get('startsAt'),
             'durationMs': window.get('durationMs'), 'window': window.get('label', ''), 'status': raw.get('status'),
             'models': scope.get('modelIds', []), 'tier': scope.get('tier', '')})
-    # One shared pool can arrive once per model family (Antigravity reports «Claude & GPT (shared)»
-    # under both anthropic and openai ids); identical readings are the same window.
-    merged = {}
-    for limit in limits:
-        same = tuple(limit[k] for k in ('label', 'window', 'remaining', 'resets', 'starts', 'durationMs', 'status', 'tier'))
-        if same in merged:
-            first = merged[same]
-            first['models'] = first['models'] + [m for m in limit['models'] if m not in first['models']]
-        else:
-            merged[same] = limit
-    limits = list(merged.values())
+    limits = merge_shared(limits)
     fetched = report.get('fetchedAt', 0)
     if not finite_number(fetched):
         raise ValueError('fetchedAt')
@@ -199,7 +203,8 @@ class Insights:
         `omp stats` are per agent directory); benchmark weights follow the asking scope's ui."""
         app = app or self.app
         usage = self.data['usage']
-        reports = list(usage['reports'])
+        # Snapshots stored before merge_shared existed still carry the duplicates.
+        reports = [{**r, 'limits': merge_shared(r.get('limits') or [])} for r in usage['reports']]
         if not any(r['provider'] == 'commandcode' for r in reports):
             # The Mac launcher pushes CodexBar's snapshot into the state directory it was configured with.
             for folder in dict.fromkeys((app.state_dir, self.app.state_dir)):
