@@ -2997,7 +2997,7 @@ class Handler(BaseHTTPRequestHandler):
                 if time.time() - app.cat['attempted'] < 20:
                     raise Problem('Оновлення вже виконано. Зачекай кілька секунд.', 429)
                 app.refresh_async()
-                threading.Thread(target=app.insights.update, daemon=True).start()
+                threading.Thread(target=app.insights.update, kwargs={'force': True}, daemon=True).start()
                 result = {'ok': True}
             elif path == '/api/favorites':
                 values = body.get('values')

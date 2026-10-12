@@ -551,6 +551,26 @@ unrelated: {keep: true}
         self.app.snapshot()
         self.assertEqual(json.dumps(self.app.state['catalog'], sort_keys=True), before)
 
+    def test_refresh_key_rereads_usage_without_waiting_five_minutes(self):
+        from insights import BENCHMARK_SCHEMA
+        self.app.insights.data['benchmarks'].update(at=time.time(), schema=BENCHMARK_SCHEMA)  # no network
+        self.app.insights.data['stats'] = {'at': time.time()}
+        calls = []
+        def native(args, timeout):
+            calls.append(args[0])
+            return {'reports': []}
+        self.app.insights.data['usage'] = {'at': time.time() - 60, 'reports': [{'provider': 'anthropic', 'account': 1, 'at': 1, 'plan': '', 'limits': []}], 'error': ''}
+        with patch.object(self.app.insights, 'native', side_effect=native):
+            self.app.insights.update()
+            self.assertEqual(calls, [], 'the periodic cycle keeps its five minutes')
+            self.app.insights.update(force=True)
+        self.assertEqual(calls, ['usage'])
+        self.assertEqual(self.app.insights.data['usage']['reports'], [], 'a logged-out account is gone after «Оновити»')
+        self.app.insights.data['usage']['at'] = time.time() - 5
+        with patch.object(self.app.insights, 'native', side_effect=native):
+            self.app.insights.update(force=True)
+        self.assertEqual(calls, ['usage'], 'forced re-reads are spaced by 20 s')
+
     def test_usage_reports_parse_independently_and_reject_non_numbers(self):
         from insights import commandcode_report
         native = {'reports': [

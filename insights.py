@@ -346,12 +346,14 @@ class Insights:
         self.data[section]['error'] = message
         return True
 
-    def update(self):
+    def update(self, force=False):
+        """Periodic refresh; `force` (the panel's «Оновити») re-reads usage right away, at most every 20 s, so a
+        logged-out account disappears without waiting for the five-minute cycle."""
         if not self.lock.acquire(False):
             return
         try:
             now, changed = time.time(), False
-            if now - self.data['usage'].get('at', 0) >= 300:
+            if now - self.data['usage'].get('at', 0) >= (20 if force else 300):
                 try:
                     native = self.native(['usage', '--json', '--redact'], 60)
                     reports, skipped = [], 0
