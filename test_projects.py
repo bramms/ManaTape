@@ -93,7 +93,7 @@ class Projects(unittest.TestCase):
             proxy.Proxy.forward(handler, None, {})
 
     def test_shared_agent_lock_and_explicit_native_environment(self):
-        one, two = self.apps.values()
+        one, two = self.apps['one'], self.apps['two']
         self.assertIs(one.lock, two.lock)
         self.assertEqual(one.native_env['PI_CODING_AGENT_DIR'], str((self.root / 'agent').resolve()))
         with patch('insights.subprocess.run') as run:
@@ -145,7 +145,7 @@ class Projects(unittest.TestCase):
     def test_expiry_respects_other_projects_using_shared_registry(self):
         import time
         from server import fingerprint
-        one, two = self.apps.values()
+        one, two = self.apps['one'], self.apps['two']
         config = {'api': 'openai-completions', 'baseUrl': 'https://example.invalid/v1', 'models': [{'id': 'model-a'}]}
         one.agent.mkdir(exist_ok=True)
         (one.agent/'models.yml').write_text(yaml_dump({'providers': {'custom': config}}))
@@ -446,7 +446,7 @@ class Projects(unittest.TestCase):
 
     def test_shared_provider_renewal_survives_old_expiry_and_restart(self):
         from server import digest
-        one, two = self.apps.values()
+        one, two = self.apps['one'], self.apps['two']
         def save(app, days):
             registry = app.agent/'models.yml'
             app.provider_save({'id':'temporary', 'name':'Temporary', 'revision':digest(registry.read_bytes()) if registry.exists() else digest(b''), 'url':'https://example.invalid/v1', 'api':'openai-completions', 'auth':'none', 'models':['model'], 'days':days})

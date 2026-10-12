@@ -209,12 +209,40 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .status__row--sub{margin-top:2px}
 .status__row--sub .status__note{color:var(--danger)}
 /* DOCK — operator pocket: project / profile selectors, ⋯, HEALTH, CUTS, printed context */
-.dock{display:flex;align-items:center;gap:14px;padding:8px 12px;flex-wrap:wrap}
+.dock{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:8px 12px}
+.dock__row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0}
 .dock__grp{display:flex;align-items:center;gap:8px}
 .dock__ctx{text-align:right;flex:none}
 /* dock: the feedback line takes the free middle; the ⋯ menu drops from its key */
 .dock__msg{flex:1 1 0;min-width:120px;display:flex;align-items:center}
 .dock__msg .msg{flex:1;min-width:0}
+.dock__msg .msg{flex:1;min-width:0}
+/* SCOPE (DESIGN «Області і котушки»): a printed breadcrumb of what is edited — Глобально › project › котушка, the file,
+   the котушка OMP calls active — across the top of the pocket; then the «Глобально» key and the two drums. */
+.dock__crumb{display:flex;align-items:center;flex-wrap:wrap;gap:4px 14px;min-width:0;padding:0 2px 6px;margin-bottom:2px;
+ background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px) left bottom/100% 2px no-repeat}
+.crumb{display:flex;align-items:center;flex-wrap:wrap;gap:2px 0;margin:0;padding:0;list-style:none;min-width:0;font:700 var(--fs-data)/1.3 var(--font-mono);color:var(--ink-2)}
+.crumb li{display:inline-flex;align-items:center;min-width:0;overflow-wrap:anywhere}
+.crumb li+li::before{content:"›";padding:0 8px;color:var(--silk);font-weight:400}
+.crumb li[aria-current]{color:var(--ink)}
+.crumb__file{min-width:0;overflow-wrap:anywhere}
+.crumb__active{display:inline-flex;align-items:center;gap:7px;margin-left:auto}
+.crumb__active b{font-weight:700;color:var(--ink)}
+/* on a desk the breadcrumb is one line (a long name gives way with an ellipsis, the full text is in its title), so
+   switching the котушка never moves the pult; the phone lets it wrap */
+@media (min-width:761px){
+ .dock__crumb{flex-wrap:nowrap}
+ .crumb{flex:0 1 auto;flex-wrap:nowrap;overflow:hidden}
+ .crumb li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+ .crumb li[aria-current]{flex:0 0 auto;max-width:60%}
+ .crumb__file{flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .crumb__active,.crumb__note{flex:none;white-space:nowrap}
+}
+@media (max-width:1180px){.crumb__note{display:none}}
+/* the «для нових запусків» note lives in the breadcrumb; the phone, which folds the crumb, prints it in the context */
+@media (min-width:761px){.dock__note,.dock__note+br{display:none}}
+.key--scope .key__cap{min-width:104px;justify-content:flex-start}
+.key--apply .key__cap{min-width:132px;justify-content:flex-start}
 /* BOOT — the device before /api/state (index.html) and the connection-failure screen (app.js): the same plate,
    brand and one black glass that prints the state; the glass keeps its default hue until screen.js paints it */
 .boot{display:grid;justify-items:start;align-content:start;gap:12px;padding:14px 4px 24px;min-height:min(420px,60vh)}
@@ -455,8 +483,8 @@ a.key{text-decoration:none}
 .sel--sm select{height:28px;font-size:var(--fs-data);padding-right:36px}
 .sel--sm .sel__chev{top:6px;bottom:6px;width:20px;right:6px}
 .sel option{color:#1D2024;background:#FDFCF9}
-.sel--proj{flex:0 1 360px;min-width:200px}
-.sel--prof{flex:0 1 290px;min-width:180px}
+.sel--proj{flex:0 1 300px;min-width:200px}
+.sel--prof{flex:0 1 240px;min-width:190px}
 /* FIELDS — search, form field, fader */
 .search{position:relative;display:flex;align-items:center;gap:8px;height:36px;width:300px;max-width:100%;padding:0 12px;border-radius:var(--r-md);
  background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-2)}
@@ -487,6 +515,20 @@ a.key{text-decoration:none}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 16px}
 .form--one{grid-template-columns:minmax(0,1fr)}
 .form--one .field{max-width:440px}
+.path{overflow-wrap:anywhere;white-space:normal}
+.path-list{display:grid;gap:3px;margin:6px 0;font:400 var(--fs-label)/1.35 var(--font-mono);overflow-wrap:anywhere}
+.path-list code{font:inherit;font-weight:700;color:var(--ink)}
+.tray__form code{font:inherit;font-weight:700}
+/* migration of an old котушка: carried | lost side by side, the three ways as radio keys, the loss tick */
+.mig{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:8px 0}
+.mig__col{display:grid;gap:6px;align-content:start;min-width:0}
+.mig__col .diffstrip{margin-left:0}
+.mig__list{margin:0;padding:0 0 0 16px;font:400 var(--fs-label)/1.4 var(--font-mono);color:var(--ok-ink)}
+.mig__modes{flex-wrap:wrap;margin:6px 0 2px;justify-self:start;max-width:100%}
+.tray__form>[data-field=name]{max-width:440px}
+.mig__accept{margin:4px 0;justify-self:start}
+.mig__accept .key__cap{white-space:normal;text-align:left}
+@media (max-width:760px){.mig{grid-template-columns:minmax(0,1fr)}}
 /* fader: native range as a milled slot with a metal cap (history position) */
 .fader{-webkit-appearance:none;appearance:none;display:block;width:100%;height:var(--hit);margin:0;background:transparent;cursor:ew-resize;touch-action:none}
 .fader::-webkit-slider-runnable-track{height:10px;border-radius:5px;background:repeating-linear-gradient(90deg,var(--rail) 0 1px,transparent 1px 10%) center/100% 4px no-repeat,linear-gradient(180deg,var(--pocket-lo),var(--pocket));box-shadow:var(--el-recess-2)}
@@ -545,14 +587,22 @@ a.key{text-decoration:none}
    Colours come from screen.js as per-element custom properties (--s-bg, --s-hi, --s-ink, --s-acc, --s-dim,
    --s-ok, --s-warn, --s-bad, their "-c" channel twins, --s-glow, --s-spill). The fallbacks below = hue 150 at 60%. */
 /* a row of screens shares one height: chins line up, the shorter glass simply has more black.
-   The bank packs from the left with one gap; a MICRO screen is as wide as its windows (never the free space), and
-   only the DeepSeek screen — whose 24 h tariff is elastic — takes the rest of its row, so no row has holes. */
+   The bank packs from the left with one gap; a MICRO screen is as wide as its windows (never the free space). The
+   DeepSeek screen is its own unit, always last (markup order): its 24 h tariff is elastic, so it takes the rest of
+   its row and that row has no hole; it is never part of a provider's glass. */
 .screens{display:flex;flex-wrap:wrap;gap:14px 16px;justify-content:flex-start;padding-top:2px;align-items:stretch}
 .screens__key{display:none}
 .screen{--s-bg:rgb(3 9 4);--s-hi:rgb(11 35 17);--s-ink:rgb(226 249 230);--s-ink-c:226 249 230;--s-acc:rgb(23 218 104);--s-acc-c:23 218 104;
  --s-dim:rgb(151 186 157);--s-dim-c:151 186 157;--s-ok:rgb(90 237 133);--s-ok-c:90 237 133;--s-warn:rgb(255 202 98);--s-warn-c:255 202 98;--s-bad:rgb(255 132 120);--s-bad-c:255 132 120;--s-glow:.46;--s-spill:.9;
  position:relative;isolation:isolate;display:flex;flex-direction:column;gap:4px;min-width:0;flex:0 0 auto}
-.screens>.screen--ds{flex:1 1 var(--ds-w)}   /* --ds-w = what its chin needs (slide, Заміни, ↻, ТОН) */
+.screens>.screen--ds{flex:100 1 var(--ds-w)}   /* --ds-w = what its chin needs; in its row it takes nearly all the slack */
+/* A row of banks closes itself (owner 2026-10-12): every provider bank grows with its row by its window count, up to
+   twice its windows, so a wrapped row leaves no hole at its end; the DeepSeek screen takes whatever its row keeps.
+   The windows of a grown bank share the extra width evenly; the meters stay one segment scale. */
+@media (min-width:761px){
+ .screens>.screen:not(.screen--ds){flex:var(--wins,1) 1 auto;max-width:calc(var(--wins,1) * var(--win-w) * 2 + 90px)}
+ .screens>.screen:not(.screen--ds) .wins>.win{flex:1 1 auto}
+}
 .screen__win{position:relative;border-radius:var(--r-win);padding:3px;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light));flex:1;display:flex;min-width:0}
 .screen__win::before{/* light spill on the plate: static shadow in the screen's hue; only opacity changes */content:"";position:absolute;inset:4px;z-index:-1;border-radius:12px;pointer-events:none;
  box-shadow:0 0 22px 4px rgb(var(--s-acc-c)/.30),0 10px 40px 6px rgb(var(--s-acc-c)/.16);opacity:calc(var(--spill)*var(--s-spill));transition:opacity .5s linear}
@@ -594,8 +644,9 @@ a.key{text-decoration:none}
    bank): an age that does not fit beside the name takes the next line, the DeepSeek age gives way to the mode */
 .screens .g-head{width:0;min-width:100%;flex-wrap:wrap;row-gap:3px;position:relative;padding-right:26px}
 /* the name is never cut for the age: the whole age takes the next line first (final QA P1-3); the reels (or the
-   DeepSeek mode) sit at the right of the first line and keep their place */
-.screens .g-head .g-name{flex:0 1 auto;max-width:100%}
+   DeepSeek mode) sit at the right of the first line and keep their place; a name longer than a one-window bank
+   wraps at its spaces instead of losing its end */
+.screens .g-head .g-name{flex:0 1 auto;max-width:100%;white-space:normal}
 .screens .g-head .g-age{flex:0 0 auto;max-width:100%;white-space:normal;overflow:visible}
 .screens .g-head>.g-reels{position:absolute;right:0;top:1px}
 .screens .screen--ds .g-head{padding-right:calc(14ch + 8px)}
@@ -686,6 +737,14 @@ a.key{text-decoration:none}
 .tariff__axis span{position:absolute;transform:translateX(-50%)}
 .tariff__axis span:first-child{transform:none}
 .tariff__axis span:last-child{transform:translateX(-100%)}
+/* DeepSeek reel readout beside the tariff: label + big count, then label · value rows (one window wide) */
+.ds-sum{flex:none;width:var(--win-w);min-width:0;display:flex;flex-direction:column;gap:4px}
+.ds-sum__top{display:flex;justify-content:space-between;align-items:baseline;gap:6px;padding-bottom:2px}
+.ds-sum__top>span{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow));min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ds-sum__top>b{flex:none;font:700 var(--fs-value)/1 var(--font-mono);color:var(--s-ink);text-shadow:0 0 8px rgb(var(--s-ink-c)/calc(var(--s-glow)*.55))}
+.ds-sum__row{display:flex;justify-content:space-between;gap:6px;color:var(--s-dim);white-space:nowrap}
+.ds-sum__row>b{font-weight:400;color:var(--s-ink)}
+.ds-sum__row[data-s=off]>b{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow))}
 /* mini legend printed on glass, one line per item */
 .g-legend{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--s-dim);font-size:var(--fs-label)}
 .g-legend>span{white-space:nowrap}
@@ -768,6 +827,25 @@ a.key{text-decoration:none}
 .deck__note{white-space:nowrap}
 .deck__notices{display:grid;gap:4px;padding:0 4px 10px}
 .deck__notices .msg{white-space:normal;min-height:24px}
+.notice{display:grid;gap:4px;min-width:0}
+.notice .msg{align-items:flex-start}
+.notice .msg>.led{margin-top:4px}
+.notice__tools{display:flex;gap:6px;margin-left:auto;flex:none}
+.notice code,.presetbar code{font:inherit;font-weight:700}
+/* a short diff on a recessed strip: ~ changed, − removed, + added; one line each, wrapping inside the strip */
+.diffstrip{display:grid;gap:2px;min-width:0;margin:0 0 2px 16px;padding:6px 10px;border-radius:var(--r-sm);font:400 var(--fs-label)/1.35 var(--font-mono);color:var(--ink-2);
+ background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
+.diffstrip__file{font-weight:700;color:var(--ink);overflow-wrap:anywhere}
+.diffstrip__l{overflow-wrap:anywhere;white-space:pre-wrap}
+.diffstrip__l[data-op=chg]{color:var(--warn-ink)}
+.diffstrip__l[data-op=add]{color:var(--ok-ink)}
+.diffstrip__l[data-op=del]{color:var(--danger)}
+/* a котушка's limits printed over its lanes: what it carries, its thinking, the way to the scope's Standard */
+.presetbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin:0 4px 10px;padding:8px 10px;border-radius:var(--r-md);background:linear-gradient(180deg,var(--pocket-hi),var(--pocket));box-shadow:var(--el-recess-1)}
+.presetbar__txt{display:grid;gap:2px;flex:1 1 320px;min-width:0;font:400 var(--fs-label)/1.35 var(--font-mono);color:var(--ink-2)}
+.presetbar__txt b{font-weight:700;color:var(--ink)}
+.presetbar .sel{flex:0 1 270px}
+.lg__inh--global{outline-color:var(--own-ink)}
 .deck__body.is-pending .lanes{opacity:.78;transition:opacity var(--t-med)}
 /* printed ruler: column names over the bed, a tick per column, timecode rail */
 .ruler{display:grid;grid-template-columns:var(--key-w) minmax(0,1fr);gap:10px;padding:0 2px 6px}
@@ -955,6 +1033,16 @@ button.cut__name.cut__name--split{display:flex}
 .cut.is-src{opacity:.32;transform:scale(.98)}
 /* a fallback inherited from `default`: the same CUT, outlined by a printed dashed frame */
 .cut[data-inherited]{outline:1.5px dashed color-mix(in srgb,var(--tape-ink-2) 55%,transparent);outline-offset:-4px}
+.cut[data-inherited=global]{outline:1.5px dashed color-mix(in srgb,var(--own-ink) 70%,transparent)}
+/* the first CUT of an inherited run carries a printed tab on its top edge: «з глобального», «резерви області» */
+.cut__src{position:absolute;left:12px;top:-8px;z-index:1;padding:1px 4px;border-radius:var(--r-xs);font:700 var(--fs-label)/1.1 var(--font-mono);letter-spacing:.02em;white-space:nowrap;
+ color:var(--own-ink);background:var(--tape-hi);box-shadow:inset 0 0 0 1.25px currentColor;pointer-events:none}
+.cut[data-inherited=scope] .cut__src{color:var(--tape-ink-2)}
+/* a CUT that cannot be edited here (a котушка shows its scope's reserves; a Global котушка in a project): printed
+   tape — flat (no lift), no key, no drag; its text keeps full contrast */
+.cut--locked{cursor:default;box-shadow:inset 0 0 0 1px var(--leader-edge);background:linear-gradient(180deg,var(--tape-hi),var(--tape))}
+.cut--locked .cut__name{cursor:default}
+.lane__key--src .lane__sub{color:var(--ink-2)}
 /* CUT name: the shared namespace («DEMO · », «org/») gives way first, then the family; the tail never does */
 /* the namespace shrinks first: its weight keeps the family's share below one layout unit, so the family never
    shows an ellipsis while the namespace still has room to give */
@@ -998,7 +1086,7 @@ button.cut__name.cut__name--split{display:flex}
 .lane--inherit .socket{height:34px}
 .lane__label{display:grid;gap:2px;min-width:0}
 .lane__sub{font:400 var(--fs-label)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lane__key[aria-current=true]{box-shadow:var(--el-pressed),inset 0 1px 0 var(--bevel-hi)}
+.lane__key:is([aria-current=true],[aria-expanded=true]){box-shadow:var(--el-pressed),inset 0 1px 0 var(--bevel-hi)}
 .lane__key:focus-visible,.socket:focus-visible,.cut__more:focus-visible,button.cut__name:focus-visible,button.cut:focus-visible,.tray__title:focus-visible,.leader:focus-visible{outline:none}
 .lane__tools{display:flex;gap:6px;margin-left:auto;flex:none;padding-left:10px}
 .lane__mode{margin-right:8px}
@@ -1110,6 +1198,12 @@ button.cut__name.cut__name--split{display:flex}
 .tray__editor>.tray__grid{flex:1}
 .tray__editor>.empty{flex:1;align-items:center}
 .tray__edmsg{min-height:20px;flex:none}
+.poolpick,.pooldiffs{display:grid;gap:6px;flex:none}
+.poolpick__row,.pooldiffs__row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;min-width:0}
+.poolpick__src{display:grid;gap:2px;flex:1;min-width:0;font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2)}
+.poolpick__src b{color:var(--ink)}
+.pooldiffs__row>b{font:700 var(--fs-label)/1.3 var(--font-mono)}
+.pooldiffs__row .diffstrip{flex:1 1 260px;margin:0}
 .tray__source{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;padding-left:16px;
  background:linear-gradient(90deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px) left top/2px 100% no-repeat}
 .tray__srchead{display:flex;align-items:center;gap:10px;min-height:20px;flex:none}
@@ -1146,6 +1240,9 @@ button.cut__name.cut__name--split{display:flex}
 .menu--pick .menu__list{display:grid;overflow:auto;overscroll-behavior:contain;flex:1;min-height:0;max-height:none;align-content:start;gap:12px;padding:12px 6px 6px;border-radius:calc(var(--r-md) + 4px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
 .menu--pick .menu__list .cut{margin:0;width:auto;flex:none}
 .menu--tools{width:244px}
+.menu--lane{width:284px}
+.menu__where{padding-top:2px}
+.menu__files{display:grid;gap:2px;overflow-wrap:anywhere}
 .menu__row{padding:8px 4px 2px}
 .menu__row .sel{width:100%}
 .menu__row .sel>.silk{width:72px}
@@ -1305,11 +1402,16 @@ button.cut__name.cut__name--split{display:flex}
  .screen--ds .slide{gap:6px}
  .screen--ds .screen__chin .key:not(.key--sq) .key__cap{padding:0 8px}
 }
-@media (min-width:1181px){
- .dock{flex-wrap:nowrap}
+@media (min-width:1381px){
+ .dock__row{flex-wrap:nowrap}
 }
-@media (max-width:1180px){
+/* narrower: the status line takes its own reserved row under the keys, so the drums never shrink below their names */
+@media (max-width:1380px){
  .dock__msg{order:9;flex-basis:100%}
+}
+/* narrower still, HEALTH / CUTS take the second row and the status line shares it */
+@media (min-width:761px) and (max-width:1180px){
+ .dock__msg{order:0;flex:1 1 220px}
 }
 @media (max-width:1100px){
  .tray__body--ed{grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;align-content:start;overflow:auto;overscroll-behavior:contain;gap:12px}
@@ -1343,13 +1445,21 @@ button.cut__name.cut__name--split{display:flex}
  .strip>.keybed .key__cap{width:100%;padding:0 8px;gap:6px;min-width:0;justify-content:center}
  .strip>.keybed .key__num{display:none}
  .plate{order:4;flex:1;justify-content:space-between}
- .dock{gap:10px}
+ .dock__row{gap:10px}
  .dock .sel{width:100%;flex:1 1 100%;min-width:0}
+ /* the drums first; then «Глобально», «Застосувати» and ⋯ share a row */
+ .dock .key--scope,.dock .key--apply,.dock .dock__menu{order:1}
+ .dock .seam--v{order:2}
+ .dock .dock__grp{order:2}
+ .crumb__note{display:none}
+ .notice .msg{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start}
+ .notice__tools{grid-column:2;margin:2px 0 0}
+ .diffstrip{margin-left:0}
  .dock__ctx{display:none}
  .dock__msg{flex-basis:100%;order:5}
  /* the reserved status row prints the context note while there is no message: no hollow pocket */
- .dock:has(.dock__msg .msg>span:only-child:empty) .dock__msg{flex:0 0 0;min-width:0;margin-right:-10px}
- .dock:has(.dock__msg .msg>span:only-child:empty) .dock__ctx{display:block;order:6;flex:1 1 100%;min-width:0;min-height:32px;text-align:left}
+ .dock__row:has(.dock__msg .msg>span:only-child:empty) .dock__msg{flex:0 0 0;min-width:0;margin-right:-10px}
+ .dock__row:has(.dock__msg .msg>span:only-child:empty) .dock__ctx{display:block;order:6;flex:1 1 100%;min-width:0;min-height:32px;text-align:left}
  .dock__msg .msg{min-height:32px}   /* the same reserved height as the two-line note: a message never moves the pult */
  .strip>.status .status__row--sub .status__note{display:inline}
  .sel>.silk{width:74px}
@@ -1357,7 +1467,12 @@ button.cut__name.cut__name--split{display:flex}
  .screens{flex-direction:column;align-items:stretch}
  .screen,.screens>.screen--ds{width:100%;flex:none}
  .wins{display:grid;grid-template-columns:1fr 1fr;gap:10px 0}
- .screen--ds .wins{grid-template-columns:minmax(0,1fr)}   /* the DeepSeek 5 h window uses the whole glass */
+ .ds-sum{width:auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 0}   /* count over three readings */
+ .ds-sum__top{grid-column:1/-1}
+ .ds-sum__row{padding:0 10px}
+ .ds-sum__row:nth-child(2){padding-left:0}
+ .ds-sum__row:last-child{padding-right:0}
+ .ds-sum__row+.ds-sum__row{background:radial-gradient(circle,var(--s-dim) 0 .7px,transparent 1px) left top/2px 4px repeat-y}
  .win,.win:first-child,.win:last-child{width:auto;padding:0 10px}
  .win:nth-child(odd){padding-left:0;background:none}
  .g-split{flex-direction:column}

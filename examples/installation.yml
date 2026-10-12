@@ -1,9 +1,13 @@
-# Зберігайте власну копію поза репозиторієм.
+# Зберігайте власну копію поза репозиторієм. Файл необов’язковий: без нього Mana Tape показує
+# глобальну область ~/.omp/agent і проєкти з історії сесій OMP.
 # Відносні шляхи рахуються від каталогу цього YAML. ~ та $ENV підтримуються.
 port: 19421
 state: ~/.local/share/mana-tape
 agent: ~/.omp/agent
 omp: omp
+# ui: {providerLabels: {my-local: LOCAL}}   # для глобальної області й усіх проєктів
+# projectRoots: [~/Projects]                 # підкаталоги з .omp/config.yml стають областями
+# discover: true                             # пошук проєктів в історії сесій OMP
 projects:
   - id: main
     name: Мій проєкт

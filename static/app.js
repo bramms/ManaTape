@@ -48,7 +48,35 @@
   for(const id of rest){const base=(candidates(id)[0]||'?').slice(0,3);let n=2;while(taken.has(base+n))n++;map.set(id,base+n);taken.add(base+n);}
   return map;
  }
- const prettyProfile=s=>s==='standard'?'Standard':s;
+ // Profile ids: `standard` (the scope's file), `preset:<name>` (a native OMP котушка in that file), `global:<name>`
+ // (a Global котушка seen from a project: read-only here, it can be applied), anything else an old .omp/presets file.
+ const isNative=name=>String(name).startsWith('preset:'),isGlobalPreset=name=>String(name).startsWith('global:');
+ const presetName=name=>String(name).replace(/^(?:preset|global):/,'');
+ const prettyProfile=s=>s==='standard'?'Standard':presetName(s);
+ function presetLike(name=state.profile){return isNative(name)||isGlobalPreset(name);}
+ function locked(name=state.profile){return isGlobalPreset(name);}
+ // LAYERS (DESIGN «Області і котушки»). A project's file is a layer over the Global config: OMP takes the project's
+ // value where it has one and the Global one for the rest (maps merge per key; a list or a scalar replaces; a project
+ // null is no tombstone). The panel edits only this file's own layer (profiles[*]); every lane reads the layered view
+ // (eff), so a lane the project does not set shows the Global value, and an edit writes into the project only. A
+ // native котушка's role map is complete (OMP replaces the role map when it is applied); its reserves, agents and
+ // providers are the scope's.
+ // Per-render memo (diffs, mode keys, layered views); null outside render().
+ let renderCache=null,globalLayer=normalizeLayer(source.inherited);
+ function normalizeLayer(raw){return raw?{modelRoles:{...raw.modelRoles},retry:{...raw.retry,fallbackChains:{...raw.retry?.fallbackChains}},task:{...raw.task,agentModelOverrides:{...raw.task?.agentModelOverrides}},...(raw.disabledProviders?{disabledProviders:raw.disabledProviders}:{})}:null;}
+ function mergeMap(a,b){const out={...a};for(const [k,v] of Object.entries(b||{}))if(v!=null)out[k]=v;return out;}
+ function eff(profile=p()){
+  if(!profile||!globalLayer)return profile;
+  const memo=renderCache&&(renderCache.layers??=new Map()),hit=memo?.get(profile);if(hit)return hit;
+  const g=globalLayer,out={...profile,modelRoles:profile.forgePreset?profile.modelRoles:mergeMap(g.modelRoles,profile.modelRoles),
+   retry:{...g.retry,...profile.retry,fallbackChains:mergeMap(g.retry.fallbackChains,profile.retry?.fallbackChains)},
+   task:{...g.task,...profile.task,agentModelOverrides:mergeMap(g.task.agentModelOverrides,profile.task?.agentModelOverrides)},
+   disabledProviders:profile.disabledProviders??g.disabledProviders??[]};
+  memo?.set(profile,out);return out;
+ }
+ // The Global config holds a value for this lane (its primary or own reserves; an agent's list).
+ function globalHas(role,group='role'){const g=globalLayer;return !!g&&(group==='vibe'?Object.hasOwn(g.task.agentModelOverrides,role):!!g.modelRoles[role]||Object.hasOwn(g.retry.fallbackChains,role));}
+ const asList=v=>(Array.isArray(v)?v:[v]).filter(Boolean);
  // Ukrainian count agreement: 1 зміна · 2 зміни · 5 змін (11–14 take the «many» form).
  function plural(n,one,few,many){const a=Math.abs(n)%100,b=a%10;return b===1&&a!==11?one:b>=2&&b<=4&&(a<12||a>14)?few:many;}
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -83,24 +111,73 @@
  function agentModelText(info,fallback=''){const model=info?.model;if(Array.isArray(model))return model.join(' → ');if(model)return model;return isCustomAgent(info)?'успадковує модель сесії':fallback;}
  function agentModelAlias(info){return typeof info?.model==='string'&&info.model.startsWith('@')?info.model:'';}
  function resetAgent(worker){
-  if(state.saving||!Object.hasOwn(p().task.agentModelOverrides||{},worker)&&!agentInfo(worker))return;
+  if(state.saving||locked()||!Object.hasOwn(p().task.agentModelOverrides||{},worker)&&!agentInfo(worker))return;
   const target=p().task.agentModelOverrides,base=state.profile==='standard'?{}:original.standard.task.agentModelOverrides;
   if(Object.hasOwn(base,worker))target[worker]=copy(base[worker]);else delete target[worker];
   delete modeSettings().overrides['vibe:'+worker];state.picker=null;state.opFeedback='';render();focusLane(worker,'vibe');
  }
  // After a reset the old control is gone; focus the lane's own first control.
  function focusLane(role,group){[...win.querySelectorAll(`button[data-edit="${CSS.escape(role)}"][data-group="${group}"]`)].find(el=>el.getClientRects().length)?.focus({preventScroll:true});}
- function knownRoleKeys(profile){return [...new Set([...builtinRoles.map(r=>r.id),...Object.keys(profile.modelRoles||{})])];}
+ // Built-in roles, then every role the layered view names; a котушка also lists its scope's roles (a role it does not
+ // carry is a lane «не в котушці»).
+ function knownRoleKeys(profile,scope=null){return [...new Set([...builtinRoles.map(r=>r.id),...Object.keys(eff(profile)?.modelRoles||{}),...Object.keys(scope?eff(scope).modelRoles||{}:{})])];}
  function roleInfo(role){return builtinRoles.find(r=>r.id===role);}
+ // A lane back to what this file inherits: «Типово в OMP», Standard (an old котушка), the Global value (a project's
+ // own role), or out of a native котушка. Its draft is one Undo step.
  function resetRole(role){
-  if(state.saving||!roleInfo(role))return;
-  const inherited=state.profile==='standard'?{}:original.standard;
-  for(const [target,base] of [[p().modelRoles,inherited.modelRoles||{}],[p().retry.fallbackChains,inherited.retry?.fallbackChains||{}]]){
-   if(Object.hasOwn(base,role))target[role]=copy(base[role]);else delete target[role];
+  if(state.saving||locked()||!roleInfo(role)&&!isNative(state.profile)&&!globalHas(role))return;
+  if(isNative(state.profile))delete p().modelRoles[role];
+  else{
+   const base=state.profile==='standard'?{}:original.standard;
+   for(const [target,from] of [[p().modelRoles,base.modelRoles||{}],[p().retry.fallbackChains,base.retry?.fallbackChains||{}]]){
+    if(Object.hasOwn(from,role))target[role]=copy(from[role]);else delete target[role];
+   }
   }
   delete modeSettings().overrides['role:'+role];state.picker=null;state.opFeedback='';render();focusLane(role,'role');
  }
- function roleFallbacks(role,profile=p()){return profile.retry.fallbackChains[role]||(roleInfo(role)?.defaultFallbacks===false?[]:profile.retry.fallbackChains.default||[]);}
+ // «Прибрати» on a lane's only own CUT is the reset of that lane: a built-in role or a known agent's own list returns
+ // to «Типово в OMP», a project's own value to the Global one, a котушка's primary leaves the котушка. It names the
+ // result; '' where that reset does not exist or would change nothing (an old котушка's lane that only repeats
+ // Standard; a value a project only inherits: OMP keeps the Global one, a project null is no tombstone).
+ function soleCutReset(role,group){
+  if(locked()||group!=='role'&&group!=='vibe')return '';
+  const vibe=group==='vibe';
+  if(isNative(state.profile))return !vibe&&p().modelRoles[role]?'роль вийде з котушки':'';
+  if(state.profile==='standard'&&globalLayer){
+   if(!(vibe?Object.hasOwn(p().task.agentModelOverrides,role):!!p().modelRoles[role]))return '';
+   if(globalHas(role,group))return 'як у глобальному';
+  }
+  if(vibe?!agentInfo(role)||!agentValues(role).length:!roleInfo(role)||!p().modelRoles[role])return '';
+  const pick=profile=>vibe?[profile.task?.agentModelOverrides?.[role]]:[profile.modelRoles?.[role],profile.retry?.fallbackChains?.[role]],std=state.profile==='standard'?null:pick(original.standard);
+  if(std&&JSON.stringify(std)===JSON.stringify(pick(p())))return '';
+  return std?.some(v=>v!==undefined)?'як у Standard':vibe?'агент стане типовим':'роль стане типовою';
+ }
+ // The CUT is the lane's last own CUT: its real chain (or the agent's list) holds nothing else, also none hidden by
+ // DeepSeek OFF; a ⇄ replacement is never «own» (removing it edits the replacement list). A котушка's primary is its
+ // lane's only own CUT: the reserves shown after it are the scope's.
+ function removesLane(role,index,group){
+  if(group!=='role'&&group!=='vibe'||index!==0)return false;
+  const ref=modeView(role,group)?.refs?.[0];
+  if(isNative(state.profile))return group==='role'&&!!p().modelRoles[role]&&(!ref||ref.kind==='base');
+  if(chain(role,group).length!==1)return false;
+  return (!ref||ref.kind==='base')&&(group==='vibe'?agentValues(role):baseChain(role)).length===1;
+ }
+ // Any CUT can be removed: a reserve; the primary of a longer lane (the next CUT becomes the primary); the lane's
+ // only CUT where the lane has a default to return to. Editor lists (replacements, pools) remove any item. A котушка
+ // removes only its primary (the role leaves it); a Global котушка seen from a project is read-only.
+ function canRemoveCut(role,index,group){
+  const list=chain(role,group);if(!(index>=0&&index<list.length))return false;
+  if(group==='alternatives'||group==='pool')return true;
+  if(presetLike())return index===0&&removesLane(role,index,group)&&!!soleCutReset(role,group);
+  return index>0||list.length>1||removesLane(role,index,group)&&!!soleCutReset(role,group);
+ }
+ // One Undo step. Returns 'reset' (the lane went back to its default and took the focus), true or false.
+ function removeCut(role,index,group){
+  if(!canRemoveCut(role,index,group))return false;
+  if(removesLane(role,index,group)){if(group==='vibe')resetAgent(role);else resetRole(role);return 'reset';}
+  const list=chain(role,group);list.splice(index,1);return setChain(role,list,group);
+ }
+ function roleFallbacks(role,profile=p()){const chains=eff(profile).retry.fallbackChains;return chains[role]||(roleInfo(role)?.defaultFallbacks===false?[]:chains.default||[]);}
  // One vision rule everywhere (QA1 B7), the server's: a vision lane (ui.visionRoles) takes only CUTS that read
  // images, and so does a FREE pool that stands on a vision lane in any profile. An unknown, only-referenced route
  // is not judged.
@@ -108,7 +185,7 @@
  function visionRole(id){return (source.ui?.visionRoles||['vision']).includes(id);}
  function poolVisionLane(name){
   const token=poolToken(name);
-  for(const set of [original,profiles])for(const [k,pr] of Object.entries(set))for(const role of source.ui?.visionRoles||['vision']){if(pr.modelRoles?.[role]&&[pr.modelRoles[role],...roleFallbacks(role,pr)].includes(token))return role+(k==='standard'?'':' · '+k);}
+  for(const set of [original,profiles])for(const [k,pr] of Object.entries(set))for(const role of source.ui?.visionRoles||['vision']){const route=eff(pr).modelRoles?.[role];if(route&&[route,...roleFallbacks(role,pr)].includes(token))return role+(k==='standard'?'':' · '+k);}
   return '';
  }
  function acceptsRoleModel(role,group,model){
@@ -117,11 +194,24 @@
   const id=group==='vibe'?(aliasRole(vibeAlias(role))||'task'):group==='alternatives'?role.split(':')[1]:role,info=roleInfo(id),kind=model.kind||'chat';
   return (info?.kinds||['chat']).includes(kind)&&(id!=='web'||kind!=='chat'||model.webSearch!=null)&&(!visionRole(id)||readsImages(model));
  }
- const original={standard:copy(source.base),...Object.fromEntries(Object.entries(source.presets).map(([k,v])=>[k,merge(source.base,v)]))},profiles=copy(original),roleKeys=knownRoleKeys(source.base),profileKeys=Object.keys(original);
- const normalizeProfile=profile=>merge({modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}},profile);
+ function normalizeProfile(profile){return merge({modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}},profile);}
+ const DEFAULT_MODE={mode:'deepseek',alternatives:[],overrides:{}};
+ // Every profile of a snapshot as the panel edits it: Standard is the scope file's own layer; an old котушка is that
+ // layer with its overlay; a native котушка is its role map (and thinking) over the scope's reserves, agents and
+ // providers, marked `forgePreset` (never a diffed or saved field); a Global котушка (in a project) the same, read-only.
+ function snapshotProfiles(from){
+  const base=normalizeProfile(from.base),out={standard:copy(base)};
+  const preset=(roles,thinking)=>({...copy(base),modelRoles:copy(roles||{}),...(thinking?{defaultThinkingLevel:thinking}:{}),forgePreset:true});
+  for(const [k,v] of Object.entries(from.presets||{}))out[k]=isNative(k)?preset(v.modelRoles,v.defaultThinkingLevel):normalizeProfile(merge(base,v));
+  if(from.inherited)for(const [n,row] of Object.entries(from.nativePresets||{}))if(!row.own&&!row.invalid)out['global:'+n]=preset(row.roles,row.thinking);
+  for(const [k,v] of Object.entries(out))v.forgeMode=copy(from.profileModes?.[k]?.settings||DEFAULT_MODE);
+  return out;
+ }
+ const original=snapshotProfiles(source),profiles=copy(original),roleKeys=knownRoleKeys(original.standard),profileKeys=Object.keys(original);
  const storageKey=key=>'mana:'+source.source+':'+key;
+ // FREE pools are machine-wide: their draft follows the machine (its Global scope), not the scope it was started in.
+ function poolDraftKey(){const g=(source.projects||[]).find(x=>x.id===(source.scope?.kind==='global'?source.projectId:source.scope?.parent));return g?'mana:pools:'+g.path:storageKey('forge-pool-draft');}
  if(source.legacyDrafts){for(const [storage,key] of [[localStorage,'forge-view'],[sessionStorage,'forge-drafts'],[sessionStorage,'forge-pool-draft']]){try{const old=storage.getItem(key);if(old&&!storage.getItem(storageKey(key))){storage.setItem(storageKey(key),old);storage.removeItem(key);}}catch{}}}
- for(const [name,raw] of Object.entries(original)){const profile=original[name]=normalizeProfile(raw);profiles[name]=copy(profile);profile.forgeMode=copy(source.profileModes?.[name]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});profiles[name].forgeMode=copy(profile.forgeMode);}
  function split(route){const m=String(route).match(/:(off|minimal|low|medium|high|xhigh|max|auto)$/);const raw=m?route.slice(0,-m[0].length):route;const slash=raw.indexOf('/');return {raw,provider:slash<0?'':raw.slice(0,slash),id:raw.slice(slash+1),effort:m?m[1]:''};}
  const referenced=new Set();for(const p of Object.values(original)){Object.values(p.modelRoles).forEach(x=>referenced.add(split(x).raw));Object.values(p.retry.fallbackChains).flat().forEach(x=>referenced.add(split(x).raw));}
  const referencedProviders=[...new Set([...referenced].map(x=>split(x).provider))];
@@ -129,7 +219,7 @@
  const catalog=[...catalogMap.values()].sort((a,b)=>a.provider.localeCompare(b.provider)||a.name.localeCompare(b.name));
  const state={view:'profiles',profile:'standard',role:roleKeys[0]||'',query:'',catalogQuery:'',catalogMode:'mine',catalogProvider:'all',page:0,favs:[...referenced].slice(0,8),picker:null,modal:null,changes:0,toast:''};
  let favWrites=Promise.resolve(),favSaved=[];
- let timer,drag=null,modalShown=false,formShown='',modalFit='',modalReturnFocus='',composing=false,renderCache=null,pointerHeld=false,nativeSelectBusy=false;
+ let timer,drag=null,modalShown=false,formShown='',modalFit='',modalReturnFocus='',composing=false,pointerHeld=false,nativeSelectBusy=false;
  let backgroundRefreshPending=false,backgroundReloading=false,pendingRender=false,backgroundTimer,writeEpoch=0,activeWrites=0,renderedAt=0;
  const pendingModeResults=new Map(),resetsSeen=new Set();
  // dataVersion names the current snapshot + catalogue; caches of derived per-model data are keyed by it.
@@ -179,14 +269,25 @@
  function poolStep(direction){if(state.saving)return;const value=editHistory.step('@free-pools',direction);if(value){poolDraft=value;state.picker=null;state.editorMsg=direction<0?'Останню дію з пулами скасовано':'Дію з пулами повторено';render();win.querySelector('[data-action='+ (direction<0?'pool-undo':'pool-redo') +']')?.focus({preventScroll:true});}}
  async function savePools(){
   if(state.saving||!poolsDirty())return;state.saving=true;state.poolError='';render();
-  try{await api('/api/free-pools',{revision:poolRevision,pools:poolDraft});poolOriginal=copy(poolDraft);editHistory.reset('@free-pools',poolDraft);await reload(false,true);notify('Спільні пули збережено · усі доріжки оновлено');}
-  catch(e){state.poolError=e.message;}
+  state.poolDiffs=null;
+  try{const r=await api('/api/free-pools',{revision:poolRevision,pools:poolDraft});poolOriginal=copy(poolDraft);editHistory.reset('@free-pools',poolDraft);await reload(false,true);const n=r.scopes?.length;notify('Спільні пули збережено'+(n?' · оновлено '+n+' '+plural(n,'область','області','областей')+': '+r.scopes.map(scopeName).join(', '):' · файли не змінились'));}
+  // A scope whose file changed outside Mana Tape blocks the machine-wide save: each one is named with its diff.
+  catch(e){state.poolError=e.message;state.poolDiffs=e.diffs&&e.scopes?e.diffs:null;}
   finally{state.saving=false;render();}
  }
  // Pool keys on the deck: a stack of tapes with the pool's name and size; dragging or arming moves the whole pool.
  function poolShelf(){
   const keys=Object.entries(poolNames).map(([name,label])=>{const n=source.freePools?.[name]?.length||0,armed=state.armedCut===poolToken(name);return `<button type="button" class="key poolkey" data-cut="${poolToken(name)}"${armed?' aria-pressed="true"':''} ${n?'':'disabled'} title="${label} · обери пул і місце на доріжці або перетягни весь пул" aria-label="${label} · ${n} CUTS · спільний пул"><span class="key__cap"><span class="stack${name==='free-fast'?' stack--fast':''}" aria-hidden="true"></span><span class="key__txt"><b>${label}</b><span class="key__sub"><span class="rd rd--l" style="--rd:2ch">${n}</span> CUTS</span></span></span></button>`;}).join('');
-  return `${keys}<button type="button" class="key" data-pool-open="free-good" aria-expanded="${!!state.poolPanel}" aria-controls="pool-editor"><span class="key__cap">${led(state.poolPanel,'orange')}Пули <span class="rd key__count" style="--rd:1ch">2</span></span></button><span class="silk silk--2 deck__note">спільні для всіх профілів${poolsDirty()?' · є чернетка пулів':''}</span>`;
+  return `${keys}<button type="button" class="key" data-pool-open="free-good" aria-expanded="${!!state.poolPanel}" aria-controls="pool-editor"><span class="key__cap">${led(state.poolPanel,'orange')}Пули <span class="rd key__count" style="--rd:1ch">2</span></span></button><span class="silk silk--2 deck__note">спільні для всієї машини${poolsDirty()?' · є чернетка пулів':''}</span>`;
+ }
+ // Scope ids → their menu names (pools and apply results name scopes in words).
+ function scopeName(id){const row=(source.projects||[]).find(x=>x.id===id);return row?row.kind==='global'?'глобальне':row.name:id;}
+ // FREE pools are machine-wide (DESIGN «FREE GOOD / FREE FAST»): one save rewrites every scope that uses a pool block.
+ function poolScopesNote(){const ids=source.poolScopes||[];return ids.length?'«Зберегти пули» оновить '+ids.length+' '+plural(ids.length,'область','області','областей')+': '+ids.map(scopeName).join(', '):'жодна область ще не використовує пули';}
+ // Older installations kept pools per project; when those sets differ, the owner picks the one the machine keeps.
+ function poolConflictMarkup(){
+  const rows=source.poolConflict||[];if(!rows.length)return '';
+  return `<div class="poolpick"><div class="msg" data-s="warn">${led(true,'amber')}<span>Старі пули проєктів різняться. Обери, які стануть спільними для всієї машини; інші лишаються у файлах стану проєктів, нічого не видаляється.</span></div>${rows.map(row=>`<div class="poolpick__row"><span class="poolpick__src"><b>${esc(row.sources.map(scopeName).join(', '))}</b><small>${Object.entries(poolNames).map(([k,l])=>l+' · '+(row.pools?.[k]?.length||0)).join(' · ')}</small></span>${key('Взяти ці пули','pool-adopt-legacy','key--sm',`data-source="${esc(row.sources[0])}"`)}</div>`).join('')}</div>`;
  }
  // EDITORS live in the drawer (DESIGN «FREE GOOD / FREE FAST», «Заміни»): its front becomes the editor's head
  // (orange LED, title, tabs or scope, the transport with its scope, ×) and its body holds the ordered list next to
@@ -199,22 +300,56 @@
  function poolEditor(){
   const selected=state.poolTab||'free-good',list=poolDraft[selected],label=poolNames[selected],dirty=poolsDirty();
   const line=state.poolError?editorLine('bad',state.poolError):state.editorMsg?editorLine('ok',state.editorMsg):editorLine('',dirty?'Чернетка пулів · зберігається окремо від профілів':'');
-  return `<div class="tray__editor" id="pool-editor" role="tabpanel" aria-labelledby="pool-tab-${selected}" tabindex="-1">${line}<div class="tray__grid tray__grid--seq" id="pool-line-${selected}" role="list" aria-label="Порядок CUTS ${label}">${list.map((r,i)=>node(selected,r,i,list.length,'pool')).join('')}${socketKey(selected,list.length,'pool','CUT','Додати CUT у '+label)}</div><div class="tray__foot"><span class="print print--hint">${label} · ${list.length} CUTS · спільний для всіх профілів · порядок: перетягни, ⋯ або Shift ← / →</span>${key('Скинути','pool-reset','key--sm',(!dirty&&!state.poolError)||state.saving?'disabled':'')}</div></div>`;
+  const diffs=state.poolError&&state.poolDiffs?`<div class="pooldiffs">${Object.entries(state.poolDiffs).map(([scope,files])=>Object.values(files).map(d=>`<div class="pooldiffs__row"><b>${esc(scopeName(scope))}</b>${diffStrip(d)}</div>`).join('')).join('')}<p class="print">Прийми файл у тій області («Прийняти файл» на її монтажі), потім збережи пули ще раз.</p></div>`:'';
+  return `<div class="tray__editor" id="pool-editor" role="tabpanel" aria-labelledby="pool-tab-${selected}" tabindex="-1">${line}${diffs}${poolConflictMarkup()}<div class="tray__grid tray__grid--seq" id="pool-line-${selected}" role="list" aria-label="Порядок CUTS ${label}">${list.map((r,i)=>node(selected,r,i,list.length,'pool')).join('')}${socketKey(selected,list.length,'pool','CUT','Додати CUT у '+label)}</div><div class="tray__foot"><span class="print">${label} · ${list.length} CUTS · спільні для всієї машини · ${esc(poolScopesNote())} · порядок: перетягни, ⋯ або Shift ← / →</span>${key('Скинути','pool-reset','key--sm',(!dirty&&!state.poolError)||state.saving?'disabled':'')}</div></div>`;
  }
  function poolBlock(role,route,i,group){
-  const name=poolName(route),sequence=group==='alternatives'||group==='pool',inherited=inheritedSlot(role,i,group),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',more=slotActionKey(role,i,group),fast=name==='free-fast',size=source.freePools?.[name]?.length||0;
-  const classes=['cut','cut--pool',fast&&'cut--pool-fast',more&&'cut--more',savedChain(role,group)[i]!==route&&!inherited&&'is-changed'].filter(Boolean).join(' ');
-  return `<div class="${classes}"${sequence?' role="listitem"':''} data-clip-key="${clipKey(role,route,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}"><span class="cut__edge"></span><button type="button" class="cut__name" data-edit="${esc(role)}" data-index="${i}" data-group="${group}"${alias||inherited?` title="${esc(alias+poolNames[name]+(inherited?' · резерв успадковано з default':''))}"`:''} aria-label="Відкрити ${poolNames[name]}: спільний пул, ${size} CUTS${inherited?' · успадковано з default':''}">${esc(alias)}${poolNames[name]}</button><span class="cut__meta"><span class="stack${fast?' stack--fast':''}" aria-hidden="true"></span><span>${size} CUTS · спільний</span></span>${more}</div>`;
+  const name=poolName(route),sequence=group==='alternatives'||group==='pool',inherited=inheritedSlot(role,i,group),fixed=fixedSlot(role,i,group,inherited),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',more=fixed?'':slotActionKey(role,i,group),fast=name==='free-fast',size=source.freePools?.[name]?.length||0;
+  const classes=['cut','cut--pool',fast&&'cut--pool-fast',more&&'cut--more',fixed&&'cut--locked',savedChain(role,group)[i]!==route&&!inherited&&'is-changed'].filter(Boolean).join(' ');
+  const note=INHERIT_NOTE[inherited]||'',where=fixed?'':` data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"`;
+  const nameTag=fixed?`<span class="cut__name" title="${esc(alias+poolNames[name]+(note?' · '+note:''))}">${esc(alias)}${poolNames[name]}</span>`:`<button type="button" class="cut__name" data-edit="${esc(role)}" data-index="${i}" data-group="${group}"${alias||note?` title="${esc(alias+poolNames[name]+(note?' · '+note:''))}"`:''} aria-label="Відкрити ${poolNames[name]}: спільний пул, ${size} CUTS${note?' · '+note:''}">${esc(alias)}${poolNames[name]}</button>`;
+  return `<div class="${classes}"${sequence?' role="listitem"':''} data-clip-key="${clipKey(role,route,i,group)}"${where}${inherited?` data-inherited="${inherited}"`:''} style="--li:${laneIndex(role,group)}">${sourceTab(role,i,group,inherited)}<span class="cut__edge"></span>${nameTag}<span class="cut__meta"><span class="stack${fast?' stack--fast':''}" aria-hidden="true"></span><span>${size} CUTS · спільний</span></span>${more}</div>`;
  }
+ // What an inherited CUT says in its tooltip and accessible name.
+ const INHERIT_NOTE={default:'резерв успадковано з default',global:'з глобального · зміна стане перевизначенням у проєкті',scope:'резерв області · змінюй у Standard'};
+ // A CUT that cannot be edited here: the reserves a котушка shows from its scope, or any CUT of a Global котушка
+ // seen from a project. It is printed tape: no key, no ⋯, no drag, no drop.
+ function fixedSlot(role,index,group,inherited=inheritedSlot(role,index,group)){return (group==='role'||group==='vibe')&&(locked()||inherited==='scope');}
+ // The first CUT of an inherited run carries a small printed tab on its top edge: «з глобального», «резерви області».
+ function sourceTab(role,i,group,inherited){if(inherited!=='global'&&inherited!=='scope'||i>0&&inheritedSlot(role,i-1,group)===inherited)return '';return `<span class="cut__src" aria-hidden="true">${inherited==='global'?'з глобального':'резерви області'}</span>`;}
+ // The lane key's source LED and print (DESIGN «Області і котушки»): green — this file holds the lane; blue — the
+ // Global config a project inherits; orange — a котушка's own primary; off — OMP's default (no print). In a project the
+ // print names it in words (colour is never alone); a lane that mixes both says so.
+ function laneSource(role,group='role'){
+  const own=p(),g=globalLayer,vibe=group==='vibe';
+  if(presetLike())return vibe?{c:'',text:''}:own.modelRoles[role]?{c:'orange',text:locked()?'глоб. котушка':'котушка'}:{c:'',text:'не в котушці'};
+  if(state.profile!=='standard'&&(vibe?Object.hasOwn(source.presets?.[state.profile]?.task?.agentModelOverrides||{},role):Object.hasOwn(source.presets?.[state.profile]?.modelRoles||{},role)||Object.hasOwn(source.presets?.[state.profile]?.retry?.fallbackChains||{},role)))return {c:'orange',text:'стара котушка'};
+  const has=vibe?Object.hasOwn(own.task.agentModelOverrides,role):!!own.modelRoles[role]||Object.hasOwn(own.retry.fallbackChains,role);
+  if(!g)return {c:has?'green':'',text:''};
+  const list=chain(role,group),fromGlobal=list.some((r,i)=>inheritedSlot(role,i,group)==='global');
+  if(has)return {c:'green',text:fromGlobal?'проєкт + глоб.':'проєкт'};
+  return fromGlobal?{c:'blue',text:'з глобального'}:{c:'',text:''};
+ }
+ // Lane actions of a project (DESIGN «Області і котушки»), by value path: what the project holds itself (`own`),
+ // what the Global config holds (`up`), and what an override would copy from it (`inherit`). Null outside a project's
+ // Standard: a котушка and an old котушка do not hold scope values; the Global scope has no parent.
+ function laneLayers(role,group='role'){
+  if(!globalLayer||state.profile!=='standard'||locked())return null;
+  const has=(data,path)=>{const parent=path.slice(0,-1).reduce((o,k)=>o?.[k],data),v=parent?.[path.at(-1)];return parent!=null&&Object.hasOwn(parent,path.at(-1))&&v!=null&&!(path[0]==='modelRoles'&&!v);};
+  const paths=group==='vibe'?[['task','agentModelOverrides',role]]:[['modelRoles',role],['retry','fallbackChains',role]];
+  const own=paths.filter(path=>has(p(),path)),up=paths.filter(path=>has(globalLayer,path));
+  return {paths,own,up,inherit:up.filter(path=>!has(p(),path))};
+ }
+ function laneMenuAvailable(role,group){const l=laneLayers(role,group);return !!l&&(l.own.length>0||l.inherit.length>0);}
  // FREE GOOD / FREE FAST are tabs of one editor: the drawer keeps its place, only the list and the counts change.
  function selectPoolTab(name,focusTab=true){if(!poolNames[name])return;state.poolTab=name;state.picker=null;state.cutTarget=null;state.armedCut=null;state.editorMsg='';render();if(focusTab)win.querySelector(`[data-pool-tab="${name}"]`)?.focus({preventScroll:true});}
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){selectPoolTab(b.dataset.poolTab);}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';state.editorMsg='Пули скинуто до збережених';render();win.querySelector('#pool-editor')?.focus({preventScroll:true});}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){selectPoolTab(b.dataset.poolTab);}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';state.poolDiffs=null;state.editorMsg='Пули скинуто до збережених';render();win.querySelector('#pool-editor')?.focus({preventScroll:true});}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='pool-adopt-legacy'){state.saving=true;render();try{await api('/api/free-pools',{action:'adopt-legacy',source:b.dataset.source});await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';state.editorMsg='Спільні пули взято з '+scopeName(b.dataset.source);}catch(error){state.poolError=error.message;}finally{state.saving=false;render();}}if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
 
  function clipKey(role,r,i,group){return esc(group+'|'+role+'|'+r+'|'+chain(role,group).slice(0,i).filter(v=>v===r).length);}
  function historyStep(direction){if(state.saving)return;const value=editHistory.step(state.profile,direction);if(!value)return;profiles[state.profile]=value;ForgeTape.intent(direction<0?'undo':'edit');state.picker=null;state.editorMsg='';state.opFeedback=direction<0?'Останню дію скасовано.':'Дію повторено.';render();win.querySelector(`[data-action=${direction<0?'undo':'redo'}]`)?.focus({preventScroll:true});}
  function p(){return profiles[state.profile];}
- function workers(profile=p()){return [...new Set([...knownAgents().map(a=>a.id),...Object.keys(profile?.task?.agentModelOverrides||{})])];}
- function agentValues(worker,profile=p()){const value=profile.task?.agentModelOverrides?.[worker];return (Array.isArray(value)?value:[value]).filter(Boolean);}
+ function workers(profile=p()){return [...new Set([...knownAgents().map(a=>a.id),...Object.keys(eff(profile)?.task?.agentModelOverrides||{})])];}
+ function agentValues(worker,profile=p()){return asList(eff(profile).task?.agentModelOverrides?.[worker]);}
  function agentLink(worker){const values=agentValues(worker);return values.length===1&&values[0].startsWith('@')?values[0]:'';}
  function agentTier(worker){return ({task:'Vibe GOOD',sonic:'Vibe FAST'})[worker]||'';}
  // An agent's lane key: ↳, native id and a printed sub-line (Vibe tier, file source, own list); LED blue = own list.
@@ -222,20 +357,34 @@
  function agentName(worker,own=false){const sub=agentSub(worker,own);return `<span class="lane__label"><span class="lane__name">${esc(worker)}</span>${sub?`<span class="lane__sub">${esc(sub)}</span>`:''}</span>`;}
  // A name or note that the key cuts with an ellipsis keeps its full text in the tooltip (F6): a 156-px key shows
  // about 11 characters of the name and 14 of the note.
- function agentKey(worker,own=false,title=''){const sub=agentSub(worker,own),full=worker.length>11||sub.length>14?[worker,sub].filter(Boolean).join(' · '):'';title=[full,title].filter(Boolean).join(' · ');return `<div class="lane__key"${title?` title="${esc(title)}"`:''}><span class="lane__idx" aria-hidden="true">↳</span>${agentName(worker,own)}${led(own,'blue')}</div>`;}
+ function agentKey(worker,own=false,title=''){
+  const src=laneSource(worker,'vibe'),sub=[agentSub(worker,own),src.text].filter(Boolean).join(' · '),full=worker.length>11||sub.length>14?[worker,sub].filter(Boolean).join(' · '):'';title=[full,title].filter(Boolean).join(' · ');
+  const inner=`<span class="lane__idx" aria-hidden="true">↳</span><span class="lane__label"><span class="lane__name">${esc(worker)}</span>${sub?`<span class="lane__sub">${esc(sub)}</span>`:''}</span>${led(!!src.c,src.c||'green')}`;
+  return laneMenuAvailable(worker,'vibe')?`<button type="button" class="lane__key" data-lane-menu="${esc(worker)}" data-group="vibe" aria-haspopup="menu" aria-expanded="false" aria-label="${esc('Агент '+worker+(src.text?' · '+src.text:'')+' · дії області')}"${title?` title="${esc(title)}"`:''}>${inner}</button>`:`<div class="lane__key"${title?` title="${esc(title)}"`:''}>${inner}</div>`;
+ }
  // An override for an agent that is in no file: a red-LED eject key in the lane's tool cluster, never a pill in the tape.
  function agentRemove(worker){return !agentInfo(worker)&&Object.hasOwn(p().task.agentModelOverrides||{},worker)?key(led(true,'red')+'Прибрати','','key--sm key--danger',`data-reset-agent="${esc(worker)}" aria-label="Прибрати перевизначення агента, якого немає у файлах: ${esc(worker)}" title="Агента немає серед штатних і файлів .omp/agents. Перевизначення лишилося в конфігурації."`):'';}
+ // The lane's reset in words: «Типово в OMP», or in a project's own value «Як у глобальному», or a котушка's
+ // «Не в котушці». '' where this file cannot drop the value (a project only inherits it; a Global котушка).
+ function laneResetLabel(role,group){
+  if(locked())return '';
+  const vibe=group==='vibe',own=p();
+  if(isNative(state.profile))return !vibe&&own.modelRoles[role]?'Не в котушці':'';
+  const has=vibe?Object.hasOwn(own.task.agentModelOverrides,role):!!own.modelRoles[role];
+  if(globalLayer&&state.profile==='standard'){if(!has)return '';if(globalHas(role,group))return 'Як у глобальному';}
+  return vibe?agentInfo(role)&&agentValues(role).length?'Типово в OMP':'':roleInfo(role)&&has?'Типово в OMP':'';
+ }
  // A patch key replaces the old «До ролі ↗» link: it scrolls to the role's lane and blinks its LED.
  function patchKey(role,label,aria){return `<button type="button" class="key patch" data-agent-role="${esc(role)}" aria-label="${esc(aria)}"><span class="key__cap"><span class="jack" aria-hidden="true"></span>${esc(label)}</span></button>`;}
  function agentLinkedTrack(worker){
-  const alias=agentLink(worker),[role,effort]=alias.slice(1).split(':'),known=roleKeys.includes(role),retry=p().retry?.modelFallback!==false;
+  const alias=agentLink(worker),[role,effort]=alias.slice(1).split(':'),known=roleKeys.includes(role),retry=eff().retry?.modelFallback!==false;
   const detail=known?`Основна${retry?' й резерви ролі':' · резерви вимкнено'}${effort?' · thinking '+effort:''}`:'Модель і резерви визначає OMP';
   const link=known?patchKey(role,alias,worker+': успадковує '+alias+' · '+detail+'. Редагувати роль '+role):`<span class="chip" title="${esc('Успадковує '+alias)}">${esc(alias)}</span>`;
-  const own=known&&!effort?key('Власний список','','key--sm',`data-agent-copy="${esc(worker)}" aria-label="Створити власний список: ${esc(worker)}" title="Копіювати роль для окремого монтажу агента. Зміни ролі більше не впливатимуть на цей список."`):'';
-  const reset=agentInfo(worker)?key('Типово в OMP','','key--sm',`data-reset-agent="${esc(worker)}" aria-label="Повернути типовий вибір OMP для агента: ${esc(worker)}"`):agentRemove(worker);
+  const own=known&&!effort&&!locked()?key('Власний список','','key--sm',`data-agent-copy="${esc(worker)}" aria-label="Створити власний список: ${esc(worker)}" title="Копіювати роль для окремого монтажу агента. Зміни ролі більше не впливатимуть на цей список."`):'';
+  const label=laneResetLabel(worker,'vibe'),reset=label?key(label,'','key--sm',`data-reset-agent="${esc(worker)}" aria-label="${esc(label==='Як у глобальному'?'Повернути глобальне значення для агента: '+worker:'Повернути типовий вибір OMP для агента: '+worker)}"`):agentRemove(worker);
   return `<div class="lane lane--inherit lane--link" data-agent="${esc(worker)}">${agentKey(worker,false)}<div class="lane__groove">${link}<span class="lane__note"><b>Успадковує ${esc(alias)}</b> · ${esc(detail)}</span><span class="lane__tools">${own}${reset}</span></div></div>`;
  }
- function agentListNote(worker){const values=agentValues(worker),alias=vibeAlias(worker),single=values.length===1&&!poolName(values[0]);return `Власний список${alias?' · основна з '+alias:''}${single&&!alias?' · резерви з default':' · CUTS за порядком'}${p().retry?.modelFallback===false?' · резерви вимкнено':''}`;}
+ function agentListNote(worker){const values=agentValues(worker),alias=vibeAlias(worker),single=values.length===1&&!poolName(values[0]);return `Власний список${alias?' · основна з '+alias:''}${single&&!alias?' · резерви з default':' · CUTS за порядком'}${eff().retry?.modelFallback===false?' · резерви вимкнено':''}`;}
  function agentDefaultTrack(worker){
   const info=agentInfo(worker),alias=agentModelAlias(info),role=alias.slice(1).split(':')[0],known=roleKeys.includes(role);
   const model=isCustomAgent(info)&&!info.model?'модель сесії':agentModelText(info)||'обрати CUT';
@@ -258,7 +407,7 @@
   const list=baseChain(role),count=values=>values.reduce((n,r)=>n+(poolName(r)?source.freePools?.[poolName(r)]?.length||0:1),0),counts=[count(list),count(chain(role))];
   if(!list.length){notify('Для цієї ролі модель визначає OMP. Спочатку обери основний CUT або залиш успадкування.');return;}
   if(list.length>30||chain(role).length>30){notify('У власному списку агента може бути до 30 CUTS. Скороти роль або залиш успадкування.');return;}
-  if(counts.includes(1)&&p().retry?.fallbackChains?.default?.length){notify('Для одного CUT у власному списку OMP додасть резерви default. Щоб зберегти поточну поведінку, залиш прив’язку або спочатку додай резерв до ролі.');return;}
+  if(counts.includes(1)&&eff().retry?.fallbackChains?.default?.length){notify('Для одного CUT у власному списку OMP додасть резерви default. Щоб зберегти поточну поведінку, залиш прив’язку або спочатку додай резерв до ролі.');return;}
   state.poolPanel=false;state.armedCut=null;state.cutTarget=null;
   p().task.agentModelOverrides[worker]=list;
   const overrides=modeSettings().overrides;if(overrides['role:'+role])overrides['vibe:'+worker]=copy(overrides['role:'+role]);else delete overrides['vibe:'+worker];
@@ -291,6 +440,7 @@
   return [...(modeView(role,group)?.routes||baseChain(role,group))];
  }
  function ensureModePreview(){
+  if(locked())return;
   if(!diff(state.profile).length&&!state.modePanel&&!state.modeRefresh?.[state.profile])return;
   const name=state.profile,key=modeKey(name);state.modePlans??={};
   if(state.modePlans[name]?.key===key)return;
@@ -341,21 +491,28 @@
  // The DeepSeek chin: the slide switch flips attributes only (its tab slides), the keys and the hue encoder stay put.
  function modeChin(id){
   const settings=modeSettings();
-  return [box('p/mode-slide',`<button type="button" class="slide" role="switch" data-profile-mode="${modeOff()?'deepseek':'no-deepseek'}" aria-checked="${!modeOff()}" aria-label="DeepSeek у профілі: ON — оригінал, OFF — заміни" title="${modeOff()?'Увімкнути DeepSeek · повернути на доріжки':'Вимкнути платний DeepSeek · FREE CUTS залишаються'}" ${state.saving?'disabled':''}>`,[leaf('p/mode-slide/face',SLIDE_FACE)]),
-   leaf('p/mode-keys',`<button type="button" class="key" data-action="mode-panel" aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives" aria-label="Заміни DeepSeek · ${settings.alternatives.length} CUTS"><span class="key__cap">${led(!!state.modePanel,'orange',' data-latch')}Заміни <span class="rd key__count" style="--rd:2ch">${settings.alternatives.length}</span></span></button>${key(SVG.refresh,'mode-refresh','key--sq','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни"'+(modeOff()?'':' disabled'))}`),
+  return [box('p/mode-slide',`<button type="button" class="slide" role="switch" data-profile-mode="${modeOff()?'deepseek':'no-deepseek'}" aria-checked="${!modeOff()}" aria-label="DeepSeek у профілі: ON — оригінал, OFF — заміни" title="${locked()?'Глобальна котушка: режим змінюють в області «Глобально»':modeOff()?'Увімкнути DeepSeek · повернути на доріжки':'Вимкнути платний DeepSeek · FREE CUTS залишаються'}" ${state.saving||locked()?'disabled':''}>`,[leaf('p/mode-slide/face',SLIDE_FACE)]),
+   leaf('p/mode-keys',`<button type="button" class="key" data-action="mode-panel" aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives" aria-label="Заміни DeepSeek · ${settings.alternatives.length} CUTS"${locked()?' disabled':''}><span class="key__cap">${led(!!state.modePanel,'orange',' data-latch')}Заміни <span class="rd key__count" style="--rd:2ch">${settings.alternatives.length}</span></span></button>${key(SVG.refresh,'mode-refresh','key--sq','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни"'+(modeOff()?'':' disabled'))}`),
    leaf(id+'/grow','<span class="strip__grow"></span>'),leaf(id+'/enc',hueEncoder(id,'DeepSeek',SCREEN_HUE.ds))];
  }
  // Problems that are not the DeepSeek mode's own line: preview blockers without a DeepSeek screen, outside edits
  // of profile files (with «Прийняти файл»), skipped presets and an interrupted save journal.
  function deckNotices(dsScreen){
   const plan=activePlan(),issues=plan?.data?.issues||[],rows=[];
-  const line=(s,c,text,title='',tools='')=>`<div class="msg" data-s="${s}" role="${s==='bad'?'alert':'status'}"${title?` title="${esc(title)}"`:''}>${led(true,c)}<span>${text}</span>${tools}</div>`;
+  const line=(s,c,text,title='',tools='',strip='')=>`<div class="notice"><div class="msg" data-s="${s}" role="${s==='bad'?'alert':'status'}"${title?` title="${esc(title)}"`:''}>${led(true,c)}<span>${text}</span>${tools?`<span class="notice__tools">${tools}</span>`:''}</div>${strip}</div>`;
   if(!dsScreen&&plan?.error)rows.push(line('bad','red',esc(plan.error)));
   if(!dsScreen&&issues.length)rows.push(line('bad','red',esc(issues.map(i=>i.key.replace('role:','')+': '+i.message).join(' · '))));
   if(source.modeRecovery)rows.push(line('bad','red',esc(source.modeRecovery.error||'Незавершене збереження режимів'),(source.modeRecovery.files||[]).join('\n')));
-  for(const name of source.modeConflicts||[])rows.push(line('bad','red',`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape · збереження заблоковане, оригінал не перезаписується`,'Прийняти файл як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».',key('Прийняти файл','adopt-profile','key--sm',`data-adopt="${esc(name)}"`)));
+  // An outside edit (OMP, an editor): what changed, right beside «Прийняти файл» (DESIGN «Області і котушки»).
+  for(const name of source.modeConflicts||[]){
+   const d=source.modeConflictDiffs?.[name],what=name==='standard'?(source.scope?.kind==='global'?'Глобальний файл':'Файл області'):'Файл котушки '+prettyProfile(name);
+   rows.push(line('bad','red',`${esc(what)} <b>${esc(d?.file||prettyProfile(name))}</b> змінено поза Mana Tape · збереження заблоковане, файл не перезаписується`,'Прийняти файл як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія Mana Tape після цього доступна через «Попереднє збереження».',key('Прийняти файл','adopt-profile','key--sm',`data-adopt="${esc(name)}"`),diffStrip(d)));
+  }
   for(const name of source.modeOrphans||[])rows.push(line('warn','amber',`Файл профілю <b>${esc(prettyProfile(name))}</b> видалено поза Mana Tape · запис режиму лишився`,'Прийняти видалення: Mana Tape забуде запис режиму цього профілю (його копія лишиться в резервних).',key('Прийняти видалення','adopt-profile','key--sm',`data-adopt="${esc(name)}"`)));
   if(source.profileWarnings?.length)rows.push(line('warn','amber',`Пропущено пресети: ${esc(source.profileWarnings.map(w=>w.split(':')[0]).join(', '))}`,source.profileWarnings.join('\n')));
+  // Old .omp/presets files: one line each until the owner moves or archives them (nothing happens on its own).
+  for(const name of source.legacyPresets||[])rows.push(line('warn','amber',`Стара котушка <b>${esc(name)}</b> · <code>.omp/presets/${esc(name)}.yml</code> · OMP читає її лише через --config`,'Перенести в нативну котушку OMP (modelPresets) або архівувати. План покаже, що перейде; без підтвердження нічого не змінюється.',key('Перенести…','migrate-open','key--sm',`data-migrate="${esc(name)}"`)));
+  if(source.modelChains?.length)rows.push(line('warn','amber',`Ланцюги за моделлю: <b>${esc(source.modelChains.join(', '))}</b> · OMP бере їх раніше за ланцюг ролі; монтаж показує ланцюги ролей`,'retry.fallbackChains з ключем-моделлю має перевагу над ланцюгом ролі, де ця модель стоїть.'));
   return rows.length?`<div class="deck__notices">${rows.join('')}</div>`:'';
  }
  function alternativeCut(key,route,i){return node(key,route,i,modeList(key).length,'alternatives');}
@@ -377,7 +534,7 @@
  }
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b||state.saving)return;
-  if(b.dataset.profileMode){state.poolPanel=false;modeSettings().mode=b.dataset.profileMode;state.picker=null;state.opFeedback='';state.editorMsg='';render();return;}
+  if(b.dataset.profileMode){if(locked())return;state.poolPanel=false;modeSettings().mode=b.dataset.profileMode;state.picker=null;state.opFeedback='';state.editorMsg='';render();return;}
   if(b.dataset.modeScope){state.modeScope=b.dataset.modeScope;editTray('alternatives',true,b);return;}
   const a=b.dataset.action;
   if(a==='mode-panel'){state.modeScope='profile';editTray('alternatives',!state.modePanel,b);}
@@ -405,13 +562,36 @@
  function deletedCut(route){return catalogMap.get(split(route).raw)?.status==='missing';}
  function aliasRole(alias){return String(alias||'').slice(1).split(':')[0];}
  // `@role` and `@role:effort` follow the role's primary; an unknown role stays visible as written.
- function resolveAlias(value,profile=p()){if(typeof value!=='string'||!value.startsWith('@'))return value;const [role,effort]=value.slice(1).split(':'),route=profile.modelRoles?.[role];return !route?value:effort&&!poolName(route)?split(route).raw+':'+effort:route;}
- function baseChain(role,group='role'){if(group==='vibe')return agentValues(role).map(s=>resolveAlias(s));return p().modelRoles[role]?[p().modelRoles[role],...roleFallbacks(role)]:[];}
- function vibeAlias(worker){const v=p().task.agentModelOverrides[worker],head=Array.isArray(v)?v[0]:v;return typeof head==='string'&&head.startsWith('@')?head:'';}
+ function resolveAlias(value,profile=p()){if(typeof value!=='string'||!value.startsWith('@'))return value;const [role,effort]=value.slice(1).split(':'),route=eff(profile).modelRoles?.[role];return !route?value:effort&&!poolName(route)?split(route).raw+':'+effort:route;}
+ function baseChain(role,group='role'){if(group==='vibe')return agentValues(role).map(s=>resolveAlias(s));const head=eff().modelRoles[role];return head?[head,...roleFallbacks(role)]:[];}
+ function vibeAlias(worker){const v=eff().task.agentModelOverrides[worker],head=Array.isArray(v)?v[0]:v;return typeof head==='string'&&head.startsWith('@')?head:'';}
  // Fallbacks inherited from `default` are drawn on the lane but are not its own chain.
- function inheritsDefault(role,profile=p()){return role!=='default'&&!!profile.modelRoles[role]&&!Object.hasOwn(profile.retry.fallbackChains,role)&&roleInfo(role)?.defaultFallbacks!==false&&!!profile.retry.fallbackChains.default?.length;}
- function inheritedSlot(role,index,group='role'){if(group!=='role'||index<1||!inheritsDefault(role))return false;const view=modeView(role,group),ref=view?.refs?.[index];return view?.refs?ref?.kind==='base'&&ref.index>=1:true;}
- function oldSetChain(role,list,group='role'){if(group==='vibe'){writeAgent(role,agentFromResolved(role,list));return;}const configured=!!p().modelRoles[role],tail=list.slice(1),before=roleFallbacks(role);p().modelRoles[role]=list[0];if((configured||tail.length)&&JSON.stringify(tail)!==JSON.stringify(before))p().retry.fallbackChains[role]=tail;}
+ function inheritsDefault(role,profile=p()){const L=eff(profile);return role!=='default'&&!!L.modelRoles[role]&&!Object.hasOwn(L.retry.fallbackChains,role)&&roleInfo(role)?.defaultFallbacks!==false&&!!L.retry.fallbackChains.default?.length;}
+ // Where a lane CUT comes from when this file does not hold it (DESIGN «Області і котушки»): 'global' — the Global
+ // config a project inherits; 'default' — this file's own `default` reserves; 'scope' — the reserves a котушка shows
+ // from its scope (a native preset carries primaries only, so they are locked there); '' — this file's own CUT or a
+ // DeepSeek replacement (the mode's).
+ function inheritedSlot(role,index,group='role'){
+  if(group!=='role'&&group!=='vibe')return '';
+  const view=modeView(role,group),ref=view?.refs?.[index];
+  if(view?.refs&&ref?.kind!=='base')return '';
+  const at=view?.refs?ref.index:index,own=p(),g=globalLayer,preset=presetLike();
+  if(group==='vibe')return g&&!preset&&!Object.hasOwn(own.task.agentModelOverrides,role)&&globalHas(role,'vibe')?'global':'';
+  if(at===0)return g&&!preset&&!own.modelRoles[role]&&g.modelRoles[role]?'global':'';
+  if(preset)return 'scope';
+  if(Object.hasOwn(own.retry.fallbackChains,role))return '';
+  if(g&&Object.hasOwn(g.retry.fallbackChains,role))return 'global';
+  if(!inheritsDefault(role))return '';
+  return g&&!Object.hasOwn(own.retry.fallbackChains,'default')?'global':'default';
+ }
+ // One lane edit written into this file's own layer. A project writes only what differs from what it inherits (a
+ // value it already holds stays its own); a котушка holds only the primary.
+ function oldSetChain(role,list,group='role'){
+  if(group==='vibe'){writeAgent(role,agentFromResolved(role,list));return;}
+  const own=p(),L=eff(own),configured=!!L.modelRoles[role],tail=list.slice(1),before=roleFallbacks(role);
+  if(Object.hasOwn(own.modelRoles,role)||list[0]!==L.modelRoles[role])own.modelRoles[role]=list[0];
+  if((configured||tail.length)&&JSON.stringify(tail)!==JSON.stringify(before))own.retry.fallbackChains[role]=tail;
+ }
  // An agent edit never rewrites a role: every @role keeps its place among the agent's own CUTS.
  function agentFromResolved(worker,list){
   const raw=agentValues(worker),out=[...list],taken=new Set();
@@ -424,7 +604,8 @@
   return out;
  }
  function writeAgent(worker,values){
-  const before=agentValues(worker);p().task.agentModelOverrides[worker]=values;
+  const before=agentValues(worker),own=p().task.agentModelOverrides,up=globalLayer?.task.agentModelOverrides?.[worker];
+  if(Object.hasOwn(own,worker)||JSON.stringify(values)!==JSON.stringify(up===undefined?undefined:asList(up)))own[worker]=values;
   if(values.length===1&&values[0].startsWith('@')&&!(before.length===1&&before[0]===values[0]))chainNotes.push(worker+' тепер успадковує '+values[0]+' разом із резервами ролі');
  }
  function options(value,raw){const m=catalogMap.get(raw);const levels=Array.isArray(m?.thinking)&&m.thinking.length?['',...new Set(['off',...m.thinking])]:m?.reasoning===false?['','off']:['','off','minimal','low','medium','high','xhigh','max'];if(value&&!levels.includes(value))levels.push(value);return levels.map(e=>`<option value="${esc(e)}" ${e===value?'selected':''}>${esc(e||'типово')}</option>`).join('');}
@@ -458,8 +639,8 @@
   if(group==='alternatives')return original[state.profile].forgeMode.overrides[role]||original[state.profile].forgeMode.alternatives;
   const profile=original[state.profile],view=profile.forgeMode?.mode==='no-deepseek'?source.profileModes?.[state.profile]?.views?.[group]?.[role]:null;
   if(view?.routes)return view.routes;
-  if(group==='vibe'){const raw=profile.task.agentModelOverrides[role],list=Array.isArray(raw)?raw:[raw];return list.filter(Boolean).map(v=>resolveAlias(v,profile));}
-  return profile.modelRoles[role]?[profile.modelRoles[role],...roleFallbacks(role,profile)]:[];
+  if(group==='vibe')return agentValues(role,profile).map(v=>resolveAlias(v,profile));
+  const head=eff(profile).modelRoles[role];return head?[head,...roleFallbacks(role,profile)]:[];
  }
  // Provider identity on the tape: the edge colour and the code chip. Local GPU, FREE-only and DeepSeek providers
  // have fixed identities; any other provider gets a stable slot from its id. The chip always prints the real code.
@@ -510,15 +691,18 @@
  function node(role,r,i,n,group='role'){
   if(poolName(r))return poolBlock(role,r,i,group);
   const m=split(r),before=savedChain(role,group)[i],sequence=group==='alternatives'||group==='pool';
-  const replacement=temporarySlot(role,i,group),inherited=inheritedSlot(role,i,group),deleted=deletedCut(r),free=!deleted&&freeRoute(r),warn=!deleted&&routeWarning(m.raw);
+  const replacement=temporarySlot(role,i,group),inherited=inheritedSlot(role,i,group),fixed=fixedSlot(role,i,group,inherited),deleted=deletedCut(r),free=!deleted&&freeRoute(r),warn=!deleted&&routeWarning(m.raw);
   const skipped=group==='alternatives'?modeSkipped(role).filter(x=>split(x.route).raw===m.raw):[];
-  const more=slotActionKey(role,i,group),health=healthMarks(r),title=cutTitle(r),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',provider=providerName(m.provider);
-  const classes=['cut',free&&'cut--free',more&&'cut--more',deleted&&'cut--deleted',before!==r&&!inherited&&'is-changed',replacement&&'is-replaced',skipped.length&&'is-skipped'].filter(Boolean).join(' ');
-  const notes=[inherited?'резерв успадковано з default':before!==r?(before?'до зміни: '+before:'новий CUT'):'',warn?'маршрут зараз недоступний: провайдер вимкнений або прострочений':'',deleted?'DELETED — відсутній у провайдера':'',...skipped.map(x=>{const where=(x.keys||[x.key]).filter(k=>k&&k!==role).map(k=>k.replace(/^(role|vibe):/,''));return 'пропущено'+(where.length?' у '+where.join(', '):'')+': '+x.reason;})].filter(Boolean);
+  const more=fixed?'':slotActionKey(role,i,group),health=healthMarks(r),title=cutTitle(r),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',provider=providerName(m.provider);
+  const classes=['cut',free&&'cut--free',more&&'cut--more',deleted&&'cut--deleted',fixed&&'cut--locked',before!==r&&!inherited&&'is-changed',replacement&&'is-replaced',skipped.length&&'is-skipped'].filter(Boolean).join(' ');
+  const notes=[inherited?INHERIT_NOTE[inherited]:before!==r?(before?'до зміни: '+before:'новий CUT'):'',warn?'маршрут зараз недоступний: провайдер вимкнений або прострочений':'',deleted?'DELETED — відсутній у провайдера':'',...skipped.map(x=>{const where=(x.keys||[x.key]).filter(k=>k&&k!==role).map(k=>k.replace(/^(role|vibe):/,''));return 'пропущено'+(where.length?' у '+where.join(', '):'')+': '+x.reason;})].filter(Boolean);
   // One tooltip per CUT: the full name (the visible one may be shortened), the exact route, HEALTH and changes.
   const tip=[alias+title+' · '+provider,r,health.text,...notes].filter(Boolean).join('\n');
-  const label=`Змінити CUT ${i+1}, ${group==='pool'?poolNames[role]:role}: ${alias}${title} · ${provider}${m.effort?' · thinking '+m.effort:''}${free?' · FREE':''}${inherited?' · успадковано з default':''}${deleted?' · DELETED — відсутній у провайдера':''}${replacement?' · заміна DeepSeek':''}${skipped.length?' · пропущено':''}${health.text?' · '+health.text:''}`;
-  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-route="${esc(r)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}<span class="cut__edge"></span><button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title)}</button><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`)}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl" title="заміна DeepSeek" aria-hidden="true">⇄</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${more}${health.bar}</div>`;
+  const label=`Змінити CUT ${i+1}, ${group==='pool'?poolNames[role]:role}: ${alias}${title} · ${provider}${m.effort?' · thinking '+m.effort:''}${free?' · FREE':''}${inherited?' · '+INHERIT_NOTE[inherited]:''}${deleted?' · DELETED — відсутній у провайдера':''}${replacement?' · заміна DeepSeek':''}${skipped.length?' · пропущено':''}${health.text?' · '+health.text:''}`;
+  // A fixed CUT is printed tape: its name is not a key, its thinking is printed, it is no drop target.
+  const name=fixed?`<span class="cut__name cut__name--split" title="${esc(tip)}">${nameMarkup(title)}</span>`:`<button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title)}</button>`;
+  const think=fixed?(group!=='vibe'&&roleInfo(role)?.thinking===false?'':`<span class="cut__think">${esc(m.effort||'типово')}</span>`):thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`);
+  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-route="${esc(r)}" data-clip-key="${clipKey(role,r,i,group)}"${fixed?'':` data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"`}${inherited?` data-inherited="${inherited}"`:''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}${sourceTab(role,i,group,inherited)}<span class="cut__edge"></span>${name}<span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${think}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl" title="заміна DeepSeek" aria-hidden="true">⇄</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${more}${health.bar}</div>`;
  }
  function stepCount(){
   if(renderCache?.steps!=null)return renderCache.steps;
@@ -529,17 +713,32 @@
  // A recessed jack for a new CUT; it glows while a CUT is dragged and stays pinned to the right of a long lane.
  function socketKey(role,index,group,word,label){const jack=`<button type="button" class="socket" data-edit="${esc(role)}" data-index="${index}" data-group="${group}" aria-label="${esc(label)}"><span class="socket__plus" aria-hidden="true"></span>${esc(word)}</button>`;return group==='role'||group==='vibe'?`<span class="socket-dock">${jack}</span>`:jack;}
  function laneKey(role,index,own){
-  const inheritsStandard=state.profile!=='standard'&&!Object.hasOwn(source.presets[state.profile]?.modelRoles||{},role)&&own;
-  const title=[labels[role]&&labels[role]!==role?role+' · '+labels[role]:role.length>11?role:'',inheritsStandard?'основна модель успадкована зі Standard':''].filter(Boolean).join(' · ');
-  return `<button type="button" class="lane__key" data-focus-role="${esc(role)}"${role===state.role?' aria-current="true"':''}${title?` title="${esc(title)}"`:''} aria-label="${esc((labels[role]&&labels[role]!==role?role+' · '+labels[role]:role)+(own?'':' · типово в OMP'))}"><span class="lane__idx">${String(index+1).padStart(2,'0')}</span><span class="lane__name">${esc(role)}</span>${led(own,'green')}</button>`;
+  const src=laneSource(role,'role'),menu=laneMenuAvailable(role,'role'),name=labels[role]&&labels[role]!==role?role+' · '+labels[role]:role;
+  const inheritsStandard=state.profile!=='standard'&&!presetLike()&&!Object.hasOwn(source.presets[state.profile]?.modelRoles||{},role)&&own;
+  const title=[labels[role]&&labels[role]!==role?name:role.length>11?role:'',inheritsStandard?'основна модель успадкована зі Standard':'',menu?'дії області: перевизначити, скинути, підняти в глобальне':''].filter(Boolean).join(' · ');
+  const attrs=menu?`data-lane-menu="${esc(role)}" data-group="role" aria-haspopup="menu" aria-expanded="false"`:`data-focus-role="${esc(role)}"`;
+  return `<button type="button" class="lane__key${src.text?' lane__key--src':''}" ${attrs}${role===state.role?' aria-current="true"':''}${title?` title="${esc(title)}"`:''} aria-label="${esc(name+(src.text?' · '+src.text:own?'':presetLike()?'':' · типово в OMP')+(menu?' · дії області':''))}"><span class="lane__idx">${String(index+1).padStart(2,'0')}</span><span class="lane__label"><span class="lane__name">${esc(role)}</span>${src.text?`<span class="lane__sub">${esc(src.text)}</span>`:''}</span>${led(!!src.c,src.c||'green')}</button>`;
  }
- // A role lane: lane key, then the tape; an unconfigured role is leader tape («Типово в OMP»), not a CUT.
+ // An unset lane: «Типово в OMP» (no layer sets it), or in a котушка «Не в котушці» with what applying it leaves.
+ function leaderMarkup(role){
+  if(presetLike())return `<div class="leader"><b>Не в котушці</b><small>· ${esc(absentOutcome(role))}</small></div>`;
+  return `<div class="leader"><b>Типово в OMP</b><small>· обрати CUT</small></div>`;
+ }
+ // What OMP does with a role a котушка does not carry when it is applied (/modelpreset switch clears the roles it
+ // does not name in the layer that stores roles): a project storing roles itself falls back to the Global value; with
+ // the roles stored globally a project keeps its own value; otherwise OMP's default.
+ function absentOutcome(role){
+  const projectStore=!!globalLayer&&source.scope?.storage==='project',up=globalLayer?.modelRoles?.[role],own=globalLayer&&profiles.standard?.modelRoles?.[role];
+  return projectStore?(up?'після «Застосувати» — з глобального':'після «Застосувати» — типово в OMP'):own?'після «Застосувати» лишається з проєкту':'після «Застосувати» — типово в OMP';
+ }
+ // A role lane: lane key, then the tape; an unconfigured role is leader tape («Типово в OMP»), not a CUT. A котушка
+ // takes no reserves (its reserves are the scope's), a Global котушка seen from a project takes nothing.
  function graphRow(role,index,group='role'){
   const list=chain(role,group),agent=group==='vibe',automatic=!agent&&!list.length;
   const keyHtml=agent?agentKey(role,true,agentListNote(role)+(agentInfo(role)?'':' · немає у файлах агентів')):laneKey(role,index,!automatic);
-  const tape=automatic?`<div class="leader"><b>Типово в OMP</b><small>· обрати CUT</small></div>`:list.map((r,i)=>node(role,r,i,list.length,group)).join('');
-  const word=agent?'кандидат':automatic?'основна':'резерв';
-  return `<div class="lane${automatic?' lane--inherit':''}" data-role="${esc(role)}" data-lane-group="${group}">${keyHtml}<div class="lane__groove">${modeTag(role,group)}${tape}${socketKey(role,list.length,group,word,(agent?'Додати кандидата':automatic?'Обрати основний CUT':'Додати резерв')+': '+role)}${agent&&agentRemove(role)?`<span class="lane__tools">${agentRemove(role)}</span>`:''}</div></div>`;
+  const tape=automatic?leaderMarkup(role):list.map((r,i)=>node(role,r,i,list.length,group)).join('');
+  const word=agent?'кандидат':automatic?'основна':'резерв',socket=locked()||presetLike()&&!automatic?'':socketKey(role,list.length,group,word,(agent?'Додати кандидата':automatic?(isNative(state.profile)?'Додати роль у котушку':'Обрати основний CUT'):'Додати резерв')+': '+role);
+  return `<div class="lane${automatic?' lane--inherit':''}" data-role="${esc(role)}" data-lane-group="${group}">${keyHtml}<div class="lane__groove">${locked()?'':modeTag(role,group)}${tape}${socket}${agent&&agentRemove(role)?`<span class="lane__tools">${agentRemove(role)}</span>`:''}</div></div>`;
  }
  function agentTrack(worker,i){return !agentValues(worker).length&&agentInfo(worker)?agentDefaultTrack(worker):agentLink(worker)?agentLinkedTrack(worker):graphRow(worker,i,'vibe');}
  function poolActionContext(){return !!state.poolPanel;}
@@ -560,18 +759,28 @@
    // A draft on an older file never dead-ends: its Save key becomes «Конфлікт…», the same choice as ⌘S.
    save:stale?`<button type="button" class="key key--action" data-action="conflict-open" aria-label="Конфлікт: файл профілю ${esc(prettyProfile(state.profile))} змінився · вирішити" title="Файл змінився після початку чернетки · ⌘/Ctrl S"><span class="key__cap">Конфлікт…</span></button>`:`<button type="button" class="key key--action" data-action="${pool?'pool-save':'save'}" aria-label="${pool?'Зберегти пули':'Зберегти профіль '+esc(prettyProfile(state.profile))}" title="⌘/Ctrl S" ${!dirty||state.saving||blocked?'disabled':''}><span class="key__cap">Зберегти${pool?'<span class="key__more"> пули</span>':''}</span></button>`};
  }
- function slotActionKey(role,index,group){return chain(role,group).length>1||group==='pool'||group==='alternatives'||poolName(chain(role,group)[index])||temporarySlot(role,index,group)?`<button type="button" class="cut__more" data-slot-actions="${esc(role)}" data-index="${index}" data-group="${group}" aria-haspopup="menu" aria-expanded="false" aria-label="Дії з CUT: ${esc(role)}, слот ${index+1}" title="Дії з CUT">⋯</button>`:'';}
+ function slotActionKey(role,index,group){return chain(role,group).length>1||group==='pool'||group==='alternatives'||poolName(chain(role,group)[index])||temporarySlot(role,index,group)||canRemoveCut(role,index,group)?`<button type="button" class="cut__more" data-slot-actions="${esc(role)}" data-index="${index}" data-group="${group}" aria-haspopup="menu" aria-expanded="false" aria-label="Дії з CUT: ${esc(role)}, слот ${index+1}" title="Дії з CUT">⋯</button>`:'';}
  // Монтаж: one deck pocket. Tools (pool keys, Пули, search), notices, editors, ruler, the lanes (a run of
  // identical inherited lanes folds into one printed row), agents, legend. Each lane and each agent is its own
  // region, so an edit, Undo or a preview response replaces only the rows whose CUTS changed. HEALTH and search
  // only patch the deck's attributes and the rows whose marks changed.
+ // A котушка's limits on the deck (DESIGN «Області і котушки»): what it carries (role primaries and thinking) and what
+ // it does not (reserves, agents, providers: the scope's); its thinking level is edited here. A Global котушка seen
+ // from a project is read-only: it can be applied here and edited in the Global scope.
+ function presetStrip(){
+  if(!presetLike())return '';
+  const name=prettyProfile(state.profile),view=locked(),levels=[['','типово · не задає'],...['minimal','low','medium','high','xhigh','max','auto'].map(l=>[l,l])];
+  return `<div class="presetbar" role="group" aria-label="${esc((view?'Глобальна котушка ':'Котушка OMP ')+name)}">${led(true,'orange')}<div class="presetbar__txt"><b>${view?'Глобальна котушка':'Котушка OMP'} · ${esc(name)}</b><span>Несе лише основні CUTS ролей і thinking. Резерви, агенти й провайдери — з області${view?'; тут — перегляд і «Застосувати»':' (Standard)'}.</span></div>${selWin('preset-thinking','Thinking<br>котушки',p().defaultThinkingLevel||'',levels,'sel--sm presetbar__think',view||state.saving?'disabled':'')}${view?key('Редагувати в глобальному','preset-edit-global','key--sm'):key('До Standard','to-standard','key--sm')}</div>`;
+ }
+ function presetAgentsNote(){return `<div class="subhead"><span class="silk">Агенти</span><span class="print">не входять у котушку OMP · їхні моделі спільні для області</span><span class="subhead__rule"></span>${key('Агенти в Standard','to-standard','key--sm')}</div>`;}
  function profileView(){
   const pending=projectionPending(),ds=hasDeepSeekScreen();
   return [box('p/deck',deckOpen(),[
    box('p/tools','<div class="deck__tools">',[leaf('p/pools',poolShelf()),leaf('p/role-search',roleSearch())]),
+   leaf('p/preset',presetStrip()),
    leaf('p/notices',deckNotices(ds)),
    leaf('p/ruler',rulerMarkup()),
-   box('p/body',`<div class="deck__body${pending?' is-pending':''}"${pending?' aria-busy="true"':''}>`,[laneGraph(),leaf('p/agents-head',agentSectionHead()),agentList()]),
+   box('p/body',`<div class="deck__body${pending?' is-pending':''}"${pending?' aria-busy="true"':''}>`,[laneGraph(),leaf('p/agents-head',presetLike()?presetAgentsNote():agentSectionHead()),presetLike()?box('p/agents','<div class="lanes lanes--agents">',[]):agentList()]),
    leaf('p/legend',legendMarkup())
   ])];
  }
@@ -583,7 +792,7 @@
  // The printed legend at the bottom of the deck; HEALTH entries hide with the switch (CSS), so it never re-renders for it.
  function legendMarkup(){
   const hs=[['ok','●','запас'],['low','△','малий'],['zero','∅','нуль'],['unk','?','немає виміру'],['off','⊘','недоступна'],['gpu','◆','GPU']];
-  return `<div class="legend"><span class="silk lg--h">HEALTH</span>${hs.map(([c,g,t])=>`<span class="lg lg--h"><span class="lg__sw hb--${c}"><i${c==='low'?' style="right:55%"':''}></i></span>${g} ${t}</span>`).join('')}<span class="lg lg--off">HEALTH вимкнено · чиста плівка</span><span class="seam seam--v"></span>${referencedProviders.map(v=>`<span class="lg"><b class="tag" data-p="${providerSlot(v)}">${esc(providerCode(v))}</b><span class="lg--name">${esc(providerName(v))}</span></span>`).join('')}<span class="seam seam--v"></span><span class="lg"><span class="lg__inh" aria-hidden="true"></span>резерв з default</span><span class="lg"><span class="stamp stamp--repl">⇄</span>заміна DeepSeek</span><span class="lg">${led(true,'blue')}власний список агента</span><span class="print lg__note">Збереження — для нових запусків OMP; активні сесії зберігають свої налаштування</span></div>`;
+  return `<div class="legend"><span class="silk lg--h">HEALTH</span>${hs.map(([c,g,t])=>`<span class="lg lg--h"><span class="lg__sw hb--${c}"><i${c==='low'?' style="right:55%"':''}></i></span>${g} ${t}</span>`).join('')}<span class="lg lg--off">HEALTH вимкнено · чиста плівка</span><span class="seam seam--v"></span>${referencedProviders.map(v=>`<span class="lg"><b class="tag" data-p="${providerSlot(v)}">${esc(providerCode(v))}</b><span class="lg--name">${esc(providerName(v))}</span></span>`).join('')}<span class="seam seam--v"></span><span class="lg"><span class="lg__inh" aria-hidden="true"></span>резерв з default</span>${globalLayer?'<span class="lg"><span class="lg__inh lg__inh--global" aria-hidden="true"></span>з глобального</span>':''}<span class="lg"><span class="stamp stamp--repl">⇄</span>заміна DeepSeek</span><span class="lg">${led(true,'green')}${globalLayer?'у проєкті':'у цьому файлі'}</span>${globalLayer?`<span class="lg">${led(true,'blue')}з глобального</span>`:''}${presetLike()?`<span class="lg">${led(true,'orange')}котушка</span>`:''}<span class="print lg__note">Збереження — для нових запусків OMP; активні сесії зберігають свої налаштування</span></div>`;
  }
  // Runs of three or more consecutive unconfigured lanes fold into one printed row («Показати N»); `default` never
  // folds. The open state is remembered locally per run.
@@ -599,7 +808,7 @@
   for(const g of laneGroups()){
    if(g.role){children.push(leaf('p/row:'+g.role,graphRow(g.role,roleKeys.indexOf(g.role))));continue;}
    const first=g.fold[0],open=foldOpen(g.fold),from=roleKeys.indexOf(first)+1,to=from+g.fold.length-1,range=String(from).padStart(2,'0')+'–'+String(to).padStart(2,'0');
-   children.push(leaf('p/fold:'+first,`<div class="fold"><button type="button" class="key key--wide" data-fold-toggle="${esc(first)}" aria-expanded="${open}" aria-controls="fold-${esc(first)}"><span class="key__cap"><span class="lane__idx">${range}</span>${open?'Сховати':'Показати'} <span class="rd" style="--rd:2ch">${g.fold.length}</span></span></button><div class="fold__print"><b>${g.fold.length} ${plural(g.fold.length,'доріжка','доріжки','доріжок')} · типово в OMP</b><span>${g.fold.map(esc).join(' · ')}</span></div></div>`));
+   children.push(leaf('p/fold:'+first,`<div class="fold"><button type="button" class="key key--wide" data-fold-toggle="${esc(first)}" aria-expanded="${open}" aria-controls="fold-${esc(first)}"><span class="key__cap"><span class="lane__idx">${range}</span>${open?'Сховати':'Показати'} <span class="rd" style="--rd:2ch">${g.fold.length}</span></span></button><div class="fold__print"><b>${g.fold.length} ${plural(g.fold.length,'доріжка','доріжки','доріжок')} · ${presetLike()?'не в котушці':'типово в OMP'}</b><span>${g.fold.map(esc).join(' · ')}</span></div></div>`));
    children.push(box('p/foldlanes:'+first,`<div class="fold__lanes${open?' is-open':''}" id="fold-${esc(first)}">`,g.fold.map(r=>leaf('p/row:'+r,graphRow(r,roleKeys.indexOf(r))))));
   }
   return box('p/lanes','<div class="lanes">',children);
@@ -612,18 +821,83 @@
   return new Set(source.providers.filter(v=>v.custom||v.managed||v.used.length||subscribed.has(v.id)).map(v=>v.id));
  }
  function pickerModels(x){
-  const mine=myProviderIds(),disabled=new Set(p().disabledProviders||[]),expired=new Set(source.providers.filter(v=>v.expired).map(v=>v.id));
+  const mine=myProviderIds(),disabled=new Set(eff().disabledProviders||[]),expired=new Set(source.providers.filter(v=>v.expired).map(v=>v.id));
   // Cheap tests first: the capability check runs only for a CUT the provider filters let through.
   return catalog.filter(m=>m.status!=='missing'&&!disabled.has(m.provider)&&!expired.has(m.provider)&&(x.scope==='all'||mine.has(m.provider))&&(x.group!=='pool'||ManaOperator.isFreeModel(m))&&(x.group!=='alternatives'||!deepseek(m.provider+'/'+m.id))&&acceptsRoleModel(x.role,x.group,m));
  }
  // MENUS — small recessed trays with labelled keys of the panel's shape (DESIGN «Меню»). The ⋯ CUT tools are a
  // role=menu (arrows, Home/End, Escape returns to ⋯); the quick pick is a dialog that shows the current CUT first and
  // picks with one tap. Both carry [data-picker]; on a phone they are sheets at the bottom of the screen.
+ // LANE MENU (the key of a project's lane, DESIGN «Області і котушки»): where the lane's values come from and the
+ // scope actions — «Перевизначити в проєкті» (a draft copy of the Global value), «Скинути до глобального» (a draft
+ // removal of the project's value; «Типово в OMP» where the Global config has none) and «Підняти в глобальне» (one
+ // recoverable write of both files, confirmed in the drawer). Drafts are one Undo step and need «Зберегти».
+ const LANE_PART={modelRoles:'основна',retry:'резерви',task:'список агента'};
+ function laneMenu(x,pos){
+  const l=laneLayers(x.role,x.group)||{paths:[],own:[],up:[],inherit:[]},vibe=x.group==='vibe',same=(a,b)=>a.join('\n')===b.join('\n');
+  const own=path=>l.own.some(o=>same(o,path)),up=path=>l.up.some(o=>same(o,path));
+  const where=l.paths.map(path=>LANE_PART[path[0]]+': '+(own(path)?(up(path)?'проєкт (перекриває глобальне)':'проєкт'):up(path)?'глобальне':vibe?'типово в OMP':path[0]==='retry'&&inheritsDefault(x.role)?'з default':'не задано')).join(' · ');
+  const blocked=promoteBlocked(x.role,x.group),files=scopeFiles();
+  const item=(cap,action,attr='')=>`<button type="button" class="key key--menu" role="menuitem" data-action="${action}"${attr}><span class="key__cap">${cap}</span></button>`;
+  const rows=[];
+  if(l.inherit.length)rows.push(item(led(true,'green')+'Перевизначити в проєкті','lane-override',` title="${esc('Скопіювати в проєкт: '+l.inherit.map(path=>LANE_PART[path[0]]).join(', ')+'. Глобальний файл не зміниться.')}"`));
+  if(l.own.length&&l.up.length)rows.push(item(led(true,'blue')+'Скинути до глобального','lane-reset',' title="Прибрати значення проєкту: OMP братиме глобальне"'));
+  else if(l.own.length&&(vibe?agentInfo(x.role):roleInfo(x.role)))rows.push(item('Типово в OMP','lane-reset',' title="Прибрати значення проєкту: глобальне його не задає, модель обирає OMP"'));
+  if(l.own.length)rows.push((rows.length?'<div class="menu__sep" role="separator"></div>':'')+item(led(true,'amber')+'Підняти в глобальне…','lane-promote',blocked?' disabled':''));
+  return `<div class="menu menu--tools menu--lane" data-picker role="menu" aria-label="${esc((vibe?'Агент ':'Доріжка ')+x.role+' · області')}" ${pos}><div class="menu__head"><span class="silk">${esc((vibe?'агент ':'')+x.role)} · області</span>${MENU_CLOSE('Закрити дії доріжки')}</div><p class="menu__note menu__where">${esc(where)}</p><div class="menu__bed">${rows.join('')||'<p class="menu__note">Немає дій</p>'}</div>${blocked?'<p class="menu__note">Підняти можна збережене значення · спершу «Зберегти»</p>':''}<p class="menu__note menu__files"><span>проєкт · ${esc(files.projectShort)}</span><span>глобальне · ${esc(files.globalShort)}</span></p></div>`;
+ }
+ function openLaneMenu(role,group,el){
+  if(state.saving)return;
+  if(state.picker?.lane&&state.picker.role===role&&state.picker.group===group){closePicker();return;}
+  if(group==='role')state.role=role;
+  const b=el.getBoundingClientRect();state.picker={role,index:-1,group,lane:true,actionsOnly:true,inTray:false,anchor:{top:b.top,bottom:b.bottom},top:Math.max(12,b.bottom+7),left:Math.max(12,Math.min(b.left,innerWidth-292))};render();
+  focusPicker();
+ }
+ function focusLaneKey(role,group){
+  const key=[...win.querySelectorAll(`[data-lane-menu="${CSS.escape(role)}"][data-group="${group}"]`)].find(el=>el.getClientRects().length);
+  if(key){key.focus({preventScroll:true});return;}
+  if(group==='role'){const lane=win.querySelector(`.lane[data-role="${CSS.escape(role)}"][data-lane-group="role"] .lane__key`);if(lane){lane.focus({preventScroll:true});return;}}
+  focusLane(role,group);
+ }
+ // A value can move into the Global config only as it is saved: an unsaved change of its path (or a draft on an older
+ // file) is saved first.
+ function promoteBlocked(role,group){const l=laneLayers(role,group);if(!l)return true;return staleDrafts.has('standard')||diff('standard').some(c=>l.paths.some(path=>path.join('\n')===c.path.join('\n')));}
+ function laneOverride(role,group){
+  const l=laneLayers(role,group);if(!l?.inherit.length||state.saving)return;
+  for(const path of l.inherit){const value=path.reduce((o,k)=>o?.[k],globalLayer),parent=path.slice(0,-1).reduce((o,k)=>o[k]??={},p());parent[path.at(-1)]=copy(value);}
+  state.picker=null;state.opFeedback=(group==='vibe'?'Агент ':'')+role+' перевизначено в проєкті (копія глобального: '+l.inherit.map(path=>LANE_PART[path[0]]).join(', ')+') · далі зміни — лише в проєкті · «Зберегти» запише, ↶ скасує';render();focusLaneKey(role,group);
+ }
+ function laneReset(role,group){
+  const l=laneLayers(role,group);if(!l?.own.length||state.saving)return;
+  for(const path of l.own){const parent=path.slice(0,-1).reduce((o,k)=>o?.[k],p());if(parent)delete parent[path.at(-1)];}
+  delete modeSettings().overrides[(group==='vibe'?'vibe:':'role:')+role];
+  state.picker=null;state.opFeedback=(group==='vibe'?'Агент ':'')+role+(l.up.length?' скинуто до глобального':' повернуто до «Типово в OMP»')+' · «Зберегти» запише, ↶ скасує';render();focusLaneKey(role,group);
+ }
+ function lanePromote(role,group){
+  const l=laneLayers(role,group);if(!l?.own.length||state.saving)return;
+  if(promoteBlocked(role,group)){notify('Підняти можна збережене значення: спершу збережи проєкт.');return;}
+  const files=scopeFiles(),vibe=group==='vibe',what=(vibe?'агента ':'')+role,parts=l.own.map(path=>LANE_PART[path[0]]).join(', ');
+  // An agent's @role that only this project defines would point nowhere in the Global config.
+  const dangling=vibe?agentValues(role).filter(v=>v.startsWith('@')&&!globalLayer.modelRoles[aliasRole(v)]).map(v=>v.split(':')[0]):[];
+  state.picker=null;
+  askConfirm({action:'promote',paths:l.own,role,group,focus:`[data-lane-menu="${CSS.escape(role)}"][data-group="${group}"]`,title:'Підняти в глобальне',sub:what,label:'Підняти в глобальне',
+   text:`Значення проєкту для <b>${esc(what)}</b> (${esc(parts)}) буде записано в глобальний файл і прибрано з файлу проєкту — одним записом, з резервними копіями обох файлів.<span class="path-list"><span>глобальне · <code>${esc(files.global)}</code></span><span>проєкт · <code>${esc(files.project)}</code></span></span>Після цього ${esc(what)} діятиме в усіх проєктах, де немає власного значення.`,
+   note:dangling.length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>'+esc(dangling.join(', '))+' є лише в цьому проєкті: у глобальному файлі це посилання агента нікуди не вестиме.</span></div>':''});
+ }
+ // The Global scope of this scope (itself on the Global scope), and the files the scope actions write.
+ function globalScopeRow(){const id=source.scope?.kind==='global'?source.projectId:source.scope?.parent;return id?(source.projects||[]).find(x=>x.id===id)||null:null;}
+ function scopeFiles(){
+  const g=globalScopeRow(),scope=source.scope||{},trim=path=>String(path||'').replace(/\/+$/,''),tail=path=>trim(path).split('/').pop()||'';
+  const project=scope.kind==='project'?trim(scope.path)+'/.omp/config.yml':'';
+  return {global:g?trim(g.path)+'/config.yml':'',project,globalShort:g?tail(g.path)+'/config.yml':'',projectShort:project?'.omp/config.yml':''};
+ }
  function pickerTitle(x){return (x.group==='alternatives'?'Заміни · '+(x.role==='profile'?'профіль':x.role.split(':')[1]):x.group==='pool'?poolNames[x.role]:x.group==='vibe'?'агент '+x.role:x.role)+' · '+(x.group==='alternatives'||x.group==='pool'?String(x.index+1).padStart(2,'0'):x.index===0?'основна':'резерв '+x.index);}
  const MENU_CLOSE=label=>`<button type="button" class="key key--sm key--sq" data-action="picker-close" aria-label="${esc(label)}" title="Закрити · Esc"><span class="key__cap">${SVG.close}</span></button>`;
  function pickerMarkup(){
   const x=state.picker;if(!x)return leaf('picker','');
-  const list=chain(x.role,x.group),current=list[x.index],pos=`style="top:${x.top}px;left:${x.left}px"`;
+  const pos=`style="top:${x.top}px;left:${x.left}px"`;
+  if(x.lane)return leaf('picker',laneMenu(x,pos));
+  const list=chain(x.role,x.group),current=list[x.index];
   if(x.thinking){
    // The shared thinking menu: one latched key per level the model lists, «типово» and «off» always.
    const m=current&&!poolName(current)?split(current):null,waiting=pickerActionsPending(),off=waiting?' disabled':'';
@@ -632,28 +906,31 @@
    return leaf('picker',`<div class="menu menu--tools menu--think" data-picker role="menu" aria-label="Thinking · ${esc(pickerTitle(x))}" aria-busy="${waiting}" ${pos}><div class="menu__head"><span class="silk">Thinking · ${esc(pickerTitle(x))}</span>${MENU_CLOSE('Закрити thinking')}</div><div class="menu__bed">${rows||'<p class="menu__note">Немає рівнів thinking для цього CUT</p>'}</div>${waiting?'<p class="menu__note">Чекає розрахунку замін…</p>':''}</div>`);
   }
   if(x.actionsOnly){
-   const sequence=x.group==='alternatives'||x.group==='pool',isPool=poolName(current),canRemove=sequence||x.index>0||isPool&&list.length>1,waiting=pickerActionsPending(),off=waiting?' disabled':'';
+   const sequence=x.group==='alternatives'||x.group==='pool',isPool=poolName(current),canRemove=canRemoveCut(x.role,x.index,x.group),waiting=pickerActionsPending(),off=waiting?' disabled':'';
+   // The primary too: the next CUT takes its place, or the lane's only CUT returns the lane to its default.
+   const reset=canRemove&&removesLane(x.role,x.index,x.group)?soleCutReset(x.role,x.group):'',removeTip=reset?({'як у Standard':'Доріжка повертається до Standard','як у глобальному':'Проєкт прибирає своє значення: OMP бере глобальне','роль вийде з котушки':'Роль не входитиме в котушку'})[reset]||'Як «Типово в OMP»: модель обирає OMP':!sequence&&x.index===0?'Наступний CUT стане основним':'';
    const item=(cap,action,attr='',cls='')=>`<button type="button" class="key key--menu${cls}" role="menuitem" data-action="${action}"${attr}${off}><span class="key__cap">${cap}</span></button>`;
    const rows=[];
    if(!sequence&&!isPool&&x.index>0)rows.push(item(led(true,'green')+'Основна','promote-node'));
    if(!sequence&&temporarySlot(x.role,x.index,x.group))rows.push(item(led(true,'amber')+'Закріпити','make-permanent'));
-   if(list.length>1){rows.push(item('← Раніше<span class="key__hint">⇧←</span>','move-node',' data-direction="-1"'+(x.index===0?' disabled':'')));rows.push(item('Пізніше →<span class="key__hint">⇧→</span>','move-node',' data-direction="1"'+(x.index===list.length-1?' disabled':'')));}
+   if(list.length>1&&!(presetLike()&&!sequence)){rows.push(item('← Раніше<span class="key__hint">⇧←</span>','move-node',' data-direction="-1"'+(x.index===0?' disabled':'')));rows.push(item('Пізніше →<span class="key__hint">⇧→</span>','move-node',' data-direction="1"'+(x.index===list.length-1?' disabled':'')));}
    if(isPool)rows.push(item('Замінити пул…','replace-pool'));
-   if(canRemove)rows.push((rows.length?'<div class="menu__sep" role="separator"></div>':'')+item(led(true,'red')+'Прибрати','remove-node','',' key--danger'));
+   if(canRemove)rows.push((rows.length?'<div class="menu__sep" role="separator"></div>':'')+item(led(true,'red')+'Прибрати'+(reset?' · '+reset:''),'remove-node',removeTip?` title="${removeTip}"`:'',' key--danger'));
    const m=current&&!isPool?split(current):null,think=m&&thinkSelect(m,x.role,x.index,x.group,'');
    const thinking=think?`<div class="menu__row">${selWin('picker-effort','Thinking',m.effort,[...options(m.effort,m.raw).matchAll(/value="([^"]*)"[^>]*>([^<]*)</g)].map(o=>[o[1],o[2]]),'sel--sm',off)}</div>`:'';
-   return leaf('picker',`<div class="menu menu--tools" data-picker role="menu" aria-label="Дії з CUT · ${esc(pickerTitle(x))}" aria-busy="${waiting}" ${pos}><div class="menu__head"><span class="silk">${esc(pickerTitle(x))}</span>${MENU_CLOSE('Закрити дії з CUT')}</div><div class="menu__bed">${rows.join('')||'<p class="menu__note">Немає дій для цього CUT</p>'}</div>${thinking}${waiting?'<p class="menu__note">Чекає розрахунку замін…</p>':''}</div>`);
+   const heir=inheritedSlot(x.role,x.index,x.group)==='global'?'<p class="menu__note">З глобального · будь-яка зміна стане перевизначенням у проєкті</p>':'';
+   return leaf('picker',`<div class="menu menu--tools" data-picker role="menu" aria-label="Дії з CUT · ${esc(pickerTitle(x))}" aria-busy="${waiting}" ${pos}><div class="menu__head"><span class="silk">${esc(pickerTitle(x))}</span>${MENU_CLOSE('Закрити дії з CUT')}</div><div class="menu__bed">${rows.join('')||'<p class="menu__note">Немає дій для цього CUT</p>'}</div>${thinking}${heir}${waiting?'<p class="menu__note">Чекає розрахунку замін…</p>':''}</div>`);
   }
-  const reset=x.group==='vibe'&&agentInfo(x.role)&&agentValues(x.role).length?key('Типово в OMP','reset-agent','key--sm',`aria-label="Повернути типовий вибір OMP для агента: ${esc(x.role)}"`):x.group==='role'&&roleInfo(x.role)&&p().modelRoles[x.role]?key('Типово в OMP','reset-role','key--sm',`aria-label="Повернути типовий вибір OMP: ${esc(x.role)}"`):'';
+  const resetLabel=x.group==='vibe'||x.group==='role'?laneResetLabel(x.role,x.group):'',reset=resetLabel?key(resetLabel,x.group==='vibe'?'reset-agent':'reset-role','key--sm',`aria-label="${esc(resetLabel+': '+(x.group==='vibe'?'агент ':'')+x.role)}"`):'';
   const results=leaf('picker/results',pickerResults());
-  return box('picker',`<div class="menu menu--pick" data-picker role="dialog" aria-label="${current?'Заміна':'Додавання'} CUT · ${esc(pickerTitle(x))}" ${pos}>`,[box('picker/head','<div class="menu__head">',[leaf('picker/title',`<span class="silk">${current?'Заміна':'Додати'} · ${esc(pickerTitle(x))}</span>`),leaf('picker/count',pickerCount()),leaf('picker/keys',`${reset}${MENU_CLOSE('Закрити вибір')}`)]),leaf('picker/search',pickerSearch()),leaf('picker/hints',`${x.scope==='all'?'<p class="menu__note">Весь каталог · доступ залежить від підключення провайдера</p>':''}${x.group==='vibe'&&x.index===0&&vibeAlias(x.role)?`<p class="menu__note">Замість ${esc(vibeAlias(x.role))} стане власний CUT агента · роль не зміниться</p>`:''}`),results]);
+  return box('picker',`<div class="menu menu--pick" data-picker role="dialog" aria-label="${current?'Заміна':'Додавання'} CUT · ${esc(pickerTitle(x))}" ${pos}>`,[box('picker/head','<div class="menu__head">',[leaf('picker/title',`<span class="silk">${current?'Заміна':'Додати'} · ${esc(pickerTitle(x))}</span>`),leaf('picker/count',pickerCount()),leaf('picker/keys',`${reset}${MENU_CLOSE('Закрити вибір')}`)]),leaf('picker/search',pickerSearch()),leaf('picker/hints',`${x.scope==='all'?'<p class="menu__note">Весь каталог · доступ залежить від підключення провайдера</p>':''}${x.group==='vibe'&&x.index===0&&vibeAlias(x.role)?`<p class="menu__note">Замість ${esc(vibeAlias(x.role))} стане власний CUT агента · роль не зміниться</p>`:''}${inheritedSlot(x.role,x.index,x.group)==='global'?'<p class="menu__note">З глобального · вибір стане перевизначенням у проєкті; глобальний файл не зміниться</p>':''}${isNative(state.profile)&&(x.group==='role')?'<p class="menu__note">Котушка OMP · лише основна модель ролі</p>':''}`),results]);
  }
  // How many CUTS the search leaves: a fixed-width readout in the menu's head (the field itself is never rebuilt).
  function pickerCount(){return `<span class="menu__count"><span class="rd" style="--rd:3ch">${pickerResults.count??0}</span> CUTS</span>`;}
  function pickerSearch(){const x=state.picker,ids=[...myProviderIds()].sort((a,b)=>collate(providerName(a),providerName(b)));return `<div class="menu__search"><label class="search">${SVG.search}<input id="picker-search" type="search" placeholder="CUT або провайдер" value="${esc(x.query)}" aria-label="Знайти CUT" aria-controls="picker-results" autocomplete="off"></label>${selWin('picker-provider','Провайдер',x.scope==='all'?'*':x.provider,[['all','Мої провайдери'],...ids.map(id=>[id,providerName(id)]),['*','Весь каталог']])}</div>`;}
  function pickerResults(){
   const x=state.picker,list=chain(x.role,x.group),current=list[x.index],m=current?split(current):null;
-  const pool=pickerModels(x),q=x.query.trim(),words=queryWords(q),favs=new Set(state.favs),inProfile=new Set([...Object.values(p().modelRoles),...Object.values(p().retry.fallbackChains).flat()].map(v=>split(v).raw)),used=new Set(list.map(v=>split(v).raw));
+  const pool=pickerModels(x),q=x.query.trim(),words=queryWords(q),favs=new Set(state.favs),inProfile=new Set([...Object.values(eff().modelRoles),...Object.values(eff().retry.fallbackChains).flat()].map(v=>split(v).raw)),used=new Set(list.map(v=>split(v).raw));
   const found=pool.filter(a=>(x.provider==='all'||x.provider===a.provider)&&matchesWords(words,searchKey(a).pick));
   const selected=m?(catalogMap.get(m.raw)||{...m,name:short(m.id)}):null;
   if(selected&&!found.some(a=>a.provider+'/'+a.id===m.raw)&&(!q||matchesQuery(q,selected.name,selected.id,selected.provider))&&(x.provider==='all'||x.provider===selected.provider))found.unshift(selected);
@@ -678,7 +955,7 @@
   if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');
  }
  // Focus goes back to what opened the menu: the ⋯ key for CUT tools, the CUT (or socket) for the quick pick.
- function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(!restore||!x)return;const more=x.actionsOnly&&[...win.querySelectorAll(`[${x.thinking?'data-effort-role':'data-slot-actions'}="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);if(more)more.focus({preventScroll:true});else pickerFocus(x);}
+ function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(!restore||!x)return;if(x.lane){focusLaneKey(x.role,x.group);return;}const more=x.actionsOnly&&[...win.querySelectorAll(`[${x.thinking?'data-effort-role':'data-slot-actions'}="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);if(more)more.focus({preventScroll:true});else pickerFocus(x);}
  // A changed OFF profile waits for its projection; a failed preview shows the real chain instead.
  function projectionPending(){if(!modeOff()||!diff(state.profile).length)return false;const plan=activePlan();return !plan?.data&&!plan?.error;}
  function pickerActionsPending(){const x=state.picker;return !!(x&&x.group!=='alternatives'&&x.group!=='pool'&&projectionPending());}
@@ -696,7 +973,7 @@
   if(group!=='pool')state.poolPanel=false;
   if((group||'role')==='role')state.role=role;
   // A lane socket opens the collection with that place as its target; an editor gives the drawer back to it.
-  if(!actionsOnly&&Number(index)>=chain(role,group).length&&group!=='alternatives'&&group!=='pool'&&!(Number(index)===0&&((group||'role')==='role'&&!p().modelRoles[role]||group==='vibe'&&!agentValues(role).length))){state.poolPanel=false;state.modePanel=false;state.cuts=true;state.cutTarget={role,index:Number(index),group:group||'role'};render();(coarsePointer()?win.querySelector('.tray [data-cut]')||win.querySelector('#cuts-resize'):win.querySelector('#cut-query'))?.focus({preventScroll:true});return;}
+  if(!actionsOnly&&Number(index)>=chain(role,group).length&&group!=='alternatives'&&group!=='pool'&&!(Number(index)===0&&((group||'role')==='role'&&!eff().modelRoles[role]||group==='vibe'&&!agentValues(role).length))){state.poolPanel=false;state.modePanel=false;state.cuts=true;state.cutTarget={role,index:Number(index),group:group||'role'};render();(coarsePointer()?win.querySelector('.tray [data-cut]')||win.querySelector('#cuts-resize'):win.querySelector('#cut-query'))?.focus({preventScroll:true});return;}
 
   if(!actionsOnly&&temporarySlot(role,index,group)){const route=chain(role,group)[index],key=modeScope(role,group),candidate=modeList(key).findIndex(v=>split(v).raw===split(route).raw);if(candidate>=0){role=key;group='alternatives';index=candidate;}}
   const b=el.getBoundingClientRect();state.picker={role,index:Number(index),group:group||'role',query:'',provider:'all',scope:'mine',limit:20,actionsOnly,thinking,inTray:!!el.closest('.tray'),anchor:{top:b.top,bottom:b.bottom},top:Math.max(12,b.bottom+7),left:Math.max(12,Math.min(b.left,innerWidth-(actionsOnly?264:432)))};render();
@@ -738,9 +1015,9 @@
  root.addEventListener('click',e=>{if(e.target.closest('.menu--tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
  root.addEventListener('click',e=>{if(e.target.closest('.dock__menu .menu button'))win.querySelector('.dock__menu')?.removeAttribute('open');},true);
  root.addEventListener('toggle',e=>{const menu=e.target;if(menu.matches?.('.dock__menu')&&menu.open&&(!menu.contains(document.activeElement)||document.activeElement.matches('summary'))){menu.querySelector('.menu')?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});menu.querySelector('[role=menuitem]:not(:disabled)')?.focus({preventScroll:true});}},true);
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.effortRole){const x=state.picker;if(x?.thinking&&x.role===b.dataset.effortRole&&x.index===Number(b.dataset.index)&&x.group===b.dataset.group)closePicker();else openPicker(b.dataset.effortRole,b.dataset.index,b.dataset.group,b,true,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){pickCut(state.picker,b.dataset.pick);return;}
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.effortRole){const x=state.picker;if(x?.thinking&&x.role===b.dataset.effortRole&&x.index===Number(b.dataset.index)&&x.group===b.dataset.group)closePicker();else openPicker(b.dataset.effortRole,b.dataset.index,b.dataset.group,b,true,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.laneMenu!==undefined){openLaneMenu(b.dataset.laneMenu,b.dataset.group||'role',b);return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){pickCut(state.picker,b.dataset.pick);return;}
 
- const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;state.opFeedback='Чернетку '+prettyProfile(state.profile)+' скинуто · можна скасувати ↶';render();win.querySelector('.dock__menu summary')?.focus({preventScroll:true});}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('#picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('#picker-results').scrollTop=offset;}if(a==='picker-clear'){state.picker.query='';state.picker.limit=20;render();win.querySelector('#picker-search')?.focus({preventScroll:true});}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(a==='set-effort'){const x=state.picker,list=x&&chain(x.role,x.group);if(!list?.[x.index])return;list[x.index]=split(list[x.index]).raw+(b.dataset.value?':'+b.dataset.value:'');setChain(x.role,list,x.group);closePicker();return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){turnCatalogPage(a==='next-page'?1:-1,a);}if(a==='provider-add')openForm('provider',{editProvider:null});if(a==='provider-create'){await saveProvider();}
+ const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='lane-override'||a==='lane-reset'||a==='lane-promote'){const x=state.picker;if(x?.lane)({'lane-override':laneOverride,'lane-reset':laneReset,'lane-promote':lanePromote})[a](x.role,x.group);return;}if(a==='to-standard'){state.profile='standard';state.picker=null;state.opFeedback='';render();store();win.querySelector('#profile-choice')?.focus({preventScroll:true});return;}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;state.opFeedback='Чернетку '+prettyProfile(state.profile)+' скинуто · можна скасувати ↶';render();win.querySelector('.dock__menu summary')?.focus({preventScroll:true});}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('#picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('#picker-results').scrollTop=offset;}if(a==='picker-clear'){state.picker.query='';state.picker.limit=20;render();win.querySelector('#picker-search')?.focus({preventScroll:true});}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(a==='set-effort'){const x=state.picker,list=x&&chain(x.role,x.group);if(!list?.[x.index])return;list[x.index]=split(list[x.index]).raw+(b.dataset.value?':'+b.dataset.value:'');setChain(x.role,list,x.group);closePicker();return;}if(a==='remove-node'){const x=state.picker;if(x&&removeCut(x.role,x.index,x.group)!=='reset')closePicker();return;}if(a==='promote-node'){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);list.unshift(list.splice(x.index,1)[0]);x.index=0;setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){turnCatalogPage(a==='next-page'?1:-1,a);}if(a==='provider-add')openForm('provider',{editProvider:null});if(a==='provider-create'){await saveProvider();}
 
  });
  root.addEventListener('change',e=>{const el=e.target;if(el.id==='profile-choice'){state.poolPanel=false;state.profile=el.value;state.picker=null;state.opFeedback='';state.armedCut=null;state.cutTarget=null;render();store();}if(el.id==='catalog-provider'){state.catalogProvider=el.value;state.analyze=null;state.page=0;render();}if(el.id==='picker-provider'){state.picker.scope=el.value==='*'?'all':'mine';state.picker.provider=el.value==='*'?'all':el.value;state.picker.limit=20;render();if(coarsePointer())win.querySelector('#picker-provider')?.focus({preventScroll:true});else focusPicker();}if(el.id==='picker-effort'){el.focus({preventScroll:true});const x=state.picker,list=chain(x.role,x.group);list[x.index]=split(list[x.index]).raw+(el.value?':'+el.value:'');setChain(x.role,list,x.group);render();}});
@@ -750,7 +1027,7 @@
   if(clip?.closest('[data-node-role],.lane__groove,.tray__grid')&&!state.picker&&!state.modal&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete'].includes(e.key)){
    e.preventDefault();const {edit:role,group}=clip.dataset,index=Number(clip.dataset.index),list=chain(role,group),step=e.key==='ArrowLeft'?-1:1;
    if(e.shiftKey&&['ArrowLeft','ArrowRight'].includes(e.key)){const to=index+step;if(to>=0&&to<list.length){[list[index],list[to]]=[list[to],list[index]];const ok=setChain(role,list,group,{moved:to});render();pickerFocus({role,group,index:ok?to:index});}return;}
-   if(e.key==='Delete'){if(index<list.length&&(index>0||group==='alternatives'||group==='pool'||poolName(list[0])&&list.length>1)){list.splice(index,1);const ok=setChain(role,list,group);render();if(!pickerFocus({role,group,index:ok?Math.min(index,list.length-1):index})&&group==='vibe')win.querySelector(`[data-agent-copy="${CSS.escape(role)}"],.patch[aria-label^="${CSS.escape(role)}:"]`)?.focus({preventScroll:true});}return;}
+   if(e.key==='Delete'){if(canRemoveCut(role,index,group)){const left=list.length-1,ok=removeCut(role,index,group);if(ok==='reset')return;render();if(!pickerFocus({role,group,index:ok?Math.min(index,left-1):index})&&group==='vibe')win.querySelector(`[data-agent-copy="${CSS.escape(role)}"],.patch[aria-label^="${CSS.escape(role)}:"]`)?.focus({preventScroll:true});}return;}
    let nextRole=role,nextIndex=index;
    if(group==='alternatives'||group==='pool')nextIndex=Math.max(0,Math.min(list.length-1,index+(['ArrowLeft','ArrowUp'].includes(e.key)?-1:1)));
    else if(['ArrowUp','ArrowDown'].includes(e.key)){
@@ -778,7 +1055,7 @@
    if(rows[next]&&next!==at)selectCatalogRow(rows[next].provider+'/'+rows[next].id);return;
   }
   // Radio keys (history signal / measure) and the history bars: arrows move and select, the focus follows.
-  if(e.target.matches?.('[role=radio][data-radio]')&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)){e.preventDefault();const keys=[...e.target.closest('[role=radiogroup]').querySelectorAll('[role=radio]')],n=keys.length,i=keys.indexOf(e.target);keys[e.key==='Home'?0:e.key==='End'?n-1:(i+(['ArrowRight','ArrowDown'].includes(e.key)?1:-1)+n)%n]?.click();return;}
+  if(e.target.matches?.('[role=radio][data-radio]')&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)){e.preventDefault();const keys=[...e.target.closest('[role=radiogroup]').querySelectorAll('[role=radio]:not(:disabled)')],n=keys.length,i=keys.indexOf(e.target);keys[e.key==='Home'?0:e.key==='End'?n-1:(i+(['ArrowRight','ArrowDown'].includes(e.key)?1:-1)+n)%n]?.click();return;}
   if(e.target.matches?.('[data-history-bin]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const n=win.querySelectorAll('[data-history-bin]').length,i=Number(e.target.dataset.historyBin),next=e.key==='Home'?0:e.key==='End'?n-1:Math.max(0,Math.min(n-1,i+(e.key==='ArrowRight'?1:-1)));scrubHistory(next,true);win.querySelector(`[data-history-bin="${next}"]`)?.focus({preventScroll:true});return;}
   // Menus: arrows walk the enabled keys (wrapping), Home / End jump; Escape is handled above.
   const menu=e.target.closest?.('[role=menu]');
@@ -795,7 +1072,7 @@
  root.addEventListener('keydown',onKeydown);
  // Shortcuts keep working when a re-render left focus on <body>.
  document.addEventListener('keydown',e=>{if(e.target instanceof Element&&!e.composedPath().includes(root))onKeydown(e);});
- document.addEventListener('click',e=>{if(!e.composedPath().some(n=>n.matches?.('.dock__menu')))win.querySelector('.dock__menu')?.removeAttribute('open');if(state.picker&&!e.composedPath().some(n=>n.matches?.('[data-picker],[data-edit],[data-slot-actions],[data-node-role]')))closePicker(false);});
+ document.addEventListener('click',e=>{if(!e.composedPath().some(n=>n.matches?.('.dock__menu')))win.querySelector('.dock__menu')?.removeAttribute('open');if(state.picker&&!e.composedPath().some(n=>n.matches?.('[data-picker],[data-edit],[data-slot-actions],[data-node-role],[data-lane-menu]')))closePicker(false);});
  // One pointer gesture for both the label and the segment edge. Native buttons
  // consume HTML dragging in WebKit; keep native buttons for click/keyboard access.
  // A completed drag swallows only its own synthetic click; keyboard clicks (detail 0) are never swallowed.
@@ -928,7 +1205,7 @@
 
 
  // The editable fields of a profile: what diff() reports and what a rebase moves, one path per role, chain and agent.
- function profilePaths(...list){return [...[...new Set(list.flatMap(x=>Object.keys(x.modelRoles||{})))].map(r=>['modelRoles',r]),...[...new Set(list.flatMap(x=>Object.keys(x.retry?.fallbackChains||{})))].map(r=>['retry','fallbackChains',r]),...[...new Set(list.flatMap(x=>workers(x)))].map(r=>['task','agentModelOverrides',r]),['disabledProviders'],['forgeMode']];}
+ function profilePaths(...list){return [...[...new Set(list.flatMap(x=>Object.keys(x.modelRoles||{})))].map(r=>['modelRoles',r]),...[...new Set(list.flatMap(x=>Object.keys(x.retry?.fallbackChains||{})))].map(r=>['retry','fallbackChains',r]),...[...new Set(list.flatMap(x=>Object.keys(x.task?.agentModelOverrides||{})))].map(r=>['task','agentModelOverrides',r]),['disabledProviders'],['forgeMode'],...(list.some(x=>x?.forgePreset)?[['defaultThinkingLevel']]:[])];}
  function diff(name){
   if(renderCache?.diffs.has(name))return renderCache.diffs.get(name);
   const a=original[name],b=profiles[name],out=[];
@@ -955,7 +1232,7 @@
  // revision stays in source.revisions; a save, a preview and the stored draft send the draft's own base.
  const staleDrafts=new Map();
  function baseRevision(name){return staleDrafts.get(name)?.revision??source.revisions?.[name];}
- function freshProfile(name,from=source){const raw=name==='standard'?copy(from.base):merge(from.base,from.presets?.[name]||{}),out=normalizeProfile(raw);out.forgeMode=copy(from.profileModes?.[name]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});return out;}
+ function freshProfile(name,from=source){return snapshotProfiles(from)[name]||snapshotProfiles(from).standard;}
  // Moves a draft onto `next`; with `auto` and a conflict it stays where it is and the conflict is returned.
  function rebaseDraft(name,next,mode='auto'){
   const old=original[name],{value,conflicts}=rebaseValue(old,next,profiles[name],mode);
@@ -971,7 +1248,7 @@
  }
  // «2 зміни: composer · основна, judge · резерви» — what an unsaved draft of this profile holds.
  function draftSummary(name){const changes=diff(name);if(!changes.length)return '';const labels=[...new Set(changes.map(c=>pathLabel(c.path)))];return changes.length+' '+plural(changes.length,'зміна','зміни','змін')+': '+labels.slice(0,3).join(', ')+(labels.length>3?' і ще '+(labels.length-3):'');}
- function pathLabel([a,b,c]){return a==='modelRoles'?b+' · основна':a==='retry'?c+' · резерви':a==='task'?'агент '+c:a==='disabledProviders'?'провайдери профілю':a==='forgeMode'?'режим DeepSeek':[a,b,c].filter(Boolean).join('.');}
+ function pathLabel([a,b,c]){return a==='modelRoles'?b+' · основна':a==='retry'?c+' · резерви':a==='task'?'агент '+c:a==='disabledProviders'?'провайдери профілю':a==='forgeMode'?'режим DeepSeek':a==='defaultThinkingLevel'?'thinking котушки':[a,b,c].filter(Boolean).join('.');}
  // Server problems with a code get a clear line instead of the generic «змінились вихідні дані» dialog.
  const PROBLEM_CODES=new Set(['mode-recovery','symlink','mode-conflict']);
  function problemText(d){
@@ -983,7 +1260,7 @@
  }
  async function api(path,body){
   const writes=path!=='/api/profile-preview';if(writes){writeEpoch++;activeWrites++;}
-  try{const r=await fetch(endpoint(path),{method:'POST',headers:{'Content-Type':'application/json','X-Forge-CSRF':source.csrf},body:JSON.stringify(body),signal:deadline(writes?30000:20000)});const d=await r.json();if(!r.ok){const e=Error(problemText(d));e.status=r.status;e.code=d.code||'';e.files=d.files||d.profiles||[];throw e;}return d;}
+  try{const r=await fetch(endpoint(path),{method:'POST',headers:{'Content-Type':'application/json','X-Forge-CSRF':source.csrf},body:JSON.stringify(body),signal:deadline(writes?30000:20000)});const d=await r.json();if(!r.ok){const e=Error(problemText(d));e.status=r.status;e.code=d.code||'';e.files=d.files||d.profiles||[];e.diffs=d.diffs||null;e.scopes=d.scopes||null;throw e;}return d;}
   catch(e){
    // No answer in time: a write may or may not have landed, so the state is read again as soon as possible.
    if(e?.name==='TimeoutError'||e?.name==='AbortError'){const t=Error(writes?'Сервер не відповів за 30 с. Невідомо, чи зміни записано: чернетка лишилась у вікні, стан перечитується.':'Сервер не відповів вчасно. Спробуй ще раз.');t.status=0;t.code='timeout';if(writes)backgroundRefreshPending=true;throw t;}
@@ -1020,9 +1297,9 @@
  function snapshotFingerprint(snapshot){return JSON.stringify({...snapshot,tariff:{...snapshot.tariff,at:0}});}
  function timeLabel(seconds){return seconds?dateFormat({day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(seconds*1000):'ще немає даних';}
  function num(n){return Number.isFinite(n)?numberFormat('uk-UA',{notation:n>=100000?'compact':'standard',maximumFractionDigits:1}).format(n):'—';}
- function routeWarning(raw){const m=catalogMap.get(raw),pid=split(raw).provider;return m?.status==='missing'||source.providers.find(p=>p.id===pid)?.expired||(p().disabledProviders||[]).includes(pid);}
+ function routeWarning(raw){const m=catalogMap.get(raw),pid=split(raw).provider;return m?.status==='missing'||source.providers.find(p=>p.id===pid)?.expired||(eff().disabledProviders||[]).includes(pid);}
  function rebuild(){
-  referenced.clear();for(const pr of Object.values(profiles)){for(const r of [...Object.values(pr.modelRoles),...Object.values(pr.retry?.fallbackChains||{}).flat(),...Object.values(pr.task?.agentModelOverrides||{}).flat(),...(pr.forgeMode?.alternatives||[]),...Object.values(pr.forgeMode?.overrides||{}).flat()])if(typeof r==='string'&&r.includes('/'))referenced.add(split(r).raw);}
+  referenced.clear();for(const own of Object.values(profiles)){const pr=eff(own);for(const r of [...Object.values(pr.modelRoles),...Object.values(pr.retry?.fallbackChains||{}).flat(),...Object.values(pr.task?.agentModelOverrides||{}).flat(),...(pr.forgeMode?.alternatives||[]),...Object.values(pr.forgeMode?.overrides||{}).flat()])if(typeof r==='string'&&r.includes('/'))referenced.add(split(r).raw);}
   referencedProviders.splice(0,referencedProviders.length,...new Set([...referenced].filter(r=>!poolName(r)).map(r=>split(r).provider)));
   // The catalogue changes only with a new snapshot or a newly referenced unknown route, not with every render.
   if(catalogSource!==source){catalogSource=source;catalogExtra=null;sourceRoutes=new Set(source.models.map(m=>m.provider+'/'+m.id));}
@@ -1048,8 +1325,7 @@
   const freshnessChanged=ageChanged(fresh);
   if(background&&!state.offline&&!freshnessChanged&&snapshotFingerprint(fresh)===snapshotFingerprint(source)){source.tariff=fresh.tariff;stateTag=tag;return;}
   stateTag=tag;
-  const next={standard:copy(fresh.base),...Object.fromEntries(Object.entries(fresh.presets).map(([k,v])=>[k,merge(fresh.base,v)]))};
-  for(const [k,v] of Object.entries(next))v.forgeMode=copy(fresh.profileModes?.[k]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});
+  const next=snapshotProfiles(fresh);
   for(const k of Object.keys(profiles))if(!next[k]&&(discard||!diff(k).length)){delete profiles[k];delete original[k];staleDrafts.delete(k);}
   // A draft whose file moved on is rebased at once (QA1 B2): its own fields stay, the rest follows the file. Only a
   // field changed on both sides keeps it on its old revision, and «Конфлікт…» on the lip offers the choice.
@@ -1058,7 +1334,7 @@
    profiles[k]=copy(v);original[k]=copy(v);staleDrafts.delete(k);
   }
   if(discard||!poolsDirty()){poolOriginal=copy(fresh.freePools);poolDraft=copy(poolOriginal);poolRevision=fresh.poolsRevision;}
-  source=fresh;profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));roleKeys.splice(0,roleKeys.length,...knownRoleKeys(fresh.base));
+  source=fresh;globalLayer=normalizeLayer(fresh.inherited);profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));roleKeys.splice(0,roleKeys.length,...knownRoleKeys(profiles.standard));
   if(!profiles[state.profile])state.profile='standard';state.favs=favSaved=fresh.favs||[];rebuild();state.offline=false;render();
   }finally{if(background)backgroundReloading=false;}
  }
@@ -1092,6 +1368,10 @@
  function setChain(role,list,group='role',hint={}){
   chainNotes=[];
   if(state.saving)return false;
+  // A Global котушка seen from a project is read-only; a котушка holds only role primaries (DESIGN «Області і котушки»).
+  if(locked()&&group!=='pool'){notify('Глобальна котушка тут лише для перегляду й «Застосувати». Редагуй її в області «Глобально».');return false;}
+  if(presetLike()&&(group==='vibe'||group==='role'&&JSON.stringify(list.slice(1))!==JSON.stringify(chain(role,group).slice(1)))){notify('Котушка OMP несе лише основні CUTS ролей і thinking. Резерви й агенти змінюй у Standard.');return false;}
+  const ownBefore=group==='role'||group==='vibe'?ownParts(role,group):null;
   // Each edit speaks for itself: an older line (a copy, an Undo, a save) never outlives the next edit.
   state.opFeedback='';state.editorMsg='';
   if(thinkingOff(role,group)){
@@ -1127,8 +1407,17 @@
   if(inherited&&Object.hasOwn(p().retry.fallbackChains,role))chainNotes.push(roleFallbacks(role).length?'Резерви default скопійовано в '+role+'; доріжка більше не слідує за default':role+' більше не бере резерви default');
   if(group==='role'&&state.syncVibe)syncAgentTails(role,before);
   for(const [heir,was] of heirs)if(inheritsDefault(heir))syncAgentTails(heir,was);
+  const added=ownBefore&&ownParts(role,group).filter(part=>!ownBefore.includes(part));
+  if(added?.length)chainNotes.unshift('Перевизначено в проєкті: '+role+' · '+added.join(', ')+' · глобальний файл не змінено');
   if(chainNotes.length)state.opFeedback=chainNotes.join(' · ');
   return true;
+ }
+ // The parts of a lane a project now holds over its Global inheritance (for the «перевизначено» line).
+ function ownParts(role,group){
+  if(!globalLayer||state.profile!=='standard')return [];
+  const own=p();if(group==='vibe')return Object.hasOwn(own.task.agentModelOverrides,role)&&globalHas(role,'vibe')?['список агента']:[];
+  const g=globalLayer.retry.fallbackChains,chains=own.retry.fallbackChains;
+  return [own.modelRoles[role]&&globalLayer.modelRoles[role]&&'основна',Object.hasOwn(chains,role)&&(Object.hasOwn(g,role)||!Object.hasOwn(chains,'default')&&!!g.default?.length)&&'резерви'].filter(Boolean);
  }
  // «Копіювати резерви»: only a list that still repeated the role's fallbacks follows the role.
  function syncAgentTails(role,before){
@@ -1239,13 +1528,16 @@
   return `<div class="det"><div class="det__id"><b>${esc(cutTitle(state.detail))}</b><span class="print">${esc(providerName(m.provider))} · ${esc(state.detail)}</span></div><div class="det__kv">${pkv('Контекст',m.contextWindow?contextTokens(m.contextWindow):'—')}${pkv('Вихід',m.maxTokens?contextTokens(m.maxTokens):'—')}${pkv('Зір',Array.isArray(m.input)?m.input.includes('image')?'так':'ні':'—')}${pkv('Міркування',m.reasoning===true?'так':m.reasoning===false?'ні':'—')}${pkv('Ціна · вхід / вихід $/1M',priceLine(m))}</div><p class="print print--hint">Тести — для конкретної версії моделі, не гарантія якості FREE-маршруту. Рейтинги Arena й заяви розробника не входять у бал ролі.</p>${evidenceDeck(m,true)}</div>`;
  }
 
+ // In an installation (scopes) a copy is always a native OMP котушка (modelPresets): its name starts with a letter.
+ function nativeClones(){return !!(source.scope?.parent||source.scope?.kind==='global'||(source.projects||[]).some(x=>x.kind));}
  function profileNameResult(value,renaming=false){
-  const result=ManaOperator.profileName(value);
-  if(!result.error&&result.name==='standard'&&(!renaming||state.profile!=='standard'))result.error='Standard — основний профіль. Обери іншу назву.';
-  else if(!result.error&&profileKeys.includes(result.name)&&(!renaming||result.name!==state.profile))result.error='Профіль «'+result.name+'» уже є. Обери іншу назву.';
+  const result=ManaOperator.profileName(value),native=renaming?isNative(state.profile):nativeClones(),keyOf=n=>native?'preset:'+n:n;
+  if(!result.error&&native&&!/^[a-z]/.test(result.name))result.error='Назва котушки OMP починається з латинської літери.';
+  else if(!result.error&&result.name==='standard'&&(!renaming||state.profile!=='standard'))result.error='Standard — основний профіль. Обери іншу назву.';
+  else if(!result.error&&profileKeys.includes(keyOf(result.name))&&(!renaming||keyOf(result.name)!==state.profile))result.error='Котушка «'+result.name+'» уже є. Обери іншу назву.';
   return result;
  }
- function profileNameHint(value,renaming=false){const q=profileNameResult(value,renaming);return value.trim()?(q.error||'В OMP: '+q.name):'Латиниця й цифри. Пробіли → дефіс, великі літери → малі.';}
+ function profileNameHint(value,renaming=false){const q=profileNameResult(value,renaming),native=renaming?isNative(state.profile):nativeClones();return value.trim()?(q.error||(native?'Котушка OMP: ':'В OMP: ')+q.name):native?'Латиниця, з літери. Пробіли → дефіс, великі літери → малі.':'Латиниця й цифри. Пробіли → дефіс, великі літери → малі.';}
  // Field errors are printed under their own window (red outline + text), never as a browser bubble.
  function checkProfileName(form,show=false){
   const input=form.elements.name,renaming=form.id==='rename-form',q=profileNameResult(input.value,renaming),bad=!!q.error&&(show||!!input.value.trim());
@@ -1283,9 +1575,49 @@
   if(kind==='history'){const ok=source.restorable.includes(state.profile),draft=draftSummary(state.profile);return {title:'Попереднє збереження',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Кожне збереження створює резервну копію. Відновлення поверне попередні налаштування та режим DeepSeek профілю <b>${esc(prettyProfile(state.profile))}</b>; поточна версія лишиться в резервних.</p>${ok&&draft?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Незбережену чернетку ('+esc(draft)+') замінить відновлена версія. ↶ Undo поверне чернетку.</span></div>':''}${ok?'':'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Для цього профілю ще немає попередньої версії</span></div>'}${formFoot(`${cancel}${key(led(ok,'amber')+'Відновити попередню','restore-profile','',ok&&!busy?'':'disabled')}`)}`};}
   if(kind==='rename')return {title:'Перейменувати котушку',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="rename-form" class="form form--one" novalidate>${formField('name','Нова назва',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.renameName??state.profile)}">`,{note:profileNameHint(state.renameName??state.profile,true),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Збереження…':'Перейменувати','rename-confirm','key--action',state.profileBusy?'disabled':'')}`,'Налаштування та чернетка збережуться')}</form>`};
   if(kind==='delete-profile')return {title:'Видалити котушку',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Профіль <b>${esc(prettyProfile(state.profile))}</b> зникне зі списку й не буде доступний для нових запусків OMP. Збережена версія лишиться в резервній копії.</p>${diff(state.profile).length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Незбережену чернетку цього профілю також буде видалено</span></div>':''}${formFoot(`${cancel}${key(led(true,'red')+(state.profileBusy?'Видалення…':'Видалити профіль'),'delete-confirm','key--danger',state.profileBusy?'disabled':'')}`)}`};
-  if(kind==='clone')return {title:'Копія котушки',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="clone-form" class="form form--one" novalidate>${formField('name','Назва нового профілю',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.cloneName||'')}" placeholder="Standard FreeTier">`,{note:profileNameHint(state.cloneName||''),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Створення…':'Створити','clone-create','key--action',state.profileBusy?'disabled':'')}`,'Копіюється збережена конфігурація '+esc(prettyProfile(state.profile))+'; спершу збережи чернетку, якщо вона потрібна')}</form>`};
+  if(kind==='clone')return {title:'Копія котушки',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="clone-form" class="form form--one" novalidate>${formField('name',nativeClones()?'Назва нової котушки':'Назва нового профілю',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.cloneName||'')}" placeholder="Standard FreeTier">`,{note:profileNameHint(state.cloneName||''),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Створення…':'Створити','clone-create','key--action',state.profileBusy?'disabled':'')}`,nativeClones()?'Нова котушка OMP у файлі області з усіма ролями, що діють у збереженому '+esc(prettyProfile(state.profile))+' (як /modelpreset save); резерви, агенти й провайдери лишаються спільними':'Копіюється збережена конфігурація '+esc(prettyProfile(state.profile))+'; спершу збережи чернетку, якщо вона потрібна')}</form>`};
+  // A directory OMP ran in without its own settings: the dialog names the file it would create; nothing is created
+  // without its key.
+  if(kind==='candidate'){
+   const c=state.candidate||{},file=String(c.path||'').replace(/\/+$/,'')+'/.omp/config.yml',link=c.status==='symlink',seen=c.sessions?` (${c.sessions} ${plural(c.sessions,'сесія','сесії','сесій')}${c.lastSeen?' · востаннє '+esc(timeLabel(c.lastSeen)):''})`:'';
+   return {title:'Налаштувати проєкт',sub:c.name||'',focus:'[data-action=modal-close]',body:`<p class="print">OMP працював у каталозі <b>${esc(c.name)}</b>${seen}, але там немає власних налаштувань: OMP бере тут лише глобальні.</p><span class="path-list"><span>каталог · <code>${esc(c.path)}</code></span><span>буде створено · <code>${esc(file)}</code></span></span><p class="print">Файл міститиме лише коментар. Доки ти нічого не збережеш, проєкт успадковує все з глобального. Без цієї клавіші нічого не створюється.</p>${link?'<div class="msg" data-s="bad">'+led(true,'red')+'<span>.omp — символьне посилання: Mana Tape не створює файл через посилання</span></div>':''}${formFoot(`${cancel}${key(state.profileBusy?'Створення…':'Налаштувати проєкт','configure-project','key--action',link||busy?'disabled':'')}`)}`};
+  }
+  if(kind==='migrate')return migrateSpec(cancel,busy);
   if(kind==='confirm'){const c=state.confirm||{};return {title:c.title||'Підтвердження',sub:c.sub||'',focus:'[data-action=confirm-cancel]',body:`<p class="print">${c.text||''}</p>${c.pending?'<div class="msg">'+led(false)+'<span>Перевіряю блоки FREE-пулів…</span></div>':c.note||''}${formFoot(`${key('Скасувати','confirm-cancel')}${key((c.danger?led(true,'red'):'')+esc(c.label||'Підтвердити'),'confirm-run',c.danger?'key--danger':'key--action',busy||c.pending?'disabled':'')}`)}`};}
   return {title:'',body:'',focus:''};
+ }
+ // MIGRATION of an old .omp/presets/*.yml котушка (DESIGN «Області і котушки»): the server's plan — what a native
+ // котушка carries (roles, thinking), what it cannot (short diff lines), the model-keyed chains that are exact —, three
+ // ways (roles / roles + model chains / archive), an explicit tick for anything lost, and the backup it makes first.
+ const MIGRATE_MODES=[['roles','Лише ролі','Нативна котушка з ролями й thinking. Решта змін файлу не переходить.'],['model-chains','Ролі + ланцюг за моделлю','Також пише ланцюг ролі як ланцюг за моделлю в .omp/config.yml там, де основна модель є лише в цій котушці: OMP бере його раніше за ланцюг ролі, і він діятиме всюди, де стоїть ця модель.'],['archive','Архівувати','Без нативної котушки: файл іде в резервні копії. Для котушок, чиї ролі збігаються зі Standard (OMP вважав би її активною разом зі Standard).']];
+ function migrateLoses(plan,mode){return mode!=='archive'&&(plan.lost.length>0||plan.modelChains.some(c=>mode!=='model-chains'||!c.exact));}
+ function migrateSpec(cancel,busy){
+  const m=state.migrate||{},plan=m.plan,name=m.profile||'';
+  if(!plan)return {title:'Перенести котушку',sub:name,focus:'[data-action=modal-close]',body:`${m.error?'':`<div class="msg">${led(false)}<span>Готую план перенесення…</span></div>`}${formFoot(cancel)}`};
+  const mode=m.mode||(plan.sameAsStandard?'archive':'roles'),exact=plan.modelChains.filter(c=>c.exact),loses=migrateLoses(plan,mode),ready=!loses||m.accept,collide=mode!=='archive'&&plan.collision;
+  const carried=mode==='archive'?['нічого: нативної котушки не буде']:[...plan.carried,...(mode==='model-chains'?exact.map(c=>'ланцюг '+c.role+' → ключ '+c.selector+' ('+c.chain.length+')'):[])];
+  const lost=mode==='archive'?[]:plan.lost,chains=plan.modelChains.length?`<p class="print">Ланцюги ролей: ${plan.modelChains.map(c=>esc(c.role)+(c.exact?(mode==='model-chains'?' — перейде за моделлю':' — може перейти за моделлю'):' — не точно ('+esc(c.reason)+')')).join(' · ')}</p>`:'';
+  const modes=`<div class="keybed mig__modes" role="radiogroup" aria-label="Спосіб перенесення">${MIGRATE_MODES.map(([k,t])=>{const off=k==='model-chains'&&!exact.length;return `<button type="button" class="key key--sm" role="radio" data-radio="migrate-mode" data-value="${k}" aria-checked="${k===mode}" tabindex="${k===mode?0:-1}"${off?' disabled title="Немає ланцюга, який можна точно перенести за моделлю"':''}><span class="key__cap">${led(k===mode,'orange')}${esc(t)}</span></button>`;}).join('')}</div>`;
+  const body=`<p class="print">Стара котушка <b>${esc(name)}</b> — файл <code>.omp/presets/${esc(name)}.yml</code>. OMP читає такі файли лише через <code>--config</code>, тож зараз вона не діє. Нативна котушка OMP (<code>modelPresets</code> у файлі області) несе лише моделі ролей і thinking.</p>
+   ${plan.sameAsStandard?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Ролі збігаються зі Standard: як нативну котушку OMP вважатиме її активною разом зі Standard. Радимо «Архівувати».</span></div>':''}
+   <div class="mig"><section class="mig__col"><span class="silk">Перейде</span><ul class="mig__list">${carried.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></section><section class="mig__col"><span class="silk">Не перейде</span>${mode==='archive'?'<p class="print">уся котушка: файл лише в резервних копіях</p>':lost.length?diffStrip({lines:lost},'Що не перейде'):'<p class="print">нічого</p>'}${mode==='archive'?'':chains}</section></div>
+   ${modes}<p class="print mig__mode">${esc(MIGRATE_MODES.find(x=>x[0]===mode)[2])}</p>
+   ${mode!=='archive'?formField('name','Назва котушки OMP',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(m.name??plan.preset)}">`,{note:collide?'Котушка з такою назвою вже є · обери іншу':'Латинська літера на початку; зміна назви оновить план'}):''}
+   ${loses?`<button type="button" class="key key--sm mig__accept" data-action="migrate-accept" aria-pressed="${!!m.accept}"><span class="key__cap">${led(false,'amber',' data-latch')}Розумію: «Не перейде» буде втрачено</span></button>`:''}
+   <p class="print">Спершу старий файл і запис його режиму підуть у резервні копії стану (<code>backups/…-migrated-${esc(name)}.yml</code>), потім файл зникне з <code>.omp/presets</code> тим самим записом, що й файл області.</p>`;
+  return {title:'Перенести котушку',sub:name,focus:'[data-action=modal-close]',wide:true,body:body+formFoot(`${cancel}${key(state.profileBusy?'Перенесення…':mode==='archive'?'Архівувати':'Перенести','migrate-run','key--action',busy||!ready||collide||m.pending?'disabled':'')}`,loses&&!m.accept?'Підтвердь, що частина змін не перейде':'')};
+ }
+ async function migratePlan(profile,name=''){
+  state.migrate={...(state.migrate||{}),profile,pending:true};
+  try{const plan=await api('/api/profile-action',{action:'migrate-plan',profile,...(name?{name}:{})});if(state.modal!=='migrate'||state.migrate?.profile!==profile)return;state.migrate={...state.migrate,plan,pending:false,name:name||plan.preset};state.modalError='';state.modalCode='';}
+  catch(e){if(state.modal!=='migrate')return;state.migrate={...state.migrate,pending:false};state.modalError=e.message;state.modalCode=errorCode(e);}
+  modalFit='';regions.invalidate('drawer/form');render();
+ }
+ // A short diff from the server (≤ 6 lines: ~ changed, − removed, + added, … more) printed on a recessed strip.
+ function diffStrip(d,label='Зміни у файлі'){
+  if(!d?.lines?.length)return '';
+  const op=line=>({'~':'chg','+':'add','−':'del','-':'del'})[line[0]]||'more';
+  return `<div class="diffstrip" role="group" aria-label="${esc(label+(d.file?' '+d.file:''))}">${d.file?`<span class="diffstrip__file">${esc(d.file)}${d.approximate?' · ≈ приблизно':''}</span>`:''}${d.lines.map(line=>`<span class="diffstrip__l" data-op="${op(line)}">${esc(line)}</span>`).join('')}</div>`;
  }
  function formSpecFocus(){return state.modal?formSpec().focus:'';}
  // The form drawer is as tall as its content (within the drawer's limits); measured once per form and error state.
@@ -1331,7 +1663,7 @@
  const healthNames={local:'Локально',healthy:'Є запас',risk:'Малий запас',empty:'Вичерпано',unknown:'Немає виміру',unavailable:'Недоступна'};
  const healthGlyph={local:'◈',healthy:'●',risk:'△',empty:'∅',unknown:'?',unavailable:'⊘'};
  let opReportCache=null;
- function opHealth(model){return op.health({...model,free:priceInfo(model).kind==='free',expired:source.providers.find(v=>v.id===model.provider)?.expired},opReportCache||usageReports(),p().disabledProviders||[]);}
+ function opHealth(model){return op.health({...model,free:priceInfo(model).kind==='free',expired:source.providers.find(v=>v.id===model.provider)?.expired},opReportCache||usageReports(),eff().disabledProviders||[]);}
  function opRouteHealth(route){const m=split(route);return opHealth(catalogMap.get(m.raw)||m);}
  // A latching key: its LED follows aria-pressed / aria-expanded in CSS, so flipping it patches attributes only.
  function opSwitchKey(name,label,on,caption=''){return `<button type="button" class="key" data-op-switch="${name}" ${name==='cuts'?`aria-expanded="${on}" aria-controls="cuts-collection" aria-label="Колекція CUTS"`:`aria-pressed="${on}"`}${caption?` title="${esc(caption)}"`:''}>`;}
@@ -1339,15 +1671,17 @@
  // A switch as a region: flipping it patches the key's attributes, so the pressed key itself (and its focus) stays.
  function switchRegion(key,name,label,on,caption=''){return box(key,opSwitchKey(name,label,on,caption),[leaf(key+'/face',opSwitchFace(name,label))]);}
  // Device selector window: a native <select> behind a milled window (the system picker stays on phones).
- function selWin(id,label,value,items,cls='sel--sm',attr=''){return `<div class="sel ${cls}"><label class="silk" for="${id}">${label}</label><div class="sel__win"><select id="${id}" ${attr}>${items.map(([k,t])=>`<option value="${esc(k)}" ${k===value?'selected':''}>${esc(t)}</option>`).join('')}</select><span class="sel__chev"></span></div></div>`;}
+ function selWin(id,label,value,items,cls='sel--sm',attr=''){const option=([k,t])=>`<option value="${esc(k)}" ${k===value?'selected':''}>${esc(t)}</option>`;return `<div class="sel ${cls}"><label class="silk" for="${id}">${label}</label><div class="sel__win"><select id="${id}" ${attr}>${items.map(x=>Array.isArray(x)?option(x):`<optgroup label="${esc(x.group)}">${x.items.map(option).join('')}</optgroup>`).join('')}</select><span class="sel__chev"></span></div></div>`;}
 
  function opPaceText(q){if(!q.kind||q.kind==='unknown')return q.label;if(q.kind==='empty')return 'Вичерпано';return (q.kind==='reserve'?'Запас':q.label)+(q.delta!=null&&q.kind!=='balanced'?' '+Math.round(Math.abs(q.delta))+'%':'');}
  function opForecast(q){return q.kind==='unknown'?'Без прогнозу':q.kind==='empty'?'До скидання':q.lasts?'≈ до скидання':q.eta>Date.now()?'≈ ще '+resetCountdown(q.eta).replace('↻ ',''):'≈ запас міг скінчитись';}
  function microDuration(at){const minutes=Math.max(1,Math.round((at-Date.now())/60000));return minutes>=1440?Math.floor(minutes/1440)+'д':minutes>=60?Math.floor(minutes/60)+'г':minutes+'хв';}
  function reportAge(r){if(!r.at)return 'Немає виміру';const minutes=Math.max(0,Math.floor((Date.now()/1000-r.at)/60));return minutes<1?'щойно':minutes<60?minutes+' хв тому':Math.floor(minutes/60)+' г тому';}
- // SCREENS — one black glass per provider account (ids `quota:<provider>:<n>` keep their stored hue), the
- // DeepSeek screen last with the tariff inside its glass and the mode switch on its chin. Every screen is its own
- // region; times (age, reset countdown) are filled by the 30-s tick, so a passing minute never rebuilds a screen.
+ // SCREENS — one black glass per provider account with only its own limits (ids `quota:<provider>:<n>` keep their
+ // stored hue), then one standalone DeepSeek screen (id `tariff`): the tariff, the mode and every provider's DeepSeek
+ // CUTS of the reel on its glass, the mode switch on its chin. The DeepSeek mode and tariff act on all DeepSeek CUTS,
+ // so they never sit in a provider's glass, even one that serves a DeepSeek model. Every screen is its own region;
+ // times (age, reset countdown) are filled by the 30-s tick, so a passing minute never rebuilds a screen.
  const SCREEN_HUE={ds:32,stu:250,cld:150,gpu:140,free:185,p5:300,p6:165,p7:75};
  const screenHue=provider=>SCREEN_HUE[providerSlot(provider)]??150;
  function hueEncoder(id,label,def){return `<div class="enc-wrap"><div class="ctl__read"><span class="silk">тон</span><output class="rd" style="--rd:4ch" data-screen-hue-out="${esc(id)}">${ManaScreen.hueText(def)}</output></div>${ManaScreen.hueEncoderHTML(id,{label,def,value:def})}</div>`;}
@@ -1365,26 +1699,44 @@
  }
  function screenHead(r,name,mode=''){const stale=r.at&&r.stale;return `<div class="g-head"><span class="g-name" title="${esc(name)}">${esc(name)}</span><span class="g-age${stale?' is-stale':''}" title="${esc(timeLabel(r.at))}"><span data-age="${r.at||0}"></span>${stale?' · застаріло △':''}</span><span class="g-grow"></span>${mode||'<span class="g-reels" aria-hidden="true"><i></i><i></i></span>'}</div>`;}
  const winsMarkup=(r,name)=>r.limits.length?`<div class="wins">${r.limits.map(l=>winCell(l,r,name)).join('')}</div>`:`<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Ще немає вимірів</span></div>`;
- const screenId=r=>r.provider==='@tariff'?'tariff':'quota:'+r.provider+':'+r.account;
+ const screenId=r=>'quota:'+r.provider+':'+r.account;
  function screenLegend(ds,families,row=false){return `<p class="print screen__legend${row?' screens__legend':''}" aria-label="Легенда екранів"><span>+ запас / − перевитрата · % від повного ліміту</span><span>≈ прогноз · ↻ скидання${ds?' · ▨ пік DeepSeek':''}</span>${families?'<span>Anthropic / Google / OpenAI — окремі сімейства Antigravity</span>':''}</p>`;}
  function quotaScreen(r,legend){
   const id=screenId(r),name=r.name,def=screenHue(r.provider);
-  return `<div class="screen" data-screen="${esc(id)}" data-screen-default="${def}">${glass(screenHead(r,name)+winsMarkup(r,name))}<div class="screen__chin"><span class="screen__id" title="${esc(r.at?r.stale?'Застарілий вимір':'Свіжий вимір':'Немає виміру')}">${led(!!r.at,r.stale?'amber':'green')}<span class="silk">${esc(providerCode(r.provider))}</span></span>${legend||'<span class="strip__grow"></span>'}${hueEncoder(id,name,def)}</div></div>`;
+  // --wins sizes the bank in its row (device.css): it grows with its neighbours to close the row, never past twice its windows.
+  return `<div class="screen" data-screen="${esc(id)}" data-screen-default="${def}" style="--wins:${Math.max(1,r.limits.length)}">${glass(screenHead(r,name)+winsMarkup(r,name))}<div class="screen__chin"><span class="screen__id" title="${esc(r.at?r.stale?'Застарілий вимір':'Свіжий вимір':'Немає виміру')}">${led(!!r.at,r.stale?'amber':'green')}<span class="silk">${esc(providerCode(r.provider))}</span></span>${legend||'<span class="strip__grow"></span>'}${hueEncoder(id,name,def)}</div></div>`;
  }
- // The DeepSeek screen: limits + tariff on one glass, the mode line reserved under them; switch and keys on its chin.
- function deepSeekScreen(r){
-  const id=screenId(r),name=r.name,def=SCREEN_HUE.ds,mode=`<span class="g-mode">${modeOff()?'OFF · заміни':'ON · оригінал'}</span>`;
-  return box('screen:'+id,`<div class="screen screen--ds" data-screen="${esc(id)}" data-screen-default="${def}">`,[
-   nest(id+'/win',GLASS_OPEN,[nest(id+'/content',['<div class="glass__content">','<div class="g">'],[leaf('p/mode-head',screenHead(r,name,mode)),box(id+'/split','<div class="g-split">',[leaf(id+'/wins',r.limits.length?winsMarkup(r,name)+'<span class="g-vsep"></span>':''),leaf('p/tariff',tariffMarkup())]),leaf('p/mode-msg',modeMessage())]),leaf(id+'/sweep','<div class="glass__sweep"></div>')]),
+ // The reel's paid DeepSeek across every provider: CUTS in its own chains (role chains, `default` once, agents' own
+ // lists; an `@role` link is that role's lane, not another CUT) and the lanes they stand on. In OFF: how many of those
+ // lanes the projection put on replacements (a lone `@role` agent simply follows its role).
+ function deepSeekReel(){
+  const profile=eff(),own=[...Object.values(profile.modelRoles||{}),...Object.values(profile.retry?.fallbackChains||{}).flat(),...Object.values(profile.task?.agentModelOverrides||{}).flat()];
+  const cuts=own.filter(v=>typeof v==='string'&&!v.startsWith('@')&&deepseek(v)),providers=[...new Set(cuts.map(v=>split(v).provider))];
+  const lanes=[...roleKeys.map(r=>[r,'role']),...workers().filter(w=>agentValues(w).length>1||!vibeAlias(w)).map(w=>[w,'vibe'])].filter(([k,g])=>baseChain(k,g).some(v=>deepseek(v)));
+  const off=modeOff(),replaced=off?lanes.filter(([k,g])=>{const v=modeView(k,g);return v?.paused?.length||v?.substituted;}).length:0;
+  return {cuts:cuts.length,providers,lanes:lanes.length,replaced,pending:off&&projectionPending()};
+ }
+ // A compact readout beside the tariff: CUTS in the reel, providers, lanes, lanes on replacements (OFF).
+ function deepSeekSummary(){
+  const s=deepSeekReel(),off=modeOff(),names=s.providers.map(providerName).join(', ');
+  const title=`Котушка ${prettyProfile(state.profile)}: ${s.cuts} ${plural(s.cuts,'CUT','CUTS','CUTS')} платного DeepSeek${names?' ('+names+')':''} на ${s.lanes} ${plural(s.lanes,'доріжці','доріжках','доріжках')}. ${off?'OFF: на цих доріжках стоять заміни.':'ON: оригінал; OFF поставить заміни на місце першого платного DeepSeek.'} FREE DeepSeek не рахується.`;
+  const row=(label,value,attr='')=>`<div class="ds-sum__row"${attr}><span>${label}</span><b>${value}</b></div>`;
+  return `<div class="ds-sum" role="group" aria-label="DeepSeek у котушці" title="${esc(title)}"><div class="ds-sum__top"><span>CUTS у котушці</span><b>${s.cuts}</b></div>${row('провайдери',s.providers.length)}${row('доріжки',s.lanes)}${row('на замінах',off?s.pending?'…':s.replaced+'/'+s.lanes:'0',off?' data-s="off"':'')}</div>`;
+ }
+ // The DeepSeek screen, one for the whole reel and every provider: the reel readout and the tariff on its glass, the
+ // mode in the head and its line reserved under them; the switch, «Заміни» and ↻ on its chin. Its hue is `tariff`.
+ function deepSeekScreen(){
+  const id='tariff',def=SCREEN_HUE.ds,mode=`<span class="g-mode">${modeOff()?'OFF · заміни':'ON · оригінал'}</span>`;
+  return box('screen:'+id,`<div class="screen screen--ds" data-screen="${id}" data-screen-default="${def}">`,[
+   nest(id+'/win',GLASS_OPEN,[nest(id+'/content',['<div class="glass__content">','<div class="g">'],[leaf('p/mode-head',`<div class="g-head"><span class="g-name">DeepSeek</span><span class="g-age">усі провайдери</span><span class="g-grow"></span>${mode}</div>`),box(id+'/split','<div class="g-split">',[leaf('p/ds-reel',deepSeekSummary()),leaf(id+'/vsep','<span class="g-vsep"></span>'),leaf('p/tariff',tariffMarkup())]),leaf('p/mode-msg',modeMessage())]),leaf(id+'/sweep','<div class="glass__sweep"></div>')]),
    box(id+'/chin','<div class="screen__chin">',modeChin(id))]);
  }
+ // Provider screens carry only their own limits; whether the DeepSeek screen stands after them is decided apart.
  function usageScreens(){
   const reports=opReportCache||usageReports(),counts=new Map(),accounts=new Map();
   for(const r of reports)counts.set(r.provider,(counts.get(r.provider)||0)+1);
   const rows=reports.map(r=>{const account=(accounts.get(r.provider)||0)+1;accounts.set(r.provider,account);return {...r,account,name:providerName(r.provider)+(counts.get(r.provider)>1?' #'+account:'')};});
-  const dsOn=deepSeekCatalog||modeOff(),at=dsOn?rows.findIndex(r=>catalog.some(m=>m.provider===r.provider&&deepseek(m.provider+'/'+m.id))):-1;
-  const ds=at>=0?rows.splice(at,1)[0]:dsOn?{provider:'@tariff',account:1,name:'DeepSeek · тариф',at:0,limits:[],stale:false}:null;
-  return {rows,ds};
+  return {rows,ds:deepSeekCatalog||modeOff()};
  }
  function hasDeepSeekScreen(){return state.view==='profiles'&&(deepSeekCatalog||modeOff());}
  function screensBank(){
@@ -1395,28 +1747,83 @@
   // would push it over its neighbour (final QA P1-2), so it then prints as its own row under the banks.
   const families=rows.some(r=>r.provider==='google-antigravity'),inChin=wide>=0&&rows[wide].limits.length>=3,legend=screenLegend(!!ds,families,!inChin);
   const screens=rows.map((r,i)=>leaf('screen:'+screenId(r),quotaScreen(r,inChin&&i===wide?legend:'')));
-  if(ds)screens.push(deepSeekScreen(ds));
+  if(ds)screens.push(deepSeekScreen());
   if(!inChin&&rows.length)screens.push(leaf('meters/legend',legend));
   return [leaf('meters/key',rows.length?`<button type="button" class="key key--wide screens__key" data-action="meters-mobile" aria-expanded="${!!state.mobileMeters}" aria-controls="meter-bank"><span class="key__cap"><span class="key__lbl">${led(false,'green',' data-latch')}Ліміти</span><span class="rd" style="--rd:2ch">${rows.length}</span></span></button>`:''),
    box('meters/bank',`<section class="screens" id="meter-bank" aria-label="Панель підписок: залишки, скидання та темп" data-mobile-expanded="${!!state.mobileMeters}">`,screens),leaf('seam:screens','<div class="seam"></div>')];
  }
  // The dock: selectors, ⋯, switches, the feedback line and the printed context are separate regions, so an edit
  // repaints only what changed and a switch only its key's attributes.
+ // SCOPE AND REEL (DESIGN «Області і котушки»): a printed breadcrumb of what is being edited, the «Глобально» key, the
+ // project drum (configured projects, then the directories OMP ran in without a config, as candidates), the котушка
+ // drum (Standard, the scope's native котушки with the active one marked, Global котушки in a project, old files),
+ // «Застосувати» (/modelpreset switch) and the котушка's ⋯ menu.
  function operatorDock(dirty=[]){
-  const others=dirty.filter(k=>k!==state.profile),drafts=others.length?`<br><span title="${esc(others.map(prettyProfile).join(', '))}">чернетки: ${esc(others.map(prettyProfile).join(', '))}</span>`:'';
-  const ctx=state.view==='profiles'?'Котушка застосовується<br>до нових запусків OMP':state.view==='models'?'<b>02 · Колекція</b><br>CUTS / провайдери / тести / ціни':'<b>03 · Історія</b><br>виміри OMP · усі проєкти OMP';
+  const others=dirty.filter(k=>k!==state.profile),drafts=others.length?`<span title="${esc(others.map(prettyProfile).join(', '))}">чернетки: ${esc(others.map(prettyProfile).join(', '))}</span>`:'';
+  // On Монтаж the breadcrumb says what is edited and for whom; the context prints only the other drafts.
+  const ctx=state.view==='profiles'?'<span class="dock__note">Котушка застосовується<br>до нових запусків OMP</span>'+(drafts?'<br>'+drafts:''):(state.view==='models'?'<b>02 · Колекція</b><br>CUTS / провайдери / тести / ціни':'<b>03 · Історія</b><br>виміри OMP · усі проєкти OMP')+(drafts?'<br>'+drafts:'');
   return box('dock','<section class="bay dock" aria-label="Пульт оператора">',[
-   leaf('dock/selection',`${selWin('project-choice','Проєкт',source.projectId,(source.projects||[]).map(x=>[x.id,x.name]),'sel--proj',state.saving?'disabled':'')}${selWin('profile-choice','Профіль /<br>котушка',state.profile,profileKeys.map(k=>[k,prettyProfile(k)]),'sel--prof')}`),
-   leaf('dock/menu',profileMenu()),leaf('dock/sep','<span class="seam seam--v"></span>'),dockSwitches(),
-   leaf('feedback',operatorFeedback()),leaf('dock/context',`<p class="dock__ctx print">${ctx}${drafts}</p>`)]);
+   leaf('dock/crumb',crumbMarkup()),
+   box('dock/row','<div class="dock__row">',[leaf('dock/scope',scopeKey()),
+    leaf('dock/selection',`${projectDrum()}${profileDrum()}`),
+    leaf('dock/apply',applyKey()),
+    leaf('dock/menu',profileMenu()),leaf('dock/sep','<span class="seam seam--v"></span>'),dockSwitches(),
+    leaf('feedback',operatorFeedback()),leaf('dock/context',`<p class="dock__ctx print">${ctx}</p>`)])]);
+ }
+ // «Глобально › DEMO · Творча майстерня › night»: printed on the plate, with the file and the active котушка.
+ function crumbMarkup(){
+  const scope=source.scope||{},g=globalScopeRow(),files=scopeFiles(),name=state.profile,parts=[];
+  if(g)parts.push(['Глобально',scope.kind==='global']);
+  if(scope.kind==='project')parts.push([scope.name||source.projectId,false]);
+  parts.push([prettyProfile(name)+(isNative(name)?' · котушка OMP':isGlobalPreset(name)?' · глобальна котушка':name==='standard'?'':' · стара котушка'),true]);
+  const file=isGlobalPreset(name)?files.globalShort+' · modelPresets.'+presetName(name):isNative(name)?(scope.kind==='global'?files.globalShort:files.projectShort||'config.yml')+' · modelPresets.'+presetName(name):name==='standard'?(scope.kind==='global'?files.globalShort:files.projectShort||'.omp/config.yml'):'.omp/presets/'+name+'.yml';
+  const full=isGlobalPreset(name)||scope.kind==='global'?files.global:files.project,active=source.activePreset;
+  return `<div class="dock__crumb"><span class="silk">Редагується</span><ol class="crumb" aria-label="Що редагується" title="${esc(parts.map(([t])=>t).join(' › '))}">${parts.map(([t,last])=>`<li${last?' aria-current="location"':''}>${esc(t)}</li>`).join('')}</ol><span class="crumb__file print"${full?` title="${esc(full)}"`:''}>${esc(file)}</span><span class="crumb__active print" title="OMP вважає котушку активною, коли її ролі точно збігаються з ролями, що діють">${led(!!active,'green')}${active?`активна котушка OMP: <b>${esc(active)}</b>`:'активної котушки OMP немає'}</span><span class="crumb__note print">для нових запусків OMP</span></div>`;
+ }
+ function scopeKey(){
+  const g=globalScopeRow();if(!g)return '';
+  const on=source.scope?.kind==='global';
+  return `<button type="button" class="key key--scope" data-action="scope-global" aria-pressed="${on}" title="${on?'Глобальні налаштування OMP для всіх каталогів · ще раз — назад до проєкту':'Глобальні налаштування OMP для всіх каталогів'}"><span class="key__cap">${led(false,'blue',' data-latch')}Глобально</span></button>`;
+ }
+ function projectDrum(){
+  const rows=source.projects||[],cands=source.candidates||[];
+  const items=rows.map(x=>[x.id,x.kind==='global'?(rows.filter(r=>r.kind==='global').length>1?x.name:'— лише глобальне —'):x.name]);
+  if(cands.length)items.push({group:'Знайдені · ще не налаштовані',items:cands.map(c=>['candidate:'+c.id,c.name+' · не налаштований'])});
+  return selWin('project-choice','Проєкт',source.projectId,items,'sel--proj',state.saving?'disabled':'');
+ }
+ function profileDrum(){
+  const active=source.activePreset,keys=profileKeys,label=k=>prettyProfile(k)+(presetName(k)===active&&(isNative(k)||isGlobalPreset(k))?' · активна':'');
+  const own=keys.filter(isNative).sort(),globals=keys.filter(isGlobalPreset).sort(),old=keys.filter(k=>k!=='standard'&&!presetLike(k)).sort();
+  const items=[['standard','Standard'],...own.map(k=>[k,label(k)])];
+  if(globals.length)items.push({group:'Глобальні котушки',items:globals.map(k=>[k,label(k)+' · глобальна'])});
+  if(old.length)items.push({group:'Старі котушки · .omp/presets',items:old.map(k=>[k,k+' · стара'])});
+  return selWin('profile-choice','Профіль /<br>котушка',state.profile,items,'sel--prof');
+ }
+ // «Застосувати» = OMP /modelpreset switch for the chosen котушка; etched where it cannot act (Standard, an old
+ // котушка, an unsaved котушка, the active one). Its width never changes with its state.
+ function applyKey(){
+  const name=state.profile,on=presetLike(name),active=on&&presetName(name)===source.activePreset,dirty=on&&diff(name).length>0;
+  const title=!on?'Застосувати можна котушку OMP: обери її в селекторі':active?'Ця котушка вже активна: ролі OMP точно збігаються з нею':dirty?'Спершу збережи котушку':'Зробити ролі котушки ролями OMP (як /modelpreset switch)';
+  return `<button type="button" class="key key--apply" data-action="apply-preset" ${!on||active||dirty||state.saving?'disabled':''} title="${esc(title)}" aria-label="${esc((active?'Котушка активна: ':'Застосувати котушку')+(on?' '+prettyProfile(name):''))}"><span class="key__cap">${led(false,'green')}${active?'Активна':'Застосувати'}</span></button>`;
+ }
+ // What «Застосувати» will do, said before it is done: where OMP stores roles (modelRoleStorage), that roles the
+ // котушка does not name are cleared there, thinking goes to the Global file, and which roles the project still sets.
+ function applyText(name){
+  const row=source.nativePresets?.[presetName(name)]||{},roles=row.roles||{},n=Object.keys(roles).length,files=scopeFiles(),scope=source.scope||{};
+  const projectStore=scope.kind==='project'&&scope.storage==='project',target=projectStore?files.project:files.global||files.project;
+  const shadow=!projectStore&&globalLayer?Object.keys(roles).filter(r=>original.standard.modelRoles?.[r]&&original.standard.modelRoles[r]!==roles[r]):[];
+  return `Як <code>/modelpreset switch</code> в OMP: ${n} ${plural(n,'роль','ролі','ролей')} котушки <b>${esc(prettyProfile(name))}</b> стануть ролями OMP у файлі <span class="path-list"><span><code>${esc(target)}</code>${projectStore?' · modelRoleStorage: project':''}</span></span>Ролі, яких котушка не називає, там очищаються.${row.thinking?` Thinking <b>${esc(row.thinking)}</b> — у глобальний файл.`:''} Резерви, агенти й провайдери не змінюються.${shadow.length?` Проєкт і далі задає своє для <b>${esc(shadow.join(', '))}</b> — ці ролі лишаться як у проєкті.`:''}`;
  }
  // The reel's ⋯ menu: a small recessed tray of labelled keys; «Прийняти файл» appears when this profile's file was
- // changed (or removed) outside Mana Tape. Arrows walk the keys, Escape returns to ⋯.
+ // changed (or removed) outside Mana Tape; an old котушка offers its move to a native one. Arrows walk the keys,
+ // Escape returns to ⋯. A Global котушка seen from a project only leads to the Global scope.
  function profileMenu(){
-  const std=state.profile==='standard',conflict=source.modeConflicts?.includes(state.profile),orphan=source.modeOrphans?.includes(state.profile);
+  const std=state.profile==='standard',conflict=source.modeConflicts?.includes(state.profile),orphan=source.modeOrphans?.includes(state.profile),view=locked(),old=!std&&!presetLike();
   const item=(label,action,attr='',cls='')=>`<button type="button" class="key key--menu ${cls}" role="menuitem" data-action="${action}" ${attr}><span class="key__cap">${label}</span></button>`;
   const adopt=conflict||orphan?item(led(true,'amber')+(orphan?'Прийняти видалення':'Прийняти файл'),'adopt-profile',`data-adopt="${esc(state.profile)}"`)+'<div class="menu__sep" role="separator"></div>':'';
-  return `<details class="dock__menu"><summary class="key key--sq" aria-label="Дії з котушкою ${esc(prettyProfile(state.profile))}" aria-haspopup="menu" title="Дії котушки"><span class="key__cap">${SVG.more}</span></summary><div class="menu" role="menu" aria-label="Дії котушки ${esc(prettyProfile(state.profile))}"><div class="menu__head"><span class="silk">Котушка · ${esc(prettyProfile(state.profile))}</span></div><div class="menu__bed">${adopt}${item('Копія…','clone-profile')}${item('Перейменувати…','rename-profile',std?'disabled':'')}${item('Попереднє збереження…','history')}${item('Скинути чернетку','reset-draft',state.changes?'':'disabled')}<div class="menu__sep" role="separator"></div>${item(led(true,'red')+'Видалити…','delete-profile',std?'disabled':'','key--danger')}</div>${std?'<p class="menu__note">Standard — основний профіль: його не перейменовують і не видаляють</p>':''}</div></details>`;
+  const body=view?`${item('Редагувати в глобальному','preset-edit-global')}`:`${adopt}${old?item(led(true,'amber')+'Перенести в котушку OMP…','migrate-open',`data-migrate="${esc(state.profile)}"`)+'<div class="menu__sep" role="separator"></div>':''}${item('Копія…','clone-profile')}${item('Перейменувати…','rename-profile',std?'disabled':'')}${item('Попереднє збереження…','history')}${item('Скинути чернетку','reset-draft',state.changes?'':'disabled')}<div class="menu__sep" role="separator"></div>${item(led(true,'red')+'Видалити…','delete-profile',std?'disabled':'','key--danger')}`;
+  const note=view?'Глобальна котушка: тут — перегляд і «Застосувати»':std?'Standard — основний профіль: його не перейменовують і не видаляють':'';
+  return `<details class="dock__menu"><summary class="key key--sq" aria-label="Дії з котушкою ${esc(prettyProfile(state.profile))}" aria-haspopup="menu" title="Дії котушки"><span class="key__cap">${SVG.more}</span></summary><div class="menu" role="menu" aria-label="Дії котушки ${esc(prettyProfile(state.profile))}"><div class="menu__head"><span class="silk">Котушка · ${esc(prettyProfile(state.profile))}</span></div><div class="menu__bed">${body}</div>${note?`<p class="menu__note">${note}</p>`:''}</div></details>`;
  }
  function dockSwitches(){return box('dock/switches','<div class="dock__grp">',[switchRegion('dock/health','health','HEALTH',state.health,'HEALTH · ресурс підписок на CUTS'),switchRegion('dock/cuts','cuts','CUTS',drawerShown(),'')]);}
  // One printed status line with a reserved height: an action's result, or an error (red LED + ×). Never reflows.
@@ -1435,14 +1842,14 @@
   const rows=opRecords(m).filter(b=>!state.benchRelease||b.release===state.benchRelease),q=op.evidence(rows,weights);
   return q?{...q,weights}:null;
  }
- function opProviderItems(all=false){return [['all','Усі'],...source.providers.filter(v=>all||((v.connected||v.used.length)&&!(p().disabledProviders||[]).includes(v.id)&&!v.expired)).map(v=>[v.id,providerName(v.id)]).sort((a,b)=>a[1].localeCompare(b[1]))];}
+ function opProviderItems(all=false){return [['all','Усі'],...source.providers.filter(v=>all||((v.connected||v.used.length)&&!(eff().disabledProviders||[]).includes(v.id)&&!v.expired)).map(v=>[v.id,providerName(v.id)]).sort((a,b)=>a[1].localeCompare(b[1]))];}
  function analyticalProviders(){const ids=state.catalogMode==='mine'?myProviderIds():state.catalogMode==='free'?new Set(catalog.filter(m=>priceInfo(m).kind==='free').map(m=>m.provider)):null;return opProviderItems(true).filter(([id])=>id==='all'||!ids||ids.has(id));}
  // The drawer collection without its search words. It is filtered and sorted again only when a filter, the
  // profile's providers, the open editor or the snapshot changes; a keystroke then only scans precomputed search keys.
  // An open editor narrows the collection to what its list accepts: a pool takes FREE CUTS only, the replacements no
  // paid DeepSeek, and both only CUTS their role can run.
  function collectionBase(){
-  const t=state.cutTarget,ed=editorTarget(),key=JSON.stringify([dataVersion,state.profile,p().disabledProviders||[],t?.role,t?.group,t?.group==='vibe'?vibeAlias(t.role):'',ed?.group,ed?.role,state.cutProvider,state.freeCuts,state.cutHealth,state.cutHealth==='all'?0:(opReportCache||usageReports()).map(r=>[r.provider,r.stale])]);
+  const t=state.cutTarget,ed=editorTarget(),key=JSON.stringify([dataVersion,state.profile,eff().disabledProviders||[],t?.role,t?.group,t?.group==='vibe'?vibeAlias(t.role):'',ed?.group,ed?.role,state.cutProvider,state.freeCuts,state.cutHealth,state.cutHealth==='all'?0:(opReportCache||usageReports()).map(r=>[r.provider,r.stale])]);
   if(collectionBase.key===key)return collectionBase.rows;
   const free=state.freeCuts||ed?.group==='pool';
   const rows=catalog.filter(m=>(!t||acceptsRoleModel(t.role,t.group||'role',m))&&(!ed||acceptsRoleModel(ed.role,ed.group,m)&&(ed.group!=='pool'||ManaOperator.isFreeModel(m))&&(ed.group!=='alternatives'||!deepseek(m.provider+'/'+m.id)))&&(m.available||source.providers.find(v=>v.id===m.provider)?.connected)&&!routeWarning(m.provider+'/'+m.id)&&(state.cutProvider==='all'||m.provider===state.cutProvider)&&(!free||priceInfo(m).kind==='free')&&(state.cutHealth==='all'||opHealth(m).kind===state.cutHealth)).map(m=>({m,provider:providerName(m.provider)}));
@@ -1459,7 +1866,7 @@
   return box('drawer/controls','<div class="tray__filters">',[leaf('drawer/provider',selWin('cut-provider','Провайдер',state.cutProvider,pool?opProviderItems().filter(([id])=>id==='all'||id===state.cutProvider||catalog.some(m=>m.provider===id&&ManaOperator.isFreeModel(m))):opProviderItems())),pool?leaf('drawer/free','<span class="chip chip--ok tray__only">лише FREE</span>'):switchRegion('drawer/free','free','FREE CUTS',state.freeCuts,'Лише підтверджені FREE CUTS'),leaf('drawer/health',selWin('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames).filter(([k])=>k!=='unavailable')])),leaf('drawer/search',drawerSearch())]);
  }
  function editorTitle(mode){
-  if(mode==='pool')return `<div class="tray__title tray__title--ed">${led(true,'orange')}<span class="silk silk--ink">Пули</span><span class="tray__count">спільні для всіх профілів</span></div>`;
+  if(mode==='pool')return `<div class="tray__title tray__title--ed">${led(true,'orange')}<span class="silk silk--ink">Пули</span><span class="tray__count">спільні для всієї машини</span></div>`;
   const n=modeList(state.modeScope||'profile').length;return `<div class="tray__title tray__title--ed">${led(true,'orange')}<span class="silk silk--ink">Заміни DeepSeek</span><span class="tray__count"><span class="rd" style="--rd:2ch">${n}</span> CUTS · ${modeOff()?'OFF':'ON'}</span></div>`;
  }
  function editorTabs(mode){
@@ -1710,7 +2117,7 @@
   const pick=state.analyze||(rows[0]?rows[0].provider+'/'+rows[0].id:''),q=state.catalogQuery.trim(),pages=Math.max(1,Math.ceil(rows.length/per));
   const ledger=shown.length?`<div class="coll__lhead" aria-hidden="true"><span>CUT · провайдер · дані</span><span>бал / 100</span><span>$ / 1M</span><span>контекст</span></div><div class="list coll__list" role="listbox" aria-label="CUTS · ${esc(labels[state.role]||state.role)} · сторінка ${state.page+1} з ${pages}">${shown.map((m,i,rows)=>ledgerRow(m,m.provider+'/'+m.id===pick,m.provider+'/'+m.id===pick||i===0&&!rows.some(x=>x.provider+'/'+x.id===pick))).join('')}</div><div class="coll__goto"><button type="button" class="key key--sm" data-action="coll-details"><span class="key__cap">Дані обраного CUT ↓</span></button></div>`
    :`<div class="list coll__list"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${q?`Нічого не знайдено за «<b>${esc(q)}</b>»`:catalogEmpty()?'Каталог порожній · додай провайдера':'Немає CUTS за цими фільтрами'}</span>${q?'<button type="button" class="key key--sm" data-action="catalog-clear"><span class="key__cap">Очистити</span></button>':catalogEmpty()?key('+ Провайдер','provider-add','key--sm'):''}</div></div>`;
-  const cartridge=selected?`<div class="bay coll__cart">${led(true,selected.expired?'red':selected.connected?'green':'amber')}<span class="coll__cartname"><b>${esc(providerName(selected.id))}</b><small>${selected.count} ${plural(selected.count,'модель','моделі','моделей')} · ${selected.expired?'термін минув':selected.connected?'доступний в OMP':'доступ не підтверджено'}${selected.expires?' · до '+esc(timeLabel(selected.expires)):''}</small></span><button type="button" class="key key--sm" data-provider-toggle="${esc(selected.id)}" aria-pressed="${!(p().disabledProviders||[]).includes(selected.id)}"><span class="key__cap">${led(false,'green',' data-latch')}У профілі</span></button>${selected.custom||selected.managed?`<button type="button" class="key key--sm" data-edit-provider="${esc(selected.id)}"><span class="key__cap">Підключення…</span></button>`:''}<span class="print">${rows.filter(m=>opEvidence(m)).length} ${plural(rows.filter(m=>opEvidence(m)).length,'тестований маршрут','тестовані маршрути','тестованих маршрутів')} для ${esc(state.role)}</span></div>`:'';
+  const cartridge=selected?`<div class="bay coll__cart">${led(true,selected.expired?'red':selected.connected?'green':'amber')}<span class="coll__cartname"><b>${esc(providerName(selected.id))}</b><small>${selected.count} ${plural(selected.count,'модель','моделі','моделей')} · ${selected.expired?'термін минув':selected.connected?'доступний в OMP':'доступ не підтверджено'}${selected.expires?' · до '+esc(timeLabel(selected.expires)):''}</small></span><button type="button" class="key key--sm" data-provider-toggle="${esc(selected.id)}" aria-pressed="${!(eff().disabledProviders||[]).includes(selected.id)}"${presetLike()?' disabled title="Провайдери належать області: змінюй їх у Standard"':''}><span class="key__cap">${led(false,'green',' data-latch')}У профілі</span></button>${selected.custom||selected.managed?`<button type="button" class="key key--sm" data-edit-provider="${esc(selected.id)}"><span class="key__cap">Підключення…</span></button>`:''}<span class="print">${rows.filter(m=>opEvidence(m)).length} ${plural(rows.filter(m=>opEvidence(m)).length,'тестований маршрут','тестовані маршрути','тестованих маршрутів')} для ${esc(state.role)}</span></div>`:'';
   return [leaf('m/coverage',`<div class="coll__cov"><p class="print">${evidenceCoverageLine(rows)}</p><p class="print print--hint">тест — незалежний тест · Arena — людські уподобання (рейтинг) · заява — заява розробника</p></div>`),leaf('m/cartridge',cartridge),leaf('m/fits',providerFitStrip(rows)),
    box('m/layout','<div class="coll__layout">',[box('m/main','<div class="coll__main">',[leaf('m/plot',analyzerPlot(rows)),leaf('m/ledger',`<div class="coll__ledger">${ledger}</div>`),leaf('m/pagination',rows.length>per?`<div class="keybed coll__pager" role="group" aria-label="Сторінки">${key('←','prev-page','key--sm key--sq',`aria-label="Попередня сторінка"${state.page===0?' disabled':''}`)}<span class="coll__page"><span class="rd" style="--rd:9ch">${state.page*per+1}–${Math.min((state.page+1)*per,rows.length)} / ${rows.length}</span></span>${key('→','next-page','key--sm key--sq',`aria-label="Наступна сторінка"${(state.page+1)*per>=rows.length?' disabled':''}`)}</div>`:'')]),leaf('m/inspector',analyzerDetail(rows))]),
    leaf('m/note',`<p class="print print--hint coll__note">Порівняння в одному джерелі й зрізі. У каталозі — найкращий доступний тестований режим; його назва біля бала. Ціни невідомого типу й безкоштовні маршрути не ранжуються за «тести / $».</p>`)];
@@ -1796,11 +2203,12 @@
   if(b.dataset.action==='cancel-cut'){state.armedCut=null;state.cutTarget=null;state.opFeedback='Вставку скасовано.';render();win.querySelector('[data-op-switch=cuts]')?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-clear'){state.cutQuery='';render();win.querySelector('#cut-query')?.focus({preventScroll:true});return;}
   if(b.dataset.analyze){selectCatalogRow(b.dataset.analyze,!b.closest('.coll__row'));return;}
-  if(b.dataset.providerToggle){const id=b.dataset.providerToggle;p().disabledProviders=(p().disabledProviders||[]).filter(x=>x!==id);if(b.getAttribute('aria-pressed')==='true')p().disabledProviders.push(id);render();win.querySelector(`[data-provider-toggle="${CSS.escape(id)}"]`)?.focus({preventScroll:true});return;}
+  if(b.dataset.providerToggle){const id=b.dataset.providerToggle;if(presetLike())return;const list=(eff().disabledProviders||[]).filter(x=>x!==id);if(b.getAttribute('aria-pressed')==='true')list.push(id);p().disabledProviders=list;render();win.querySelector(`[data-provider-toggle="${CSS.escape(id)}"]`)?.focus({preventScroll:true});return;}
   if(b.dataset.action==='coll-details'){const panel=win.querySelector('#coll-inspector');panel?.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});panel?.focus({preventScroll:true});return;}
   if(b.dataset.action==='coll-back'){const row=win.querySelector('.coll__row[aria-selected=true]')||win.querySelector('.coll__row');row?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});row?.focus({preventScroll:true});return;}
   if(b.dataset.action==='catalog-clear'){state.catalogQuery='';state.page=0;state.analyze=null;render();win.querySelector('#catalog-query')?.focus({preventScroll:true});return;}if(b.dataset.action==='all-editions'){state.allEditions=!state.allEditions;render();return;}
   if(b.hasAttribute('data-history-bin')){const i=Number(b.dataset.historyBin);scrubHistory(i,true);win.querySelector(`[data-history-bin="${i}"]`)?.focus({preventScroll:true});return;}
+  if(b.dataset.radio==='migrate-mode'){if(state.migrate&&!b.disabled){state.migrate.mode=b.dataset.value;state.migrate.accept=false;modalFit='';regions.invalidate('drawer/form');render();win.querySelector(`[data-radio="migrate-mode"][data-value="${CSS.escape(b.dataset.value)}"]`)?.focus({preventScroll:true});}return;}
   if(b.dataset.radio){const field={'history-metric':'historyMetric','history-sort':'historySort'}[b.dataset.radio];if(field){state[field]=b.dataset.value;store();render();win.querySelector(`[data-radio="${b.dataset.radio}"][data-value="${CSS.escape(b.dataset.value)}"]`)?.focus({preventScroll:true});}return;}
   if(b.dataset.action==='meters-mobile'){state.mobileMeters=!state.mobileMeters;render();win.querySelector('[data-action=meters-mobile]')?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-more'){state.cutLimit=(state.cutLimit||60)+60;render();}
@@ -1827,6 +2235,8 @@
  // The picker's target CUT carries .is-selected (and its ⋯ key aria-expanded); a kept row loses them when the
  // picker closes or moves on. Decorations outside the region strings, re-applied after every patch.
  function markEditing(){
+  for(const k of win.querySelectorAll('[data-lane-menu][aria-expanded=true]'))if(!(state.picker?.lane&&k.dataset.laneMenu===state.picker.role&&k.dataset.group===state.picker.group))k.setAttribute('aria-expanded','false');
+  if(state.picker?.lane)for(const k of win.querySelectorAll(`[data-lane-menu="${CSS.escape(state.picker.role)}"][data-group="${state.picker.group}"]`))k.setAttribute('aria-expanded','true');
   const x=state.picker,next=x?[...win.querySelectorAll(`[data-edit="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].map(el=>el.closest('.cut')).filter(Boolean):[];
   for(const el of editingNodes)if(!next.includes(el)){el.classList.remove('is-selected');for(const k of el.querySelectorAll('.cut__more,button.cut__think'))k.setAttribute('aria-expanded','false');}
   for(const el of next){if(!el.classList.contains('is-selected'))el.classList.add('is-selected');for(const k of el.querySelectorAll('.cut__more,button.cut__think'))k.setAttribute('aria-expanded',String(!!x.actionsOnly&&k.matches(x.thinking?'.cut__think':'.cut__more')));}
@@ -1952,13 +2362,13 @@
   if(el.hasAttribute('data-catalog-provider'))return '#catalog-provider';
   const prefix=el.closest('[data-picker]')?'[data-picker] ':el.closest('.tray__form')?'.tray__form ':'';
   if(el.name)return prefix+'[name="'+CSS.escape(el.name)+'"]';
-  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-knob','data-fold-toggle','data-sync-vibe','data-adopt','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-radio','data-edit-provider','data-confirm'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
+  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-knob','data-fold-toggle','data-sync-vibe','data-adopt','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-radio','data-edit-provider','data-confirm','data-lane-menu','data-migrate','data-source'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
   return attr?prefix+'['+attr+'="'+CSS.escape(el.getAttribute(attr))+'"]'+['data-index','data-group','data-direction','data-screen-hue','data-value'].filter(key=>el.hasAttribute(key)).map(key=>'['+key+'="'+CSS.escape(el.getAttribute(key))+'"]').join(''):'';
  }
  // One entry point for every state change. Builds the region tree and lets the region engine replace only
  // what changed; then restores what a replaced region took with it (focus, selection, scroll, menu, modal).
  function render(){
-  roleKeys.splice(0,roleKeys.length,...knownRoleKeys(p()));if(!roleKeys.includes(state.role))state.role=roleKeys[0]||'';
+  roleKeys.splice(0,roleKeys.length,...knownRoleKeys(p(),presetLike()?profiles.standard:null));if(!roleKeys.includes(state.role))state.role=roleKeys[0]||'';
   if(composing||drag?.active||drawerGesture||document.documentElement.dataset.displayTuning){pendingRender=true;scheduleBackgroundWork();return;}
   pendingRender=false;renderCache={diffs:new Map(),keys:new Map()};
   try{
@@ -1977,7 +2387,7 @@
   // A form in the drawer: the page stays where it is (no scroll lock, no scrim); focus returns to its opener.
   if(state.modal&&!wasModal){
    const attribute=['data-model-detail','data-edit-provider','data-adopt','data-action'].find(a=>view.focused?.hasAttribute(a));
-   modalReturnFocus=view.focused?.closest('.dock__menu')?'.dock__menu summary':attribute?`[${attribute}="${CSS.escape(view.focused.getAttribute(attribute))}"]`:'[data-view][aria-current=page]';
+   modalReturnFocus=state.confirm?.focus||state.returnFocus||(view.focused?.closest('.dock__menu')?'.dock__menu summary':null)||(attribute?`[${attribute}="${CSS.escape(view.focused.getAttribute(attribute))}"]`:'[data-view][aria-current=page]');
   }
   modalShown=!!state.modal;
   // A new form (also one form replacing another) takes the focus at its own first control (QA2 B10).
@@ -2078,13 +2488,13 @@
  function storeDrafts(dirty){
   try{
    const pools=poolsDirty()?JSON.stringify({original:poolOriginal,value:poolDraft,revision:poolRevision}):'',drafts=JSON.stringify(Object.fromEntries(dirty.map(k=>[k,{original:original[k],value:profiles[k],revision:baseRevision(k)}])));
-   if(pools!==storedDrafts.pools){if(pools)sessionStorage.setItem(storageKey('forge-pool-draft'),pools);else sessionStorage.removeItem(storageKey('forge-pool-draft'));storedDrafts.pools=pools;}
+   if(pools!==storedDrafts.pools){if(pools)sessionStorage.setItem(poolDraftKey(),pools);else sessionStorage.removeItem(poolDraftKey());storedDrafts.pools=pools;}
    if(drafts!==storedDrafts.drafts){sessionStorage.setItem(storageKey('forge-drafts'),drafts);storedDrafts.drafts=drafts;}
   }catch{}
  }
  // Opening a form in the drawer: a fresh form with no errors left from the previous one.
- function openForm(kind,extra={}){Object.assign(state,{modal:kind,modalError:'',modalCode:'',formErrors:{}},extra);modalFit='';render();}
- function closeForm(){state.modal=null;state.modalError='';state.modalCode='';state.formErrors={};state.confirm=null;render();}
+ function openForm(kind,extra={}){Object.assign(state,{modal:kind,modalError:'',modalCode:'',formErrors:{},returnFocus:''},extra);modalFit='';render();}
+ function closeForm(){state.modal=null;state.modalError='';state.modalCode='';state.formErrors={};state.confirm=null;state.migrate=null;render();}
  root.addEventListener('click',async e=>{
   const b=e.target.closest('button,a.brand');if(!b)return;
   if(b.matches('a.brand')){e.preventDefault();state.view='profiles';render();store();ForgeTape.logo(win.querySelector('.brand'),true);return;}
@@ -2093,6 +2503,23 @@
   const action=b.dataset.action;
   try{
    if(action==='refresh'){await api('/api/refresh',{});await reload();notify('Оновлюю каталог і показники…');}
+   if(action==='scope-global'){const rows=source.projects||[];if(source.scope?.kind==='global'){let back='';try{back=sessionStorage.getItem('mana:last-scope')||'';}catch{}const row=rows.find(x=>x.id===back&&x.kind!=='global')||rows.find(x=>x.kind==='project');if(row)goScope(row.id);else notify('Проєктів ще немає: OMP додасть їх сюди, щойно попрацює в каталозі.');}else{const g=globalScopeRow();if(g)goScope(g.id);}return;}
+   if(action==='preset-edit-global'){const g=globalScopeRow();if(g)goScope(g.id,'preset:'+presetName(state.profile));return;}
+   if(action==='apply-preset'){const name=state.profile;if(!presetLike(name)||diff(name).length)return;askConfirm({action:'apply-preset',name,focus:'#profile-choice',title:'Застосувати котушку',sub:prettyProfile(name),label:'Застосувати',text:applyText(name)});return;}
+   if(action==='migrate-open'){const name=b.dataset.migrate;if(!name)return;openForm('migrate',{migrate:{profile:name},returnFocus:'[data-migrate="'+CSS.escape(name)+'"]'});migratePlan(name);return;}
+   if(action==='migrate-accept'){if(state.migrate){state.migrate.accept=!state.migrate.accept;regions.invalidate('drawer/form');render();win.querySelector('[data-action=migrate-accept]')?.focus({preventScroll:true});}return;}
+   if(action==='migrate-run'){
+    const m=state.migrate;if(!m?.plan||state.profileBusy)return;const mode=m.mode||(m.plan.sameAsStandard?'archive':'roles');
+    state.profileBusy=true;regions.invalidate('drawer/form');render();
+    try{const r=await api('/api/profile-action',{action:'migrate',profile:m.profile,mode,token:m.plan.token,acceptLoss:!!m.accept,name:m.plan.preset});state.modal=null;state.migrate=null;state.returnFocus='';await reload();if(profiles[r.name])state.profile=r.name;state.opFeedback=mode==='archive'?'Стару котушку '+m.profile+' архівовано · файл у резервних копіях':'Котушку '+m.profile+' перенесено → '+prettyProfile(r.name)+' (котушка OMP) · старий файл у резервних копіях';render();store();}
+    finally{state.profileBusy=false;if(state.modal)render();}
+    return;
+   }
+   if(action==='configure-project'){
+    const c=state.candidate;if(!c||state.profileBusy)return;state.profileBusy=true;regions.invalidate('drawer/form');render();
+    try{const r=await api('/api/scope-action',{action:'configure',candidate:c.id});state.modal=null;goScope(r.id);}finally{state.profileBusy=false;if(state.modal)render();}
+    return;
+   }
    if(action==='modal-close'){const back=state.modal==='confirm'&&state.confirm?.back;if(back){openForm(back);return;}closeForm();return;}
    if(action==='confirm-cancel'){const back=state.confirm?.back;if(back)openForm(back);else closeForm();return;}
    if(action==='confirm-run'){const c=state.confirm;if(!c||state.profileBusy)return;state.profileBusy=true;render();try{await CONFIRM_ACTIONS[c.action]?.(c);}finally{state.profileBusy=false;if(state.modal==='confirm')render();}return;}
@@ -2137,6 +2564,10 @@
  });
  // What a confirmation drawer runs; each closes the drawer when it is done (errors stay on the drawer's line).
  const CONFIRM_ACTIONS={
+  // Promote: the project's saved values move into the Global config, one journal for both files.
+  'promote':async c=>{await api('/api/scope-action',{action:'promote',revision:source.revisions.standard,paths:c.paths});state.modal=null;state.confirm=null;await reload();state.opFeedback=(c.group==='vibe'?'Агент ':'')+c.role+' піднято в глобальне · записано обидва файли (з резервними копіями)';render();},
+  // Apply: OMP /modelpreset switch; the server names the file it wrote and the roles a higher layer still sets.
+  'apply-preset':async c=>{const r=await api('/api/profile-action',{action:'apply-preset',preset:presetName(c.name),revision:source.revisions.standard});state.modal=null;state.confirm=null;await reload();const target=(source.projects||[]).find(x=>x.id===r.target),files=scopeFiles();state.opFeedback='Котушку '+prettyProfile(c.name)+' застосовано · ролі записано в '+(target?.kind==='global'?files.globalShort||'глобальний файл':files.projectShort||'файл проєкту')+(r.shadowed?.length?' · далі задає вищий рівень: '+r.shadowed.join(', '):'');render();},
   'delete-provider':async()=>{await api('/api/provider',{id:state.editProvider,action:'delete',revision:source.providerRevision});state.modal=null;state.confirm=null;await reload();notify('Підключення видалено');},
   'adopt-profile':async c=>{await api('/api/profile-action',{action:'adopt',profile:c.profile,revision:source.revisions?.[c.profile]});state.modal=null;state.confirm=null;await reload();state.opFeedback=c.title==='Прийняти видалення'?'Запис режиму '+prettyProfile(c.profile)+' забуто · копія лишилась у резервних.':'Файл профілю '+prettyProfile(c.profile)+' прийнято.';render();},
   'conflict-discard':async()=>{const name=state.profile,fresh=freshProfile(name);original[name]=fresh;profiles[name]=copy(fresh);staleDrafts.delete(name);editHistory.reset(name,fresh);state.modal=null;state.confirm=null;state.opFeedback='Чернетку '+prettyProfile(name)+' скинуто · показано поточний файл.';render();},
@@ -2160,16 +2591,24 @@
  root.addEventListener('keydown',e=>{if(e.key==='Tab'&&(state.modal||state.picker)){const layer=win.querySelector(state.modal?'.tray--form':'[data-picker]');if(!layer)return;const nodes=[...layer.querySelectorAll('button:not(:disabled),input,select,textarea,a[href],summary')].filter(x=>!x.closest('[inert]')).filter(x=>x.getClientRects().length),first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
  window.addEventListener('resize',()=>{finishDrawerResize(true);fitPicker();resizeDrawer(preferredHeight());});
  window.addEventListener('beforeunload',e=>{if(!state.switchingProject&&(poolsDirty()||profileKeys.some(k=>diff(k).length))){e.preventDefault();e.returnValue='';}});
- root.addEventListener('change',e=>{if(e.target.id==='project-choice'&&!state.saving){store();state.switchingProject=true;const url=new URL(location.href);url.searchParams.set('project',e.target.value);location.assign(url);}});
+ root.addEventListener('change',e=>{if(e.target.id==='project-choice'&&!state.saving){const v=e.target.value;if(v.startsWith('candidate:')){e.target.value=source.projectId;const c=(source.candidates||[]).find(x=>'candidate:'+x.id===v);if(c)openForm('candidate',{candidate:c,returnFocus:'#project-choice'});return;}goScope(v);}if(e.target.id==='preset-thinking'){if(!isNative(state.profile)||state.saving)return;const v=e.target.value;if(v)p().defaultThinkingLevel=v;else delete p().defaultThinkingLevel;state.opFeedback='';render();win.querySelector('#preset-thinking')?.focus({preventScroll:true});}});
+ // Moving between scopes is a page change (?project=); the drafts of the scope left behind stay in this tab. The
+ // «Глобально» key remembers the project it left, so a second press returns there.
+ function goScope(id,profile=''){
+  if(!id||state.saving)return;
+  try{if(source.scope?.kind!=='global')sessionStorage.setItem('mana:last-scope',source.projectId);}catch{}
+  store();state.switchingProject=true;const url=new URL(location.href);url.searchParams.set('project',id);if(profile)url.searchParams.set('profile',profile);else url.searchParams.delete('profile');location.assign(url);
+ }
  window.addEventListener('offline',()=>{state.offline=true;state.error='Немає мережі. Чернетки залишаються у цьому вікні; збереження потребує сервера.';render();});
  window.addEventListener('online',()=>{state.error='';pollState();});
  Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(saved?.drawerResized===true&&Number.isFinite(saved.drawerHeight))state.drawerHeight=saved.drawerHeight;if(Number.isFinite(saved?.editorHeight))state.editorHeight=saved.editorHeight;}catch{}
  state.syncVibe=true;state.favs=source.favs||[];favSaved=state.favs;state.error='';state.modalError='';
  try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(profiles[v.profile])state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;if(v.revision!==source.revisions[k])staleDrafts.set(k,{revision:v.revision,conflicts:[]});}}}catch{}
- try{const draft=JSON.parse(sessionStorage.getItem(storageKey('forge-pool-draft'))||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
+ try{const draft=JSON.parse(sessionStorage.getItem(poolDraftKey())||sessionStorage.getItem(storageKey('forge-pool-draft'))||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
  for(const [k,v] of Object.entries(profiles)){v.forgeMode??=copy(source.profileModes?.[k]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});original[k].forgeMode??=copy(v.forgeMode);}
  // A restored draft made on an older file moves onto the current one now, or waits for its «Конфлікт…» choice.
  for(const [k,row] of staleDrafts){if(!diff(k).length){original[k]=freshProfile(k);profiles[k]=copy(original[k]);staleDrafts.delete(k);continue;}row.conflicts=rebaseDraft(k,freshProfile(k),'auto');}
+ {const wanted=new URLSearchParams(location.search).get('profile');if(wanted&&profiles[wanted])state.profile=wanted;}
  if(!profiles[state.profile])state.profile='standard';
  rebuild();render();ManaScreen.boot(win);
  // A new service worker takes over at once (skipWaiting + clients.claim); the page itself moves to the new shell

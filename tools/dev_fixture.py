@@ -9,7 +9,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from server import Forge, yaml_dump
+from server import Forge, yaml_dump, yaml_load
 
 
 def demo_root(root):
@@ -58,6 +58,7 @@ def seed_showcase():
     demo_root(root)
     project, agent, state = (root / name for name in ('project', 'agent', 'state'))
     if (root / 'SHOWCASE_READY').exists():
+        seed_layers(root, project, agent)
         return project, agent, state
     # A partially prepared showcase is not silently reseeded over possible edits.
     if any(p.name != 'MANA_TAPE_DEMO' for p in root.iterdir()):
@@ -152,7 +153,101 @@ def seed_showcase():
               'providerLabels': {'demo-studio': 'DEMO Studio', 'demo-cloud': 'DEMO Cloud', 'demo-free': 'DEMO Free', 'demo-deepseek': 'DEMO DeepSeek', 'demo-local': 'DEMO Local'}}}]}
     (root/'installation.yml').write_text(yaml_dump(config), encoding='utf-8')
     (root/'SHOWCASE_READY').write_text('Synthetic showcase. No native accounts or inference.\n', encoding='utf-8')
+    seed_layers(root, project, agent)
     return project, agent, state
+
+
+SHARED_UI = ('localProviders', 'providerCodes', 'providerLabels')
+
+
+def demo_session(agent, folder, name, cwd):
+    """A synthetic OMP session file: a padded title record, then the header that names the cwd (no real history)."""
+    path = agent / 'sessions' / folder
+    path.mkdir(parents=True, exist_ok=True)
+    (path / name).write_text(json.dumps({'type': 'title', 'v': 1, 'title': 'DEMO', 'pad': ' ' * 96}) + '\n'
+        + json.dumps({'type': 'session', 'version': 3, 'id': name.split('_')[-1].split('.')[0], 'cwd': str(cwd)}) + '\n', encoding='utf-8')
+
+
+def seed_layers(root, project, agent):
+    """Config layers for the showcase: a Global OMP config with its own roles, chains, an agent and a native preset;
+    native presets (котушки) in the project; a second project OMP ran in (discovered from a session header) whose
+    file was then changed outside Mana Tape; a directory OMP ran in without .omp/config.yml (a candidate). The old
+    `.omp/presets/*.yml` stay for the migration panel. Runs once (LAYERS_READY); an older showcase gains only what
+    it lacks, and nothing it already has is overwritten."""
+    if (root / 'LAYERS_READY').exists():
+        return
+    from server import Problem, load_installation
+    config_path = root / 'installation.yml'
+    config = yaml_load(config_path.read_text(encoding='utf-8'))
+    entry = config['projects'][0]
+    # Provider names, codes and the local GPU belong to the whole machine: the Global scope shows them too.
+    if not config.get('ui'):
+        config['ui'] = {k: entry.get('ui', {}).get(k) for k in SHARED_UI if entry.get('ui', {}).get(k)}
+        entry['ui'] = {k: v for k, v in entry.get('ui', {}).items() if k not in SHARED_UI}
+        config_path.write_text(yaml_dump(config), encoding='utf-8')
+    glob = agent / 'config.yml'
+    if not glob.exists():
+        # Written as OMP itself would leave it: compiled routes, a comment, no Mana Tape record.
+        glob.write_text('# DEMO: глобальні налаштування OMP для всіх каталогів (синтетичні).\n' + yaml_dump({
+            'modelRoles': {'default': 'demo-studio/atlas-composer:high', 'smol': 'demo-cloud/swift-draft',
+                           'slow': 'demo-cloud/research-lab:medium', 'plan': 'demo-studio/editor-long-context-multilingual-edition:low',
+                           'curator': 'demo-cloud/research-lab:medium'},
+            'retry': {'fallbackChains': {'default': ['demo-cloud/research-lab:medium', 'demo-free/aurora-01-free'],
+                                         'smol': ['demo-free/swift-01-free', 'demo-local/compact-local']}},
+            'task': {'agentModelOverrides': {'reviewer': ['@slow', 'demo-free/aurora-02-free']}},
+            'modelPresets': {'budget': {'modelRoles': {'default': 'demo-free/aurora-01-free', 'smol': 'demo-free/swift-01-free',
+                                                       'slow': 'demo-free/aurora-03-free'}}}}), encoding='utf-8')
+    notes, sketches = root / 'field-notes', root / 'sketchbook'
+    fresh_notes = not (notes / '.omp/config.yml').exists()
+    if fresh_notes:
+        (notes / '.omp').mkdir(parents=True, exist_ok=True)
+        (notes / '.omp/config.yml').write_text('# DEMO: другий проєкт, знайдений в історії сесій OMP.\n' + yaml_dump({
+            'modelRoles': {'task': 'demo-cloud/research-lab:medium', 'smol': 'demo-free/swift-02-free'},
+            'retry': {'fallbackChains': {'task': ['demo-free/aurora-03-free']}}}), encoding='utf-8')
+    sketches.mkdir(exist_ok=True)
+    demo_session(agent, '--field-notes--', '2026-10-11T09-12-00-000Z_demo0001.jsonl', notes)
+    demo_session(agent, '--sketchbook--', '2026-10-11T18-40-00-000Z_demo0002.jsonl', sketches)
+    _, apps = load_installation(config_path)
+    show = next(a for a in apps.values() if a.project == project.resolve())
+    # Every scope of the demo sees the same synthetic catalogue and telemetry (one machine, one OMP).
+    for app in apps.values():
+        if app is not show and not app.state.get('catalog'):
+            app.state.update(catalog=show.state['catalog'], available=show.state['available'], refreshed=show.state['refreshed'], favs=show.state['favs'])
+            app.persist()
+            if show.insights.path.exists() and not app.insights.path.exists():
+                app.insights.path.write_bytes(show.insights.path.read_bytes())
+
+    def save(app, profile, changes):
+        body = {'profile': profile, 'revision': app.revision(profile), 'changes': changes,
+                'modeSettings': app.preset_settings(profile[7:]) if profile.startswith('preset:') else app.mode_settings(profile)}
+        body['previewToken'] = app.preview_profile(body)['token']
+        app.save_profile(body)
+    # An older showcase with its own saved edits may refuse a write (an outside edit to accept first): the demo then
+    # simply lacks that part, and says so.
+    def attempt(what, step):
+        try:
+            step()
+        except Problem as error:
+            print(f'DEMO: {what} skipped — {error}', file=sys.stderr)
+    if not show.native_presets():
+        # `studio` = /modelpreset save of what runs now (OMP calls it active); `night` differs in two roles + thinking.
+        def presets():
+            for name in ('studio', 'night'):
+                show.profile_action({'action': 'clone', 'profile': 'standard', 'name': name})
+            save(show, 'preset:night', [{'path': ['modelRoles', 'composer'], 'value': 'demo-cloud/research-lab:medium'},
+                                        {'path': ['modelRoles', 'investigator'], 'value': 'mana-pool/free-good'},
+                                        {'path': ['defaultThinkingLevel'], 'value': 'low'}])
+        attempt('native котушки', presets)
+    if fresh_notes:
+        app = next(a for a in apps.values() if a.project == notes.resolve())
+        # Saved once through Mana Tape (with a FREE pool block, so the pools reach two scopes) …
+        attempt('second project save', lambda: save(app, 'standard', [{'path': ['retry', 'fallbackChains', 'task'], 'value': ['demo-free/aurora-03-free', 'mana-pool/free-fast']}]))
+        # … then OMP rewrote the file (/model with modelRoleStorage: project): an outside edit to accept or restore.
+        data = yaml_load((notes / '.omp/config.yml').read_text(encoding='utf-8'))
+        data['modelRoles']['smol'] = 'demo-cloud/swift-draft'
+        data['modelRoles']['vision'] = 'demo-studio/canvas-image'
+        (notes / '.omp/config.yml').write_text(yaml_dump(data), encoding='utf-8')
+    (root / 'LAYERS_READY').write_text('Global, two projects, a candidate, native presets, an outside edit.\n', encoding='utf-8')
 
 
 if __name__ == '__main__':

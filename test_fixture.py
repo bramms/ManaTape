@@ -26,7 +26,7 @@ class DemoFixture(unittest.TestCase):
         snapshot = app.snapshot()
         self.assertTrue(snapshot['demo'])
         self.assertEqual(len(snapshot['base']['modelRoles']), 6)
-        self.assertEqual(set(snapshot['presets']), {'without-deepseek', 'long-tape'})
+        self.assertEqual(set(snapshot['presets']), {'without-deepseek', 'long-tape', 'preset:studio', 'preset:night'})
         self.assertEqual([len(app.pools()[key]) for key in ('free-good', 'free-fast')], [10, 16])
         self.assertTrue(all(is_free_model(app.mode_catalog()[r]) for pool in app.pools().values() for r in pool))
         self.assertTrue(all(row['baseUrl']=='https://example.invalid/v1' and row['auth']=='none'
@@ -40,6 +40,27 @@ class DemoFixture(unittest.TestCase):
         self.assertEqual(len(snapshot['insights']['stats']['timeSeries']), 48)
         self.assertIn('DEMO', snapshot['insights']['stats']['scope'])
         self.assertEqual(snapshot['insights']['benchmarks']['records'], [])
+
+    def test_showcase_layers_global_projects_candidate_presets_and_outside_edit(self):
+        project, agent, state = dev_fixture.seed_showcase()
+        _, apps = load_installation(state.parent/'installation.yml')
+        show = apps['showcase'].snapshot()
+        self.assertEqual(show['scope']['kind'], 'project')
+        self.assertEqual(set(show['inherited']['modelRoles']), {'default', 'smol', 'slow', 'plan', 'curator'})
+        self.assertEqual(show['sources']['modelRoles.curator'], 'project', 'the project overrides one Global role')
+        self.assertEqual(show['activePreset'], 'studio', '/modelpreset save of what runs is active')
+        self.assertEqual({n: r['source'] for n, r in show['nativePresets'].items()}, {'budget': 'global', 'night': 'project', 'studio': 'project'})
+        self.assertEqual(show['legacyPresets'], ['long-tape', 'without-deepseek'])
+        self.assertEqual([c['name'] for c in show['candidates']], ['sketchbook'])
+        self.assertEqual(sorted(r['kind'] for r in show['projects']), ['global', 'project', 'project'])
+        notes = next(a for a in apps.values() if a.project.name == 'field-notes').snapshot()
+        self.assertEqual(notes['modeConflicts'], ['standard'], 'OMP rewrote the second project after Mana Tape saved it')
+        self.assertTrue(any(line.startswith('~ modelRoles.smol') for line in notes['modeConflictDiffs']['standard']['lines']))
+        self.assertEqual(sorted(show['poolScopes']), sorted([apps['showcase'].project_id, next(a for a in apps.values() if a.project.name == 'field-notes').project_id]))
+        glob = apps['global'].snapshot()
+        self.assertEqual(glob['ui']['providerCodes']['demo-studio'], 'STU', 'machine-wide provider names reach the Global scope')
+        self.assertTrue(glob['insights']['usage']['reports'] and any(m['available'] for m in glob['models']))
+        self.assertEqual(dev_fixture.seed_showcase(), (project, agent, state), 'reopening changes nothing')
 
     def test_reopening_keeps_saved_showcase_changes(self):
         paths = dev_fixture.seed_showcase()
