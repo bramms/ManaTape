@@ -396,21 +396,20 @@ test('resetting a built-in agent emits removal and supports Undo and preset inhe
 
 test('DELETED is explicit on configured CUTs and never inferred from quotas or missing metadata',()=>{
  const catalogMap=new Map([
-  ['p/gone:free',{status:'missing'}], ['p/live',{status:'present'}],
-  ['p/offline',{available:false}], ['p/empty',{status:'present',remaining:0}]
+  ['p/gone:free',{provider:'p',id:'gone:free',name:'gone:free',status:'missing'}], ['p/live',{provider:'p',id:'live',name:'live',status:'present'}],
+  ['p/offline',{provider:'p',id:'offline',name:'offline',available:false}], ['p/empty',{provider:'p',id:'empty',name:'empty',status:'present',remaining:0}]
  ]);
- const context={catalogMap,split:r=>({raw:r.replace(/:high$/,''),provider:'p'}),providerName:()=> 'Provider',providerCode:()=> 'P',esc:s=>s,
-  freeBadge:()=>'<span class="cut-free">FREE</span>',isLocal:()=>false,routeMatches:()=>false};
- runInNewContext(['deletedCut','cutIdentity','slotClasses'].map(appFunction).join('\n'),context);
- for(const r of ['p/gone:free','p/gone:free:high']){
-  assert.match(context.cutIdentity(r),/>DELETED</);assert.match(context.cutIdentity(r),/Відсутній у провайдера/);
-  assert.doesNotMatch(context.cutIdentity(r),/cut-free/);assert.match(context.slotClasses(r),/cut-is-deleted/);
+ const context={catalogMap,state:{},split:r=>({raw:r.replace(/:high$/,''),provider:'p',id:r.slice(2).replace(/:high$/,''),effort:''}),providerName:()=> 'Provider',providerCode:()=> 'P',providerSlot:()=>'stu',esc:s=>s,
+  cutTitle:r=>r,freeRoute:r=>/free/.test(r)&&catalogMap.get(r)?.status!=='missing',healthMarks:()=>({glyph:'',bar:'',text:''}),routeWarning:()=>false,isLocal:()=>false,poolName:()=>undefined};
+ runInNewContext(['deletedCut','nameParts','nameSpace','drawerCut'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1],context);
+ for(const r of ['p/gone:free']){
+  const cut=context.drawerCut(catalogMap.get(r));
+  assert.match(cut,/class="cut cut--deleted"/);assert.match(cut,/class="stamp stamp--del">DELETED</);
+  assert.doesNotMatch(cut,/stamp--free/,'a DELETED route carries no FREE stamp');
  }
- for(const r of ['p/live','p/offline','p/empty','p/unknown']){
-  assert.doesNotMatch(context.cutIdentity(r),/DELETED/);assert.doesNotMatch(context.slotClasses(r),/cut-is-deleted/);
- }
+ for(const r of ['p/live','p/offline','p/empty']){const cut=context.drawerCut(catalogMap.get(r));assert.doesNotMatch(cut,/DELETED|cut--deleted/);}
  catalogMap.get('p/gone:free').status='present';
- assert.doesNotMatch(context.cutIdentity('p/gone:free'),/DELETED/);
+ assert.doesNotMatch(context.drawerCut(catalogMap.get('p/gone:free')),/DELETED/);
 });
 
 test('pool picker and tap insertion accept more than 30 FREE CUTS and still reject paid routes',()=>{
@@ -419,7 +418,7 @@ test('pool picker and tap insertion accept more than 30 FREE CUTS and still reje
  const context={state:{profile:'standard'},poolDraft,catalogMap,source:{},
   split:r=>({raw:r,provider:r.split('/')[0],id:r.split('/')[1]}),ManaOperator:{isFreeModel:m=>m.free===true},
   chain:role=>[...poolDraft[role]],poolName:()=>null,modeOff:()=>false,routeWarning:()=>false,
-  notify:s=>notices.push(s),narrowSurface:()=>false,short:s=>s,providerName:s=>s,render:()=>{}};
+  notify:s=>notices.push(s),narrowSurface:()=>false,short:s=>s,providerName:s=>s,cutTitle:s=>s,render:()=>{}};
  roleContext(context);
   runInNewContext(['acceptsRoleModel','thinkingOff','withNotes','setChain','carryEffort','commitCut'].map(appFunction).join('\n'),context);
  context.commitCut(routes[30],{role:'free-good',group:'pool',index:30,profile:'standard',expected:null});
@@ -879,7 +878,7 @@ test('a CUTS search keystroke filters the cached collection instead of the whole
  const catalog=Array.from({length:40},(_,i)=>({provider:'p',id:'m'+i,name:(i%2?'Alpha ':'Beta ')+i,available:true}));
  const state={profile:'one',cutTarget:null,cutProvider:'all',freeCuts:false,cutHealth:'all',cutQuery:'alp'};
  const context={state,catalog,dataVersion:1,opReportCache:[],source:{providers:[]},p:()=>({}),providerName:id=>id,searchMemo:new WeakMap(),
-  routeWarning:()=>{scanned++;return false;},priceInfo:()=>({kind:'paid'}),opHealth:()=>({kind:'healthy'}),acceptsRoleModel:()=>true,vibeAlias:()=>'',collate:(a,b)=>a.localeCompare(b)};
+  routeWarning:()=>{scanned++;return false;},priceInfo:()=>({kind:'paid'}),opHealth:()=>({kind:'healthy'}),acceptsRoleModel:()=>true,vibeAlias:()=>'',editorTarget:()=>null,collate:(a,b)=>a.localeCompare(b)};
  runInNewContext(['searchText','queryWords','matchesWords','searchKey','collectionBase','collectionCuts'].map(appFunction).join('\n'),context);
  assert.equal(context.collectionCuts().length,20);assert.equal(scanned,40);
  for(const q of ['alph','alpha 1','beta','']){state.cutQuery=q;context.collectionCuts();}
@@ -925,10 +924,11 @@ test('a run of three or more inherited lanes folds into one printed row; default
 test('the transport lives on the drawer front only, with its scope; the dock has no Undo, Redo or Save',()=>{
  const SVG={undo:'',redo:'',close:'',more:'',search:'',refresh:''};
  const state={view:'profiles',profile:'standard',changes:3,saving:false,poolPanel:false,modePanel:false,cuts:false,health:true,cutProvider:'all',cutHealth:'all',freeCuts:false,cutQuery:'',opFeedback:'',error:''};
- const context={SVG,state,esc:s=>String(s??''),prettyProfile:s=>s==='standard'?'Standard':s,source:{projects:[{id:'x',name:'X'}],projectId:'x',modeConflicts:[],modeRecovery:null},profileKeys:['standard'],
+ const context={SVG,state,GRIP:'<div class="tray__grip"></div>',esc:s=>String(s??''),prettyProfile:s=>s==='standard'?'Standard':s,source:{projects:[{id:'x',name:'X'}],projectId:'x',modeConflicts:[],modeRecovery:null},profileKeys:['standard'],
   editHistory:{available:()=>({undo:true,redo:false})},poolsDirty:()=>false,activePlan:()=>null,collectionCuts:()=>[1,2],opProviderItems:()=>[['all','Усі']],healthNames:{healthy:'Є запас'},
-  narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,poolNames:{},poolName:()=>undefined,cutTitle:r=>r,providerName:r=>r,split:r=>({provider:r})};
- runInNewContext(['led','key','leaf','box','selWin','opSwitchKey','opSwitchFace','switchRegion','poolActionContext','transportParts','trayOpen','drawerHint','armedMarkup','drawerSearch','drawerCount','cutsTray','profileMenu','dockSwitches','operatorFeedback','operatorDock'].map(appFunction).join('\n'),context);
+  narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,drawerLastMode:'cuts',poolNames:{'free-good':'FREE GOOD','free-fast':'FREE FAST'},poolDraft:{'free-good':['p/a','p/b'],'free-fast':[]},poolName:()=>undefined,cutTitle:r=>r,providerName:r=>r,split:r=>({provider:r}),drawerResults:()=>'<div class="tray__grid"></div>',
+  node:(role,r,i)=>`<div class="cut" data-node-role="${role}" data-index="${i}" data-group="pool"></div>`};
+ runInNewContext(['led','key','leaf','box','selWin','opSwitchKey','opSwitchFace','switchRegion','poolActionContext','transportParts','drawerMode','drawerShown','drawerFilters','editorKind','editorTarget','editorTitle','editorTabs','sourceHead','editorLine','socketKey','poolEditor','trayOpen','drawerHint','armedMarkup','drawerSearch','drawerCount','cutsTray','profileMenu','dockSwitches','operatorFeedback','operatorDock'].map(appFunction).join('\n'),context);
  const tray=flat(context.cutsTray()),dock=flat(context.operatorDock());
  assert.match(tray,/class="tray__lip"[\s\S]*class="tray__transport transport"[\s\S]*data-action="undo"[\s\S]*data-action="redo"[\s\S]*class="transport__state"[\s\S]*class="key key--action" data-action="save"/);
  assert.match(tray,/3 зміни/);assert.match(tray,/data-action="redo"[^>]*disabled/);
@@ -937,6 +937,14 @@ test('the transport lives on the drawer front only, with its scope; the dock has
  const pools=flat(context.cutsTray());
  assert.match(pools,/class="transport__scope">пули</);assert.match(pools,/data-action="pool-undo"/);assert.match(pools,/data-action="pool-save"/);
  assert.match(tray,/<section class="tray" id="cuts-collection"/,'a closed drawer still shows its lip');
+ // The pool editor is a face of the drawer: orange head, FREE GOOD / FREE FAST tabs, ×, the ordered list next to its source.
+ assert.match(pools,/<section class="tray is-open tray--editor" id="cuts-collection" aria-label="Пули">/);
+ assert.match(pools,/role="tablist"[\s\S]*role="tab" id="pool-tab-free-good" data-pool-tab="free-good" aria-selected="true"/);
+ assert.match(pools,/data-action="pool-close"/);assert.match(pools,/<span class="key__cap">Зберегти<span class="key__more"> пули<\/span><\/span>/);
+ assert.match(pools,/id="pool-editor"[\s\S]*data-node-role="free-good" data-index="1"[\s\S]*class="socket" data-edit="free-good" data-index="2" data-group="pool"/);
+ assert.match(pools,/class="tray__source"[\s\S]*id="cut-query"/,'the collection stays in the drawer as the source');
+ assert.doesNotMatch(pools,/data-action="cuts-toggle"/,'the editor head is not the collection toggle');
+ assert.match(flat(context.dockSwitches()),/data-op-switch="cuts" aria-expanded="true"/,'the CUTS key shows the drawer as open');
 });
 
 test('reopen patches only a container opening tag: HEALTH or search never rebuild the tape',()=>{
@@ -959,4 +967,98 @@ test('CUT names keep their distinguishing tail when they are truncated',()=>{
  assert.deepEqual(parts('deepseek-demo-free'),['deepseek-demo','-free']);
  assert.deepEqual(parts('editor-long-context-multilingual-edition'),['editor-long-context-multilingual-edition','']);
  assert.deepEqual(parts('GPT 5'),['GPT',' 5']);
+});
+
+// Stage C1b: names that tell routes apart, editors and forms in the drawer, the collection as the editor's source,
+// Колекція's cached sort, the provider form's own field checks, «Прийняти файл» in the reel menu.
+test('a shortened CUT name gives up the shared namespace first, never the family that tells routes apart',()=>{
+ const context={esc:s=>String(s)};runInNewContext(['nameParts','nameSpace'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1]+'\nthis.nameMarkup=nameMarkup;',context);
+ assert.deepEqual(Array.from(context.nameSpace('DEMO · Aurora')),['DEMO ·','Aurora']);
+ assert.deepEqual(Array.from(context.nameSpace('qwen/qwen3-coder')),['qwen/','qwen3-coder']);
+ assert.deepEqual(Array.from(context.nameSpace('Anthropic: Claude Sonnet')),['Anthropic:','Claude Sonnet']);
+ assert.deepEqual(Array.from(context.nameSpace('deepseek-demo')),['','deepseek-demo'],'no separator, no namespace');
+ assert.deepEqual(Array.from(context.nameSpace('DEMO · ab')),['','DEMO · ab'],'a too short family keeps the whole head');
+ const aurora=context.nameMarkup('DEMO · Aurora 01 Free'),swift=context.nameMarkup('DEMO · Swift 01 Free');
+ assert.equal(aurora,'<span class="cut__ns">DEMO ·</span><span class="cut__head">Aurora</span><span class="cut__tail"> 01 Free</span>');
+ assert.match(swift,/<span class="cut__head">Swift<\/span><span class="cut__tail"> 01 Free<\/span>/);
+ const css=readFileSync(require.resolve('./static/device.css'),'utf8');
+ const ns=css.match(/\.cut__ns\{flex:0 (\d+) auto/),head=css.match(/\.cut__head\{flex:0 (\d+) auto\}/);
+ assert.ok(ns&&head&&Number(ns[1])>=1e5*Number(head[1]),'the namespace shrinks first; the family keeps less than one layout unit of the shrink');
+ assert.match(css,/\.cut__tail\{flex:none/,'the distinguishing tail never shrinks');
+});
+
+test('an open editor narrows the collection to what its list accepts; a tap appends, a duplicate is refused',()=>{
+ const models=[{provider:'p',id:'free-a',name:'Free A',available:true,free:true},{provider:'p',id:'paid-b',name:'Paid B',available:true},{provider:'deepseek',id:'deepseek-v4',name:'DS',available:true}];
+ const state={profile:'one',cutTarget:null,cutProvider:'all',freeCuts:false,cutHealth:'all',cutQuery:'',poolPanel:false,modePanel:false};
+ const context={state,catalog:models,dataVersion:1,opReportCache:[],source:{providers:[]},p:()=>({}),providerName:id=>id,searchMemo:new WeakMap(),poolNames:{'free-good':'FREE GOOD'},
+  routeWarning:()=>false,priceInfo:m=>({kind:m.free?'free':'paid'}),opHealth:()=>({kind:'healthy'}),acceptsRoleModel:()=>true,vibeAlias:()=>'',collate:(a,b)=>a.localeCompare(b),
+  ManaOperator:{isFreeModel:m=>!!m.free},deepseek:r=>/deepseek/.test(r)};
+ runInNewContext(['searchText','queryWords','matchesWords','searchKey','editorKind','editorTarget','collectionBase','collectionCuts'].map(appFunction).join('\n'),context);
+ assert.equal(context.collectionCuts().length,3);
+ state.poolPanel=true;assert.deepEqual(Array.from(context.collectionCuts(),m=>m.id),['free-a'],'a pool takes FREE CUTS only');
+ state.poolPanel=false;state.modePanel=true;assert.deepEqual(Array.from(context.collectionCuts(),m=>m.id).sort(),['free-a','paid-b'],'replacements never offer paid DeepSeek');
+ // appendToEditor: end of the open list, one step; a duplicate only says so.
+ const pool={'free-good':['p/x']},calls=[];
+ Object.assign(context,{state:{poolPanel:true,poolTab:'free-good',saving:false},chain:role=>[...pool[role]],split:r=>({raw:r}),cutTitle:r=>r,catalogMap:new Map([['p/free-a',{}],['p/x',{}]]),notify:s=>calls.push(s),
+  setChain:(role,list)=>{pool[role]=list;return true;},render:()=>{},paintRegions:()=>{},leaf:(key,html)=>({key,html}),poolEditor:()=>'',modePanel:()=>'',win:{querySelector:()=>null}});
+ runInNewContext(appFunction('appendToEditor'),context);
+ context.appendToEditor('p/free-a');assert.deepEqual(Array.from(pool['free-good']),['p/x','p/free-a']);assert.match(context.state.editorMsg,/Додано · p\/free-a → FREE GOOD · 02/);
+ context.appendToEditor('p/x');assert.deepEqual(Array.from(pool['free-good']),['p/x','p/free-a'],'a CUT already in the list is not added twice');assert.match(context.state.editorMsg,/Уже в списку/);
+});
+
+test('a form opens in the drawer: a dialog with the body inert, the transport kept but out of reach',()=>{
+ const SVG={undo:'',redo:'',close:'×',more:'',search:''};
+ const state={view:'profiles',profile:'standard',changes:0,saving:false,modal:'delete-profile',cuts:false,health:true,cutProvider:'all',cutHealth:'all',freeCuts:false,cutQuery:''};
+ const context={SVG,state,GRIP:'',esc:s=>String(s??''),prettyProfile:s=>s,source:{modeConflicts:[],restorable:[]},editHistory:{available:()=>({undo:false,redo:false})},poolsDirty:()=>false,activePlan:()=>null,diff:()=>[],
+  narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,drawerLastMode:'cuts',poolNames:{},poolName:()=>undefined};
+ runInNewContext(['led','key','leaf','box','poolActionContext','transportParts','drawerMode','drawerShown','trayOpen','formFoot','formSpec','formTitle','formMarkup','cutsTray'].map(appFunction).join('\n'),context);
+ const tray=flat(context.cutsTray());
+ assert.match(tray,/<section class="tray is-open tray--editor tray--form" id="cuts-collection" role="dialog" aria-modal="true" aria-labelledby="tray-form-title">/);
+ assert.match(tray,/id="tray-form-title"[\s\S]*Видалити котушку/);
+ assert.match(tray,/class="tray__transport transport"[^>]*inert/,'the transport stays on the front but cannot be reached');
+ assert.match(tray,/data-action="modal-close"[\s\S]*data-action="delete-confirm"/,'a safe key first, the action last');
+ assert.doesNotMatch(tray,/modal-layer|backdrop/);
+ state.modal='confirm';state.confirm={title:'Прийняти файл',label:'Прийняти файл як є',text:'<b>x</b>',action:'adopt-profile'};
+ assert.match(flat(context.cutsTray()),/data-action="confirm-cancel"[\s\S]*data-action="confirm-run"/);
+});
+
+test('the provider form checks its fields itself and names the field a server refusal belongs to',()=>{
+ const context={state:{editProvider:null},source:{providers:[]},URL};
+ runInNewContext(['providerProblems','providerField'].map(appFunction).join('\n'),context);
+ const form=values=>({elements:Object.fromEntries(Object.entries({name:'',id:'',url:'',auth:'apiKey',key:'',discovery:'openai-models-list',models:'',...values}).map(([k,v])=>[k,{value:v}]))});
+ assert.deepEqual(Object.keys(context.providerProblems(form({}))).sort(),['id','key','name','url']);
+ assert.deepEqual(Object.keys(context.providerProblems(form({name:'Мій',id:'my-p',url:'https://api.example.com/v1',key:'k'}))),[]);
+ assert.ok(context.providerProblems(form({name:'x',id:'Bad ID',url:'https://a.b',key:'k'})).id);
+ assert.ok(context.providerProblems(form({name:'x',id:'a',url:'https://u:p@a.b/v1',key:'k'})).url,'no credentials in the address');
+ assert.ok(context.providerProblems(form({name:'x',id:'a',url:'https://a.b?k=1',key:'k'})).url,'no parameters in the address');
+ assert.ok(context.providerProblems(form({name:'x',id:'a',url:'https://a.b',auth:'none',discovery:''})).models,'a manual list needs model IDs');
+ context.state.editProvider='a';context.source.providers=[{id:'a',hasKey:true,url:'https://a.b'}];
+ assert.equal(context.providerProblems(form({name:'x',id:'a',url:'https://a.b'})).key,undefined,'the stored key stays for the same address');
+ assert.match(context.providerProblems(form({name:'x',id:'a',url:'https://c.d'})).key,/нової адреси/);
+ assert.equal(context.providerField('ID: малі латинські літери, цифри, дефіс'),'id');assert.equal(context.providerField('Потрібна HTTP(S)-адреса без ключів'),'url');
+ assert.equal(context.providerField('Потрібен API-ключ'),'key');assert.equal(context.providerField('Провайдери вже змінились. Онови дані.'),'');
+});
+
+test('Колекція sorts once per filter; a search keystroke only filters the sorted rows',()=>{
+ let scored=0;
+ const catalog=Array.from({length:60},(_,i)=>({provider:'p'+(i%3),id:'m'+i,name:(i%2?'Alpha ':'Beta ')+i}));
+ const state={catalogMode:'all',catalogProvider:'all',catalogEvidence:'all',catalogSort:'score',role:'default',benchSource:'AA',benchRelease:'r',favs:[],catalogQuery:''};
+ const context={state,catalog,dataVersion:1,referenced:new Set(),source:{changes:[]},searchMemo:new WeakMap(),providerName:id=>id,myProviderIds:()=>new Set(),
+  opEvidence:m=>{scored++;return {score:Number(m.id.slice(1))};},opPriceValue:()=>1,evidenceCoverage:()=>({kind:'unknown',sources:[],claims:0}),priceInfo:()=>({kind:'paid'}),collate:(a,b)=>a.localeCompare(b)};
+ runInNewContext(['searchText','queryWords','matchesWords','searchKey','catalogBase','analyticalModels'].map(appFunction).join('\n'),context);
+ assert.equal(context.analyticalModels()[0].id,'m59','top role score first');assert.equal(scored,60);
+ for(const q of ['a','al','alpha','alpha 5','']){state.catalogQuery=q;context.analyticalModels();}
+ assert.equal(scored,60,'typing never re-scores or re-sorts');
+ state.catalogQuery='alpha';assert.deepEqual(Array.from(context.analyticalModels().slice(0,2),m=>m.id),['m59','m57'],'filtered rows keep the sorted order');
+ state.catalogSort='name';context.analyticalModels();assert.equal(scored,120,'a new order sorts once');
+});
+
+test('the reel menu offers «Прийняти файл» only for a profile changed outside Mana Tape',()=>{
+ const state={profile:'long-tape',changes:0};
+ const context={state,SVG:{more:''},esc:s=>String(s),prettyProfile:s=>s,source:{modeConflicts:['long-tape'],modeOrphans:[]}};
+ runInNewContext(['led','profileMenu'].map(appFunction).join('\n'),context);
+ assert.match(context.profileMenu(),/role="menuitem" data-action="adopt-profile" data-adopt="long-tape"[^>]*><span class="key__cap">[^<]*<span class="led is-on" data-c="amber"><\/span>Прийняти файл/);
+ assert.match(context.profileMenu(),/aria-haspopup="menu"/);
+ context.source.modeConflicts=[];assert.doesNotMatch(context.profileMenu(),/adopt-profile/);
+ context.source.modeOrphans=['long-tape'];assert.match(context.profileMenu(),/Прийняти видалення/);
 });

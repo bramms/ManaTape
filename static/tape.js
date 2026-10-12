@@ -39,7 +39,7 @@ if(typeof window!=='undefined'){
   // CUTS (an edit or a new projection in the same context); without `next` it is always read.
   function before(root,next){
    const previous=frames.get(root),moving=!next||!reduced.matches&&!!previous&&previous.profile===next.profile&&(next.context===undefined||next.context===root.dataset.tapeContext)&&(previous.draft!==next.draft&&(previous.dirty||next.dirty)||previous.projection!==next.projection);
-   return {frame:previous,context:root.dataset.tapeContext,clips:new Map(moving?measure(root).map(([el,r])=>[el.dataset.clipKey,r]):[]),picker:!!root.querySelector('.picker'),modal:!!root.querySelector('.modal'),editor:!!root.querySelector('.editor')};
+   return {frame:previous,context:root.dataset.tapeContext,clips:new Map(moving?measure(root).map(([el,r])=>[el.dataset.clipKey,r]):[]),picker:!!root.querySelector('[data-picker]'),modal:!!root.querySelector('.tray__form'),editor:!!root.querySelector('.tray__editor')};
   }
   // CUT widths come from the design system (--cut-w); there is nothing to fit any more. Kept for old callers.
   function fit(){}
@@ -75,7 +75,7 @@ if(typeof window!=='undefined'){
     if(edited||saved)logo(brand,false,intent==='undo'?-1:1);
    }
    // Entry motion belongs to opening a surface, never to its subsequent renders.
-   for(const [selector,existed] of [['.picker',old.picker],['.modal',old.modal],['.editor',old.editor]]){const el=root.querySelector(selector);if(el&&!existed)move(el,[{opacity:.3,translate:'0 5px'},{opacity:1,translate:'0 0'}],150);}
+   for(const [selector,existed] of [['[data-picker]',old.picker],['.tray__form',old.modal],['.tray__editor',old.editor]]){const el=root.querySelector(selector);if(el&&!existed)move(el,[{opacity:.3,translate:'0 5px'},{opacity:1,translate:'0 0'}],150);}
   }
   // The logo reels: the angle lives here, so a re-render never loses the phase; CSS transitions the transform.
   function logo(brand,press=false,direction=1){

@@ -45,7 +45,7 @@ test('replacement surface enters once; edits, picker typing and preview refresh 
  const motionPreference={matches:false,addEventListener(){}},context={window:{},matchMedia:()=>motionPreference};
  runInNewContext(readFileSync(require.resolve('./static/tape.js'),'utf8'),context);
  const tape=context.window.ForgeTape,panels=[];let panel=null;
- const root={dataset:{tapeContext:'profiles|one'},querySelector:s=>s==='.editor'?panel:null,querySelectorAll:()=>[]};
+ const root={dataset:{tapeContext:'profiles|one'},querySelector:s=>s==='.tray__editor'?panel:null,querySelectorAll:()=>[]};
  const frame={profile:'one',view:'profiles',draft:'base',dirty:false};
  function render(open,update={}){
   const old=tape.before(root);

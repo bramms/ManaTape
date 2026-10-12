@@ -22,8 +22,6 @@
  function dateFormat(options){const cache=dateFormat.cache??=new Map(),key=JSON.stringify(options);let format=cache.get(key);if(!format)cache.set(key,format=new Intl.DateTimeFormat('uk-UA',options));return format;}
  function numberFormat(locale,options){const cache=numberFormat.cache??=new Map(),key=locale+JSON.stringify(options);let format=cache.get(key);if(!format)cache.set(key,format=new Intl.NumberFormat(locale,options));return format;}
  const collate=new Intl.Collator().compare;
- const icon=n=>`<span aria-hidden="true">${({sparkles:'✧',search:'⌕','undo-2':'↶',star:'☆',x:'×','trash-2':'−'})[n]||'·'}</span>`;
- const tool=(txt,act,cl='',attr='')=>`<button type="button" class="tool ${cl}" data-action="${act}" ${attr}>${txt}</button>`;
  // Device keys (static/device.css): a socket with a cap; a lit LED and the latched state carry meaning, not colour.
  function led(on,c='green',extra=''){return `<span class="led${on?' is-on':''}" data-c="${c}"${extra}></span>`;}
  function key(cap,act,cls='',attr=''){return `<button type="button" class="key ${cls}"${act?` data-action="${act}"`:''} ${attr}><span class="key__cap">${cap}</span></button>`;}
@@ -81,7 +79,7 @@
  const catalog=[...catalogMap.values()].sort((a,b)=>a.provider.localeCompare(b.provider)||a.name.localeCompare(b.name));
  const state={view:'profiles',profile:'standard',device:'desktop',role:roleKeys[0]||'',query:'',catalogQuery:'',catalogMode:'mine',catalogProvider:'all',page:0,favs:[...referenced].slice(0,8),picker:null,modal:null,changes:0,toast:''};
  let favWrites=Promise.resolve(),favSaved=[];
- let timer,drag=null,modalPageY=0,modalReturnFocus='',composing=false,renderCache=null,pointerHeld=false,nativeSelectBusy=false;
+ let timer,drag=null,modalShown=false,modalFit='',modalReturnFocus='',composing=false,renderCache=null,pointerHeld=false,nativeSelectBusy=false;
  let backgroundRefreshPending=false,backgroundReloading=false,pendingRender=false,backgroundTimer,writeEpoch=0,activeWrites=0,renderedAt=0;
  const pendingModeResults=new Map(),resetsSeen=new Set();
  // dataVersion names the current snapshot + catalogue; caches of derived per-model data are keyed by it.
@@ -99,19 +97,26 @@
  // Scroll an element to the middle of the page area that the drawer does not cover.
  function revealInPage(el){
   const r=el.getBoundingClientRect(),lip=parseFloat(getComputedStyle(win.querySelector('.tray-port')||document.documentElement).getPropertyValue('--lip'))||46;
-  const covered=state.cuts?(win.querySelector('.tray')?.getBoundingClientRect().height||lip):lip,visible=window.innerHeight-covered;
+  const covered=drawerShown()?(win.querySelector('.tray')?.getBoundingClientRect().height||lip):lip,visible=window.innerHeight-covered;
   window.scrollBy({top:r.top-(visible-r.height)/2,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
  }
  // A patch key's target blinks its lane LED (class only; a re-render simply ends the blink).
  function flashLane(lane){lane.classList.remove('is-flash');void lane.offsetWidth;lane.classList.add('is-flash');setTimeout(()=>lane.classList.remove('is-flash'),1400);}
  const coarsePointer=()=>matchMedia('(pointer: coarse)').matches||narrowSurface();
  const scrollToControl=el=>el?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
- function focusPicker(){const picker=win.querySelector('.picker');if(!picker)return;const target=state.picker?.actionsOnly?picker.querySelector('[data-action]:not(:disabled)'):coarsePointer()?picker.querySelector('.is-current,[data-pick]')||picker:picker.querySelector('#picker-search');target?.focus({preventScroll:true});}
+ // The search field takes the focus only on a keyboard/mouse device; a touch opens the list without the keyboard.
+ function focusPicker(){const picker=win.querySelector('[data-picker]');if(!picker)return;const target=state.picker?.actionsOnly?picker.querySelector('[role=menuitem]:not(:disabled)')||picker.querySelector('[data-action=picker-close]'):coarsePointer()?picker.querySelector('.is-current,[data-pick]')||picker.querySelector('#picker-search'):picker.querySelector('#picker-search');target?.focus({preventScroll:true});}
  function trayFocusSelector(el){return el?.dataset.edit?`[data-edit="${CSS.escape(el.dataset.edit)}"][data-index="${el.dataset.index}"][data-group="${el.dataset.group}"]`:el?.dataset.modeScope?`[data-mode-scope="${CSS.escape(el.dataset.modeScope)}"]`:el?.dataset.poolOpen?'[data-pool-open]':'[data-action="mode-panel"]';}
+ // Open or close an editor in the drawer. Opening lands the focus in the editor; closing returns it to the key (or the
+ // CUT, the ⇄ mark) that opened it. The drawer then goes back to the collection if it was open, or slides away.
  function editTray(kind,open,opener){
   if(open&&opener)state.trayReturnFocus=trayFocusSelector(opener);
-  state.poolPanel=open&&kind==='pool';state.modePanel=open&&kind==='alternatives';state.picker=null;state.cutTarget=null;state.armedCut=null;render();
-  if(open){const panel=win.querySelector(kind==='pool'?'#pool-editor':'#mode-alternatives');panel?.focus({preventScroll:true});scrollToControl(panel);}
+  state.poolPanel=open&&kind==='pool';state.modePanel=open&&kind==='alternatives';state.picker=null;state.cutTarget=null;state.armedCut=null;state.editorMsg='';
+  if(open&&state.view!=='profiles')state.view='profiles';
+  state.sourceLater=open;
+  render();
+  if(state.sourceLater)requestAnimationFrame(()=>{if(!state.sourceLater)return;state.sourceLater=false;if(editorKind())paintRegions([leaf('drawer/results',drawerResults(collectionCuts()))]);});
+  if(open)win.querySelector(kind==='pool'?`#pool-tab-${state.poolTab||'free-good'}`:'#mode-alternatives')?.focus({preventScroll:true});
   else [...win.querySelectorAll(state.trayReturnFocus||(kind==='pool'?'[data-pool-open]':'[data-action="mode-panel"]'))].find(el=>el.getClientRects().length)?.focus({preventScroll:true});
  }
  const editHistory=new ForgeHistory();
@@ -130,21 +135,27 @@
   const keys=Object.entries(poolNames).map(([name,label])=>{const n=source.freePools?.[name]?.length||0,armed=state.armedCut===poolToken(name);return `<button type="button" class="key poolkey" data-cut="${poolToken(name)}"${armed?' aria-pressed="true"':''} ${n?'':'disabled'} title="${label} · обери пул і місце на доріжці або перетягни весь пул" aria-label="${label} · ${n} CUTS · спільний пул"><span class="key__cap"><span class="stack${name==='free-fast'?' stack--fast':''}" aria-hidden="true"></span><span class="key__txt"><b>${label}</b><span class="key__sub"><span class="rd rd--l" style="--rd:2ch">${n}</span> CUTS</span></span></span></button>`;}).join('');
   return `${keys}<button type="button" class="key" data-pool-open="free-good" aria-expanded="${!!state.poolPanel}" aria-controls="pool-editor"><span class="key__cap">${led(state.poolPanel,'orange')}Пули · <span class="rd" style="--rd:1ch">2</span></span></button><span class="silk silk--2 deck__note">спільні для всіх профілів${poolsDirty()?' · є чернетка пулів':''}</span>`;
  }
- // Editors keep their place above the tape for now (stage C1b moves them into the drawer family); their CUTS
- // are the same CUT as on the lanes.
- function editorHead(title,tabs,tools){return `<div class="editor__head"><span class="silk silk--ink">${title}</span>${tabs}<span class="strip__grow"></span>${tools}</div>`;}
+ // EDITORS live in the drawer (DESIGN «FREE GOOD / FREE FAST», «Заміни»): its front becomes the editor's head
+ // (orange LED, title, tabs or scope, the transport with its scope, ×) and its body holds the ordered list next to
+ // the CUTS collection, which stays the source: a tap adds a CUT at the end, a drag puts it in place. One editor is
+ // open at a time; closing or switching keeps every draft. The CUTS are the same CUT as on the lanes.
+ function editorKind(){return state.poolPanel?'pool':state.modePanel?'alternatives':'';}
+ function editorTarget(){const kind=editorKind();return kind==='pool'?{role:state.poolTab||'free-good',group:'pool'}:kind==='alternatives'?{role:state.modeScope||'profile',group:'alternatives'}:null;}
+ // One reserved status line in the editor: the last tap/drop result, an error, or the list's state.
+ function editorLine(s,text,title=''){return `<div class="msg tray__edmsg"${s?` data-s="${s}"`:''} role="${s==='bad'?'alert':'status'}"${title?` title="${esc(title)}"`:''}>${text?led(true,s==='bad'?'red':s==='warn'?'amber':'green'):''}<span>${esc(text)}</span></div>`;}
  function poolEditor(){
-  if(!state.poolPanel)return '';const selected=state.poolTab||'free-good';
-  const tabs=`<div class="keybed tray__tabs" role="group" aria-label="Обрати FREE пул">${Object.entries(poolNames).map(([name,label])=>`<button type="button" class="key key--sm" data-pool-tab="${name}" aria-pressed="${selected===name}" aria-controls="pool-line-${name}"><span class="key__cap">${led(selected===name,'green')}${label} · <span class="rd" style="--rd:2ch">${poolDraft[name].length}</span></span></button>`).join('')}</div>`;
-  const tools=`${poolsDirty()?key('Скинути','pool-reset','key--sm',state.saving?'disabled':''):''}${key(SVG.close,'pool-close','key--sm key--sq tray__close','aria-label="Закрити налаштування пулів"')}`;
-  return `<section class="bay editor editor--pool" id="pool-editor" aria-label="Спільні FREE пули" tabindex="-1">${editorHead('FREE пули',tabs,tools)}<p class="print print--hint editor__note">Спільні для всіх профілів · окреме збереження «Зберегти пули» оновить усі доріжки з цими блоками. Порядок: ⋯, перетягування або Shift + ← / →.</p>${state.poolError?`<div class="msg" data-s="bad" role="alert">${led(true,'red')}<span>${esc(state.poolError)}</span></div>`:''}${Object.entries(poolNames).map(([name,label])=>`<div class="cut-grid" id="pool-line-${name}" data-pool-line="${name}" aria-label="CUTS ${label}" ${selected===name?'':'hidden'}>${poolDraft[name].map((r,i)=>node(name,r,i,poolDraft[name].length,'pool')).join('')}${socketKey(name,poolDraft[name].length,'pool','CUT','Додати CUT у '+label)}</div>`).join('')}</section>`;
+  const selected=state.poolTab||'free-good',list=poolDraft[selected],label=poolNames[selected],dirty=poolsDirty();
+  const line=state.poolError?editorLine('bad',state.poolError):state.editorMsg?editorLine('ok',state.editorMsg):editorLine('',dirty?'Чернетка пулів · зберігається окремо від профілів':'');
+  return `<div class="tray__editor" id="pool-editor" role="tabpanel" aria-labelledby="pool-tab-${selected}" tabindex="-1">${line}<div class="tray__grid tray__grid--seq" id="pool-line-${selected}" role="list" aria-label="Порядок CUTS ${label}">${list.map((r,i)=>node(selected,r,i,list.length,'pool')).join('')}${socketKey(selected,list.length,'pool','CUT','Додати CUT у '+label)}</div><div class="tray__foot"><span class="print print--hint">${label} · ${list.length} CUTS · спільний для всіх профілів · порядок: перетягни, ⋯ або Shift ← / →</span>${key('Скинути','pool-reset','key--sm',(!dirty&&!state.poolError)||state.saving?'disabled':'')}</div></div>`;
  }
  function poolBlock(role,route,i,group){
-  const name=poolName(route),tag=group==='alternatives'?'li':'div',inherited=inheritedSlot(role,i,group),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',more=slotActionKey(role,i,group),fast=name==='free-fast';
+  const name=poolName(route),sequence=group==='alternatives'||group==='pool',inherited=inheritedSlot(role,i,group),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',more=slotActionKey(role,i,group),fast=name==='free-fast',size=source.freePools?.[name]?.length||0;
   const classes=['cut','cut--pool',fast&&'cut--pool-fast',more&&'cut--more',savedChain(role,group)[i]!==route&&!inherited&&'is-changed'].filter(Boolean).join(' ');
-  return `<${tag} class="${classes}" data-clip-key="${clipKey(role,route,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}">${group==='pool'||group==='alternatives'?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}<span class="cut__edge"></span><button type="button" class="cut__name" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(alias+poolNames[name]+(inherited?' · резерв успадковано з default':''))}" aria-label="Відкрити ${poolNames[name]}: спільний пул${inherited?' · успадковано з default':''}">${esc(alias)}${poolNames[name]}</button><span class="cut__meta"><span class="stack${fast?' stack--fast':''}" aria-hidden="true"></span><span>${source.freePools?.[name]?.length||0} CUTS · спільний</span></span>${more}</${tag}>`;
+  return `<div class="${classes}"${sequence?' role="listitem"':''} data-clip-key="${clipKey(role,route,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}"><span class="cut__edge"></span><button type="button" class="cut__name" data-edit="${esc(role)}" data-index="${i}" data-group="${group}"${alias||inherited?` title="${esc(alias+poolNames[name]+(inherited?' · резерв успадковано з default':''))}"`:''} aria-label="Відкрити ${poolNames[name]}: спільний пул, ${size} CUTS${inherited?' · успадковано з default':''}">${esc(alias)}${poolNames[name]}</button><span class="cut__meta"><span class="stack${fast?' stack--fast':''}" aria-hidden="true"></span><span>${size} CUTS · спільний</span></span>${more}</div>`;
  }
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){state.poolTab=b.dataset.poolTab;state.picker=null;state.cutTarget=null;state.armedCut=null;render();win.querySelector(`[data-pool-tab="${b.dataset.poolTab}"]`)?.focus({preventScroll:true});}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';render();}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
+ // FREE GOOD / FREE FAST are tabs of one editor: the drawer keeps its place, only the list and the counts change.
+ function selectPoolTab(name,focusTab=true){if(!poolNames[name])return;state.poolTab=name;state.picker=null;state.cutTarget=null;state.armedCut=null;state.editorMsg='';render();if(focusTab)win.querySelector(`[data-pool-tab="${name}"]`)?.focus({preventScroll:true});}
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){selectPoolTab(b.dataset.poolTab);}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';state.editorMsg='Пули скинуто до збережених';render();win.querySelector('#pool-editor')?.focus({preventScroll:true});}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
 
  function clipKey(role,r,i,group){return esc(group+'|'+role+'|'+r+'|'+chain(role,group).slice(0,i).filter(v=>v===r).length);}
  function historyStep(direction){if(state.saving)return;const value=editHistory.step(state.profile,direction);if(!value)return;profiles[state.profile]=value;ForgeTape.intent(direction<0?'undo':'edit');state.picker=null;state.opFeedback=direction<0?'Останню дію скасовано.':'Дію повторено.';render();win.querySelector(`[data-action=${direction<0?'undo':'redo'}]`)?.focus({preventScroll:true});}
@@ -155,24 +166,25 @@
  function agentTier(worker){return ({task:'Vibe GOOD',sonic:'Vibe FAST'})[worker]||'';}
  // An agent's lane key: ↳, native id and a printed sub-line (Vibe tier, file source, own list); LED blue = own list.
  function agentName(worker,own=false){const origin=agentSource(worker),sub=[agentTier(worker),origin&&origin+(agentInfo(worker)?.overrides?' · замінює штатного':''),own&&'власний список'].filter(Boolean).join(' · ');return `<span class="lane__label"><span class="lane__name">${esc(worker)}</span>${sub?`<span class="lane__sub">${esc(sub)}</span>`:''}</span>`;}
- function agentKey(worker,own=false,title=''){return `<div class="lane__key" title="${esc(title||worker)}"><span class="lane__idx" aria-hidden="true">↳</span>${agentName(worker,own)}${led(own,'blue',own?' title="Власний список агента"':'')}</div>`;}
- function agentRemove(worker){return !agentInfo(worker)&&Object.hasOwn(p().task.agentModelOverrides||{},worker)?key('Прибрати','','key--sm',`data-reset-agent="${esc(worker)}" aria-label="Прибрати перевизначення агента, якого немає у файлах: ${esc(worker)}" title="Агента немає серед штатних і файлів .omp/agents. Перевизначення лишилося в конфігурації."`):'';}
+ function agentKey(worker,own=false,title=''){return `<div class="lane__key"${title?` title="${esc(title)}"`:''}><span class="lane__idx" aria-hidden="true">↳</span>${agentName(worker,own)}${led(own,'blue')}</div>`;}
+ // An override for an agent that is in no file: a red-LED eject key in the lane's tool cluster, never a pill in the tape.
+ function agentRemove(worker){return !agentInfo(worker)&&Object.hasOwn(p().task.agentModelOverrides||{},worker)?key(led(true,'red')+'Прибрати','','key--sm key--danger',`data-reset-agent="${esc(worker)}" aria-label="Прибрати перевизначення агента, якого немає у файлах: ${esc(worker)}" title="Агента немає серед штатних і файлів .omp/agents. Перевизначення лишилося в конфігурації."`):'';}
  // A patch key replaces the old «До ролі ↗» link: it scrolls to the role's lane and blinks its LED.
- function patchKey(role,label,aria){return `<button type="button" class="key patch" data-agent-role="${esc(role)}" aria-label="${esc(aria)}" title="${esc(aria)}"><span class="key__cap"><span class="jack" aria-hidden="true"></span>${esc(label)}</span></button>`;}
+ function patchKey(role,label,aria){return `<button type="button" class="key patch" data-agent-role="${esc(role)}" aria-label="${esc(aria)}"><span class="key__cap"><span class="jack" aria-hidden="true"></span>${esc(label)}</span></button>`;}
  function agentLinkedTrack(worker){
   const alias=agentLink(worker),[role,effort]=alias.slice(1).split(':'),known=roleKeys.includes(role),retry=p().retry?.modelFallback!==false;
   const detail=known?`Основна${retry?' й резерви ролі':' · резерви вимкнено'}${effort?' · thinking '+effort:''}`:'Модель і резерви визначає OMP';
   const link=known?patchKey(role,alias,worker+': успадковує '+alias+' · '+detail+'. Редагувати роль '+role):`<span class="chip" title="${esc('Успадковує '+alias)}">${esc(alias)}</span>`;
   const own=known&&!effort?key('Власний список','','key--sm',`data-agent-copy="${esc(worker)}" aria-label="Створити власний список: ${esc(worker)}" title="Копіювати роль для окремого монтажу агента. Зміни ролі більше не впливатимуть на цей список."`):'';
   const reset=agentInfo(worker)?key('Типово в OMP','','key--sm',`data-reset-agent="${esc(worker)}" aria-label="Повернути типовий вибір OMP для агента: ${esc(worker)}"`):agentRemove(worker);
-  return `<div class="lane lane--inherit lane--link" data-agent="${esc(worker)}">${agentKey(worker,false,worker+' · успадковує '+alias)}<div class="lane__groove">${link}<span class="lane__note"><b>Успадковує ${esc(alias)}</b> · ${esc(detail)}</span><span class="lane__tools">${own}${reset}</span></div></div>`;
+  return `<div class="lane lane--inherit lane--link" data-agent="${esc(worker)}">${agentKey(worker,false)}<div class="lane__groove">${link}<span class="lane__note"><b>Успадковує ${esc(alias)}</b> · ${esc(detail)}</span><span class="lane__tools">${own}${reset}</span></div></div>`;
  }
  function agentListNote(worker){const values=agentValues(worker),alias=vibeAlias(worker),single=values.length===1&&!poolName(values[0]);return `Власний список${alias?' · основна з '+alias:''}${single&&!alias?' · резерви з default':' · CUTS за порядком'}${p().retry?.modelFallback===false?' · резерви вимкнено':''}`;}
  function agentDefaultTrack(worker){
   const info=agentInfo(worker),alias=agentModelAlias(info),role=alias.slice(1).split(':')[0],known=roleKeys.includes(role);
   const model=isCustomAgent(info)&&!info.model?'модель сесії':agentModelText(info)||'обрати CUT';
   const note=`<span class="lane__note" title="${esc(info?.description||'')}">${esc(shortText(info?.description||'Модель визначає OMP',140))}${isCustomAgent(info)?' · '+esc(agentModelText(info)):''}</span>`;
-  return `<div class="lane lane--inherit" data-agent-default="${esc(worker)}">${agentKey(worker,false,(info?.description||worker)+' · '+(agentModelText(info)||'Модель визначає OMP'))}<div class="lane__groove"><div class="leader" title="${esc((info?.description?info.description+' · ':'')+(agentModelText(info)||'Модель визначає OMP'))}"><b>Типово в OMP</b><small>· ${esc(model)}</small></div>${known?patchKey(role,alias.split(':')[0],worker+': редагувати роль '+role):''}${note}${socketKey(worker,0,'vibe','кандидат','Обрати CUT для агента: '+worker)}</div></div>`;
+  return `<div class="lane lane--inherit" data-agent-default="${esc(worker)}">${agentKey(worker,false)}<div class="lane__groove"><div class="leader"><b>Типово в OMP</b><small>· ${esc(model)}</small></div>${known?patchKey(role,alias.split(':')[0],worker+': редагувати роль '+role):''}${note}${socketKey(worker,0,'vibe','кандидат','Обрати CUT для агента: '+worker)}</div></div>`;
  }
  // «Агенти»: a printed subhead on the bed; the sync option is a latching key with an LED, not a web checkbox.
  function agentSectionHead(){const warn=source.agentWarnings?.length;return `<div class="subhead"><span class="silk">Агенти</span><span class="print">прив’язки до ролей або власні списки</span>${warn?`<span class="chip chip--warn" role="status" title="${esc(source.agentWarnings.join('\n'))}">пропущено файлів агентів: ${warn}</span>`:''}<span class="subhead__rule"></span><button type="button" class="key key--sm" data-sync-vibe aria-pressed="${!!state.syncVibe}" title="Після зміни резервів ролі оновлює власні списки агентів із початковим @role, які до зміни точно повторювали ці резерви. Списки з власними CUTS не змінюються. Успадковані ролі оновлюються завжди. Увімкнення саме по собі не змінює списків."><span class="key__cap">${led(state.syncVibe,'green')}Копіювати резерви після змін ролей</span></button></div>`;}
@@ -239,7 +251,6 @@
    if(state.profile===name)render();
   });
  }
- function modeStatus(raw){const plan=activePlan();return (plan?.data||(plan?.pending?plan.previous:null))?.statuses?.[raw]||{status:'unknown',reason:'Немає свіжого ліміту'};}
  function modeTag(role,group='role'){
   const v=modeView(role,group);if(!v?.paused?.length&&!v?.substituted)return '';
   const scope=modeScope(role,group),count=v.paused.length;
@@ -256,7 +267,7 @@
   const timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone,clockFormat=dateFormat({hour:'2-digit',minute:'2-digit',timeZone}),dayFormat=dateFormat({weekday:'short',day:'numeric',timeZone});
   const clock=at=>clockFormat.format(at),day=at=>dayFormat.format(at);
   const duration=resetCountdown(next,now).replace(/^↻ /,''),text=current?'До сприятливого':'Сприятливе ще',step=hours===24?4:hours===48?8:12;
-  const bars=[];for(let t=Math.floor(start/hour)*hour;t<end;t+=hour){const from=Math.max(t,start),to=Math.min(t+hour,end),p=peak(t);bars.push(`<i class="${p?'pk':''}${to<=now?' past':''}" style="--l:${pct((from-start)/span)}%;--w:${pct((to-from)/span)}%" title="${esc(day(from)+' '+clock(from)+' — '+clock(to)+(p?' · дороге вікно':' · сприятливе вікно'))}"></i>`);}
+  const bars=[];for(let t=Math.floor(start/hour)*hour;t<end;t+=hour){const from=Math.max(t,start),to=Math.min(t+hour,end),p=peak(t);bars.push(`<i class="${p?'pk':''}${to<=now?' past':''}" style="--l:${pct((from-start)/span)}%;--w:${pct((to-from)/span)}%"></i>`);}
   const ticks=Array.from({length:hours/step+1},(_,i)=>{const at=start+i*step*hour;return `<span style="left:${pct(i*step/hours)}%">${clock(at).slice(0,2)}</span>`;}).join('');
   const label=`DeepSeek: ${text} ${duration}. Сприятливі та дорогі часові вікна за тарифом DeepSeek, ${hours} годин, місцевий час.`;
   return `<div class="tariff" role="img" aria-label="${esc(label)}" title="${esc(`Тариф DeepSeek · ${hours} год · ${timeZone} · ${current?'сприятливе':'дороге'} з ${day(next)} ${clock(next)}. ${source.tariff?.note||''} Для тарифів DeepSeek з погодинними вікнами; конкретна ціна залежить від моделі та провайдера.`)}"><div class="tariff__head"><span><span class="tariff__dot${current?' is-peak':''}"></span>${text} <b>${esc(duration)}</b></span><span class="g-hint">▨ пік</span></div><div class="tariff__plot"><div class="tariff__bars">${bars.join('')}</div><span class="tariff__now" style="--x:${(pct((now-start)/span)/100).toFixed(4)}" title="зараз ${clock(now)}"></span></div><div class="tariff__axis">${ticks}</div></div>`;
@@ -274,7 +285,7 @@
  function modeChin(id){
   const settings=modeSettings();
   return [box('p/mode-slide',`<button type="button" class="slide" role="switch" data-profile-mode="${modeOff()?'deepseek':'no-deepseek'}" aria-checked="${!modeOff()}" aria-label="DeepSeek у профілі: ON — оригінал, OFF — заміни" title="${modeOff()?'Увімкнути DeepSeek · повернути на доріжки':'Вимкнути платний DeepSeek · FREE CUTS залишаються'}" ${state.saving?'disabled':''}>`,[leaf('p/mode-slide/face',SLIDE_FACE)]),
-   leaf('p/mode-keys',`<button type="button" class="key" data-action="mode-panel" aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives" title="Заміни DeepSeek · ${settings.alternatives.length} CUTS"><span class="key__cap">${led(modeOff(),'amber')}Заміни · <span class="rd" style="--rd:2ch">${settings.alternatives.length}</span></span></button>${key(SVG.refresh,'mode-refresh','key--sq','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни"'+(modeOff()?'':' disabled'))}`),
+   leaf('p/mode-keys',`<button type="button" class="key" data-action="mode-panel" aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives" aria-label="Заміни DeepSeek · ${settings.alternatives.length} CUTS"><span class="key__cap">${led(modeOff(),'amber')}Заміни · <span class="rd" style="--rd:2ch">${settings.alternatives.length}</span></span></button>${key(SVG.refresh,'mode-refresh','key--sq','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни"'+(modeOff()?'':' disabled'))}`),
    leaf(id+'/grow','<span class="strip__grow"></span>'),leaf(id+'/enc',hueEncoder(id,'DeepSeek',SCREEN_HUE.ds))];
  }
  // Problems that are not the DeepSeek mode's own line: preview blockers without a DeepSeek screen, outside edits
@@ -292,19 +303,19 @@
  }
  function alternativeCut(key,route,i){return node(key,route,i,modeList(key).length,'alternatives');}
 
+ // Replacements in the drawer: numbered CUTS in priority order (left to right, then the next row), the preview's
+ // state on one reserved line, and every CUT the preview had to skip marked in place with its reason.
+ function modeScopes(){const settings=modeSettings();return [['profile','Увесь профіль'],...roleKeys.map(r=>['role:'+r,r+' · '+(labels[r]||r)]),...workers().map(w=>['vibe:'+w,'Агент '+w])].map(([k,t])=>[k,t+(Object.hasOwn(settings.overrides,k)?' · власні':'')]);}
+ function modeSkipped(key=state.modeScope||'profile'){const plan=activePlan(),preview=plan?.data||(plan?.pending?plan.previous:null);return [...new Map((preview?.skipped||[]).filter(x=>key==='profile'||x.key===key).map(x=>[x.route+'|'+x.reason,x])).values()];}
  function modePanel(){
-  const key=state.modeScope||'profile',settings=modeSettings(),list=modeList(key),own=key!=='profile'&&Object.hasOwn(settings.overrides,key);
-  const scopes=[['profile','Увесь профіль'],...roleKeys.map(r=>['role:'+r,r+' · '+(labels[r]||r)]),...workers().map(w=>['vibe:'+w,'Агент '+w])];
-  const alias=key.startsWith('vibe:')?vibeAlias(key.slice(5)):'';
-  const plan=activePlan(),preview=plan?.data||(plan?.pending?plan.previous:null);
-  const skipped=(preview?.skipped||[]).filter(x=>key==='profile'||x.key===key),uniqueSkipped=[...new Map(skipped.map(x=>[x.route+'|'+x.reason,x])).values()];
-  const scope=`<div class="sel sel--sm"><label class="silk" for="mode-scope">Для</label><div class="sel__win"><select id="mode-scope">${scopes.map(([k,t])=>`<option value="${esc(k)}" ${key===k?'selected':''}>${esc(t)}${Object.hasOwn(settings.overrides,k)?' · власні':''}</option>`).join('')}</select><span class="sel__chev"></span></div></div><span class="print print--hint">${key==='profile'?'спільний порядок':own?'власний порядок':'порядок профілю'}</span>`;
-  const tools=`${own?`<button type="button" class="key key--sm" data-action="mode-reset-scope"><span class="key__cap">Як у профілі</span></button>`:''}<button type="button" class="key key--sm key--sq tray__close" data-action="mode-close" aria-label="Закрити налаштування замін"><span class="key__cap">${SVG.close}</span></button>`;
-  return `<section class="bay editor editor--mode" id="mode-alternatives" aria-label="Заміни DeepSeek" tabindex="-1">${editorHead('Заміни DeepSeek',scope,tools)}
-   <p class="print print--hint editor__note">OFF: цей список стає на місце першого платного DeepSeek у доріжці. FREE CUTS залишаються. ON повертає платний DeepSeek. Ліміти не впливають на заміни. Дублікати й несумісні CUTS пропускаються.${alias?' Агент бере основну модель з '+esc(alias)+'. Заміни налаштовуються в цій ролі.':''}</p>
-   ${alias?`<button type="button" class="key" data-action="mode-alias-scope" data-alias-scope="role:${esc(alias.slice(1))}"><span class="key__cap">Заміни для ${esc(alias)}</span></button>`:`<ol class="cut-grid" aria-label="Пріоритет CUTS замін">${list.map((route,i)=>alternativeCut(key,route,i)).join('')}${list.length>=12?'':socketKey(key,list.length,'alternatives','CUT','Додати CUT у заміни')}</ol><p class="print print--hint editor__note">${list.length?'Порядок: ⋯, перетягування або Shift + ← / →.':'Додай CUTS для режиму без DeepSeek.'} Звичайні резерви — після замін.</p>`}
-   <details class="editor__skipped" ${uniqueSkipped.length?'':'inert aria-hidden="true" style="visibility:hidden"'}><summary class="msg" data-s="warn">${led(true,'amber')}<span>Пропущено під час розрахунку · ${uniqueSkipped.length}</span></summary>${uniqueSkipped.map(x=>`<p class="print print--hint">${esc(cutTitle(x.route))} · ${esc(providerName(split(x.route).provider))} — ${esc(x.reason)}</p>`).join('')}</details>
-  </section>`;
+  const scopeKey=state.modeScope||'profile',settings=modeSettings(),list=modeList(scopeKey),own=scopeKey!=='profile'&&Object.hasOwn(settings.overrides,scopeKey);
+  const alias=scopeKey.startsWith('vibe:')?vibeAlias(scopeKey.slice(5)):'',plan=activePlan(),skipped=modeSkipped(scopeKey),dirty=diff(state.profile).length>0;
+  const issue=(plan?.data?.issues||[]).find(i=>scopeKey==='profile'||i.key===scopeKey);
+  const line=plan?.error?editorLine('bad',plan.error):issue?editorLine('bad',issue.key.replace('role:','')+': '+issue.message):state.editorMsg?editorLine('ok',state.editorMsg):plan?.pending?editorLine('warn','Розрахунок замін…'):skipped.length?editorLine('warn','Пропущено під час розрахунку · '+skipped.length,skipped.map(x=>cutTitle(x.route)+' — '+x.reason).join('\n')):editorLine(dirty?'warn':'ok',(modeOff()?'OFF · заміни на доріжках':'ON · заміни чекають OFF')+(dirty?' · не збережено':' · збережено'));
+  const scopeNote=scopeKey==='profile'?'спільний порядок профілю':own?'власний порядок':'порядок профілю';
+  const body=alias?`<div class="empty"><span class="empty__glyph" aria-hidden="true">@</span><span>Агент бере основну модель з <b>${esc(alias)}</b>. Заміни налаштовуються в цій ролі.</span><button type="button" class="key key--sm" data-action="mode-alias-scope" data-alias-scope="role:${esc(alias.slice(1))}"><span class="key__cap">Заміни для ${esc(alias)}</span></button></div>`
+   :`<div class="tray__grid tray__grid--seq" role="list" aria-label="Пріоритет CUTS замін · ${esc(scopeNote)}">${list.map((route,i)=>alternativeCut(scopeKey,route,i)).join('')}${list.length>=12?'':socketKey(scopeKey,list.length,'alternatives','CUT','Додати CUT у заміни')}</div>`;
+  return `<div class="tray__editor" id="mode-alternatives" role="region" aria-label="Заміни DeepSeek · ${esc(scopeNote)}" tabindex="-1">${line}${body}<div class="tray__foot"><span class="print print--hint">${esc(scopeNote)} · OFF ставить їх на місце першого платного DeepSeek · FREE лишаються · ліміти не впливають · дублікати й несумісні пропускаються · далі звичайні резерви</span>${own?key('Як у профілі','mode-reset-scope','key--sm'):''}</div></div>`;
  }
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b||state.saving)return;
@@ -328,7 +339,6 @@
  function short(id){return String(id).replaceAll('-',' ');}
  function cutTitle(route){const m=split(route);return ManaOperator.displayModelName(m.id,catalogMap.get(m.raw)?.name);}
  function deletedCut(route){return catalogMap.get(split(route).raw)?.status==='missing';}
- function cutIdentity(route,compact=false){const m=split(route),name=providerName(m.provider);return `${deletedCut(route)?'<span class="cut-deleted" title="Відсутній у провайдера" aria-label="DELETED — відсутній у провайдера">DELETED</span>':''}<span class="cut-provider ${compact?'provider-code':''}" title="${esc(name)}">${esc(compact?providerCode(m.provider):name)}</span>${deletedCut(route)?'':freeBadge(route)}`;}
  function aliasRole(alias){return String(alias||'').slice(1).split(':')[0];}
  // `@role` and `@role:effort` follow the role's primary; an unknown role stays visible as written.
  function resolveAlias(value,profile=p()){if(typeof value!=='string'||!value.startsWith('@'))return value;const [role,effort]=value.slice(1).split(':'),route=profile.modelRoles?.[role];return !route?value:effort&&!poolName(route)?split(route).raw+':'+effort:route;}
@@ -355,12 +365,10 @@
  }
  function options(value,raw){const m=catalogMap.get(raw);const levels=Array.isArray(m?.thinking)&&m.thinking.length?['',...new Set(['off',...m.thinking])]:m?.reasoning===false?['','off']:['','off','minimal','low','medium','high','xhigh','max'];if(value&&!levels.includes(value))levels.push(value);return levels.map(e=>`<option value="${esc(e)}" ${e===value?'selected':''}>${esc(e||'типово')}</option>`).join('');}
  // Thinking on the tape: a small detented selector (24px target); omitted where the role has no thinking.
- function thinkSelect(m,role,i,group,label){const id=group==='alternatives'&&String(role).startsWith('role:')?role.slice(5):role;if(group!=='vibe'&&group!=='pool'&&roleInfo(id)?.thinking===false)return '';return `<select class="cut__think" data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="${esc(label)}" title="Thinking · ${esc(m.effort||'типово')}">${options(m.effort,m.raw)}</select>`;}
+ function thinkSelect(m,role,i,group,label){const id=group==='alternatives'&&String(role).startsWith('role:')?role.slice(5):role;if(group!=='vibe'&&group!=='pool'&&roleInfo(id)?.thinking===false)return '';return `<select class="cut__think" data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="${esc(label)}">${options(m.effort,m.raw)}</select>`;}
  function profileOptions(){return profileKeys.map(k=>`<option value="${esc(k)}" ${k===state.profile?'selected':''}>${esc(prettyProfile(k))}</option>`).join('');}
  function providerName(id){return providerNames[id]||source.providers.find(v=>v.id===id)?.name||id;}
  function routeMatches(route){const m=split(route),model=catalogMap.get(m.raw);return !!state.query.trim()&&matchesQuery(state.query,m.id,model?.name,short(m.id));}
- function freeBadge(route){const m=catalogMap.get(split(route).raw);return m&&priceInfo(m).kind==='free'?'<span class="cut-free" aria-label="Безкоштовний CUT" title="Безкоштовний маршрут. Ліміти провайдера можуть діяти.">FREE</span>':'';}
- function slotClasses(route){return (isLocal(split(route).provider)?' gpu-slot':'')+(routeMatches(route)?' model-match':'')+(deletedCut(route)?' cut-is-deleted':'');}
  // Per-snapshot derived data: keyed by dataVersion (bumped by rebuild()), so a new snapshot or catalogue
  // never meets an old value and nothing has to be invalidated by hand.
  function priceInfo(m){const memo=priceMemo.get(m);if(memo?.version===dataVersion)return memo.info;const info=priceFor(m);priceMemo.set(m,{version:dataVersion,info});return info;}
@@ -373,7 +381,6 @@
   if(zero)return {kind:'unknown',label:'Тариф не надано',subscription};
   return {kind:subscription?'subscription':known?'paid':'unknown',label:known?numberFormat('en-US',{maximumFractionDigits:6}).format(c.input)+' / '+numberFormat('en-US',{maximumFractionDigits:6}).format(c.output):'Ціна невідома',subscription,variable:!!c?.timeBased};
  }
- function priceMarkup(m){const price=priceInfo(m);return `<span class="model-price ${price.kind}" title="${price.kind==='local'?'Власний GPU':price.kind==='free'?'Безкоштовний маршрут із нульовим тарифом у каталозі':price.kind==='unknown'?'Каталог не містить підтвердженого тарифу; нуль може означати невідому ціну':'Вхід / вихід · USD за 1 млн токенів. Для підписки це довідковий API-тариф.'}">${esc(price.label)}</span>${price.subscription?'<small class="price-note">Підписка<span class="api-rate-note"> · API-тариф</span></small>':price.variable?'<small class="price-note">Змінний тариф</small>':''}`;}
  function savedChain(role,group='role'){
   if(group==='pool')return poolOriginal[role];
   if(group==='alternatives')return original[state.profile].forgeMode.overrides[role]||original[state.profile].forgeMode.alternatives;
@@ -395,10 +402,10 @@
  const HEALTH_VIEW={local:['gpu','◆'],healthy:['ok','●'],risk:['low','△'],empty:['zero','∅'],unknown:['unk','?'],unavailable:['off','⊘']};
  // HEALTH is drawn in every CUT; .health-off on the deck or drawer hides the glyph and the bar, never FREE.
  function healthMarks(route){
-  if(poolName(route))return {glyph:'',bar:''};
+  if(poolName(route))return {glyph:'',bar:'',text:''};
   const h=opRouteHealth(route),[cls,glyph]=HEALTH_VIEW[h.kind]||HEALTH_VIEW.unknown,hp=h.remaining!=null?Math.max(.04,Math.min(1,h.remaining/100)):1;
-  const title='HEALTH: '+h.label+(h.remaining!=null?' · залишок '+num(h.remaining)+'%':'');
-  return {glyph:`<span class="hs hs--${cls}" title="${esc(title)}" aria-label="${esc(title)}">${glyph}</span>`,bar:`<span class="cut__hb hb--${cls}" style="--hp:${+hp.toFixed(3)}" aria-hidden="true"><i></i></span>`};
+  const text='HEALTH: '+h.label+(h.remaining!=null?' · залишок '+num(h.remaining)+'%':'');
+  return {text,glyph:`<span class="hs hs--${cls}" aria-hidden="true">${glyph}</span>`,bar:`<span class="cut__hb hb--${cls}" style="--hp:${+hp.toFixed(3)}" aria-hidden="true"><i></i></span>`};
  }
  // Middle truncation: the distinguishing tail (01 Free, v3, 14B, :free) stays; the head takes the ellipsis.
  function nameParts(name){
@@ -409,19 +416,25 @@
   const dash=text.match(/^(.{6,}?)(-(?:v?\d[\w.]*|free|pro|mini|max|lite|flash))$/i);
   return dash?[dash[1],dash[2]]:[text,''];
  }
- const nameMarkup=(name,prefix='')=>{const [head,tail]=nameParts(name);return `<span class="cut__head">${esc(prefix+head)}</span>${tail?`<span class="cut__tail">${esc(tail)}</span>`:''}`;};
+ // The shared namespace («DEMO · », «org/», «Vendor: ») gives way before the family, so «DEMO · Aurora 01 Free» and
+ // «DEMO · Swift 01 Free» shrink to «…Aurora 01 Free» / «…Swift 01 Free», never to the same «DEMO · … 01 Free».
+ function nameSpace(head){const text=String(head),m=text.match(/^(.{1,24}?(?: · | — | – |: |\/))(?=\S)/u);return m&&text.length-m[1].length>=3?[m[1].trimEnd(),text.slice(m[1].length)]:['',text];}
+ const nameMarkup=name=>{const [head,tail]=nameParts(name),[ns,family]=nameSpace(head);return `${ns?`<span class="cut__ns">${esc(ns)}</span>`:''}<span class="cut__head">${esc(family)}</span>${tail?`<span class="cut__tail">${esc(tail)}</span>`:''}`;};
  function freeRoute(route){const m=catalogMap.get(split(route).raw);return !!m&&priceInfo(m).kind==='free';}
  function laneIndex(role,group){const keys=group==='vibe'?workers():roleKeys;return Math.max(0,keys.indexOf(role));}
  // One CUT on every surface: lane, editors, drawer. A lane CUT is a container whose name is the <button data-edit>.
  function node(role,r,i,n,group='role'){
   if(poolName(r))return poolBlock(role,r,i,group);
-  const m=split(r),before=savedChain(role,group)[i],sequence=group==='alternatives'||group==='pool',tag=group==='alternatives'?'li':'div';
+  const m=split(r),before=savedChain(role,group)[i],sequence=group==='alternatives'||group==='pool';
   const replacement=temporarySlot(role,i,group),inherited=inheritedSlot(role,i,group),deleted=deletedCut(r),free=!deleted&&freeRoute(r),warn=!deleted&&routeWarning(m.raw);
+  const skipped=group==='alternatives'?modeSkipped(role).filter(x=>split(x.route).raw===m.raw):[];
   const more=slotActionKey(role,i,group),health=healthMarks(r),title=cutTitle(r),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',provider=providerName(m.provider);
-  const classes=['cut',free&&'cut--free',more&&'cut--more',deleted&&'cut--deleted',before!==r&&!inherited&&'is-changed',replacement&&'is-replaced',routeMatches(r)&&'is-match'].filter(Boolean).join(' ');
-  const hint=r+(inherited?' · резерв успадковано з default':before!==r?(before?' · До зміни: '+before:' · Новий CUT'):'');
-  const label=`Змінити CUT ${i+1}, ${group==='pool'?poolNames[role]:role}: ${alias}${title} · ${provider}${m.effort?' · thinking '+m.effort:''}${free?' · FREE':''}${inherited?' · успадковано з default':''}${deleted?' · DELETED — відсутній у провайдера':''}${replacement?' · заміна DeepSeek':''}`;
-  return `<${tag} class="${classes}" data-p="${providerSlot(m.provider)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-before="${esc(before!==r?before:'')}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}"${group==='alternatives'?` title="${esc(modeStatus(m.raw).reason)}"`:''}>${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}<span class="cut__edge"></span><button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(alias+title+'\n'+hint)}" aria-label="${esc(label)}">${nameMarkup(title,alias)}</button><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}" title="${esc(provider)}">${esc(providerCode(m.provider))}</b>${thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`)}<span class="stamp stamp--repl cut__repl" title="Замість DeepSeek">⇄ заміна</span>${warn?'<span class="hs hs--low" title="Маршрут зараз недоступний: провайдер вимкнений або прострочений">!</span>':''}${deleted?'<span class="stamp stamp--del" title="Відсутній у провайдера">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free" title="Безкоштовний маршрут. Ліміти провайдера можуть діяти.">FREE</span>':''}${more}${health.bar}</${tag}>`;
+  const classes=['cut',free&&'cut--free',more&&'cut--more',deleted&&'cut--deleted',before!==r&&!inherited&&'is-changed',replacement&&'is-replaced',skipped.length&&'is-skipped',routeMatches(r)&&'is-match'].filter(Boolean).join(' ');
+  const notes=[inherited?'резерв успадковано з default':before!==r?(before?'до зміни: '+before:'новий CUT'):'',warn?'маршрут зараз недоступний: провайдер вимкнений або прострочений':'',deleted?'DELETED — відсутній у провайдера':'',...skipped.map(x=>'пропущено'+(x.key&&x.key!==role?' у '+x.key.replace(/^(role|vibe):/,''):'')+': '+x.reason)].filter(Boolean);
+  // One tooltip per CUT: the full name (the visible one may be shortened), the exact route, HEALTH and changes.
+  const tip=[alias+title+' · '+provider,r,health.text,...notes].filter(Boolean).join('\n');
+  const label=`Змінити CUT ${i+1}, ${group==='pool'?poolNames[role]:role}: ${alias}${title} · ${provider}${m.effort?' · thinking '+m.effort:''}${free?' · FREE':''}${inherited?' · успадковано з default':''}${deleted?' · DELETED — відсутній у провайдера':''}${replacement?' · заміна DeepSeek':''}${skipped.length?' · пропущено':''}${health.text?' · '+health.text:''}`;
+  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-before="${esc(before!==r?before:'')}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}<span class="cut__edge"></span><button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title)}</button><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`)}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl">⇄ заміна</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${more}${health.bar}</div>`;
  }
  function stepCount(){
   if(renderCache?.steps!=null)return renderCache.steps;
@@ -430,22 +443,22 @@
   const steps=Math.max(8,1+Math.max(...roleKeys.map(r=>count(r)),...workers().map(r=>count(r,'vibe'))));if(renderCache)renderCache.steps=steps;return steps;
  }
  // A recessed jack for a new CUT; it glows while a CUT is dragged and stays pinned to the right of a long lane.
- function socketKey(role,index,group,word,label){return `<button type="button" class="socket" data-edit="${esc(role)}" data-index="${index}" data-group="${group}" aria-label="${esc(label)}" title="${esc(label)}"><span class="socket__plus" aria-hidden="true"></span>${esc(word)}</button>`;}
+ function socketKey(role,index,group,word,label){return `<button type="button" class="socket" data-edit="${esc(role)}" data-index="${index}" data-group="${group}" aria-label="${esc(label)}"><span class="socket__plus" aria-hidden="true"></span>${esc(word)}</button>`;}
  function laneKey(role,index,own){
   const inheritsStandard=state.profile!=='standard'&&!Object.hasOwn(source.presets[state.profile]?.modelRoles||{},role)&&own;
-  const title=inheritsStandard?'Основна модель успадкована зі Standard':role+' · '+(labels[role]||role)+(own?' · власні CUTS':' · типово в OMP');
-  return `<button type="button" class="lane__key" data-focus-role="${esc(role)}"${role===state.role?' aria-current="true"':''} title="${esc(title)}" aria-label="${esc((labels[role]&&labels[role]!==role?role+' · '+labels[role]:role)+(own?'':' · типово в OMP'))}"><span class="lane__idx">${String(index+1).padStart(2,'0')}</span><span class="lane__name">${esc(role)}</span>${led(own,'green')}</button>`;
+  const title=[labels[role]&&labels[role]!==role?role+' · '+labels[role]:'',inheritsStandard?'основна модель успадкована зі Standard':''].filter(Boolean).join(' · ');
+  return `<button type="button" class="lane__key" data-focus-role="${esc(role)}"${role===state.role?' aria-current="true"':''}${title?` title="${esc(title)}"`:''} aria-label="${esc((labels[role]&&labels[role]!==role?role+' · '+labels[role]:role)+(own?'':' · типово в OMP'))}"><span class="lane__idx">${String(index+1).padStart(2,'0')}</span><span class="lane__name">${esc(role)}</span>${led(own,'green')}</button>`;
  }
  // A role lane: lane key, then the tape; an unconfigured role is leader tape («Типово в OMP»), not a CUT.
  function graphRow(role,index,group='role'){
   const list=chain(role,group),agent=group==='vibe',automatic=!agent&&!list.length;
-  const keyHtml=agent?agentKey(role,true,role+' · '+agentListNote(role)+(agentInfo(role)?'':' · немає у файлах агентів')):laneKey(role,index,!automatic);
-  const tape=automatic?`<div class="leader" title="Глобальні налаштування й автоматичний вибір OMP"><b>Типово в OMP</b><small>· обрати CUT</small></div>`:list.map((r,i)=>node(role,r,i,list.length,group)).join('');
+  const keyHtml=agent?agentKey(role,true,agentListNote(role)+(agentInfo(role)?'':' · немає у файлах агентів')):laneKey(role,index,!automatic);
+  const tape=automatic?`<div class="leader"><b>Типово в OMP</b><small>· обрати CUT</small></div>`:list.map((r,i)=>node(role,r,i,list.length,group)).join('');
   const word=agent?'кандидат':automatic?'основна':'резерв';
-  return `<div class="lane${automatic?' lane--inherit':''}" data-role="${esc(role)}" data-lane-group="${group}">${keyHtml}<div class="lane__groove">${modeTag(role,group)}${tape}${agent?agentRemove(role):''}${socketKey(role,list.length,group,word,(agent?'Додати кандидата':automatic?'Обрати основний CUT':'Додати резерв')+': '+role)}</div></div>`;
+  return `<div class="lane${automatic?' lane--inherit':''}" data-role="${esc(role)}" data-lane-group="${group}">${keyHtml}<div class="lane__groove">${modeTag(role,group)}${tape}${socketKey(role,list.length,group,word,(agent?'Додати кандидата':automatic?'Обрати основний CUT':'Додати резерв')+': '+role)}${agent&&agentRemove(role)?`<span class="lane__tools">${agentRemove(role)}</span>`:''}</div></div>`;
  }
  function agentTrack(worker,i){return !agentValues(worker).length&&agentInfo(worker)?agentDefaultTrack(worker):agentLink(worker)?agentLinkedTrack(worker):graphRow(worker,i,'vibe');}
- function poolActionContext(){return state.view==='profiles'&&state.poolPanel;}
+ function poolActionContext(){return !!state.poolPanel;}
  // Transport on the drawer front: Undo / Redo / save state / Зберегти. The scope is printed when an editor owns it.
  function transportParts(){
   const pool=poolActionContext(),h=editHistory.available(pool?'@free-pools':state.profile),dirty=pool?poolsDirty():state.changes,scope=pool?'пули':state.view==='profiles'&&state.modePanel?'заміни':'';
@@ -458,9 +471,9 @@
    undo:`<button type="button" class="key key--sq" data-action="${pool?'pool-undo':'undo'}" aria-label="Скасувати зміну: ${esc(area)}" title="Скасувати · ⌘/Ctrl Z" ${!h.undo||state.saving?'disabled':''}><span class="key__cap">${SVG.undo}</span></button>`,
    redo:`<button type="button" class="key key--sq" data-action="${pool?'pool-redo':'redo'}" aria-label="Повторити зміну: ${esc(area)}" title="Повторити · ⌘/Ctrl Shift Z" ${!h.redo||state.saving?'disabled':''}><span class="key__cap">${SVG.redo}</span></button>`,
    state:`<div class="transport__state" role="status" aria-live="polite" title="${esc(text+' · '+note)}"><b>${led(true,state.saving?'amber':dirty?(blocked?'red':'amber'):'green')}<span>${esc(text)}</span></b><small>${esc(note)}</small></div>`,
-   save:`<button type="button" class="key key--action" data-action="${pool?'pool-save':'save'}" aria-label="${pool?'Зберегти пули':'Зберегти профіль '+esc(prettyProfile(state.profile))}" title="Зберегти · ⌘/Ctrl S" ${!dirty||state.saving||blocked?'disabled':''}><span class="key__cap">Зберегти</span></button>`};
+   save:`<button type="button" class="key key--action" data-action="${pool?'pool-save':'save'}" aria-label="${pool?'Зберегти пули':'Зберегти профіль '+esc(prettyProfile(state.profile))}" title="⌘/Ctrl S" ${!dirty||state.saving||blocked?'disabled':''}><span class="key__cap">Зберегти${pool?'<span class="key__more"> пули</span>':''}</span></button>`};
  }
- function slotActionKey(role,index,group){return chain(role,group).length>1||group==='pool'||group==='alternatives'||poolName(chain(role,group)[index])||temporarySlot(role,index,group)?`<button type="button" class="cut__more" data-slot-actions="${esc(role)}" data-index="${index}" data-group="${group}" aria-haspopup="menu" aria-expanded="false" aria-label="Дії з CUT: ${esc(role)}, слот ${index+1}" title="Порядок / дії з CUT">⋯</button>`:'';}
+ function slotActionKey(role,index,group){return chain(role,group).length>1||group==='pool'||group==='alternatives'||poolName(chain(role,group)[index])||temporarySlot(role,index,group)?`<button type="button" class="cut__more" data-slot-actions="${esc(role)}" data-index="${index}" data-group="${group}" aria-haspopup="menu" aria-expanded="false" aria-label="Дії з CUT: ${esc(role)}, слот ${index+1}" title="Дії з CUT">⋯</button>`:'';}
  // Монтаж: one deck pocket. Tools (pool keys, Пули, search), notices, editors, ruler, the lanes (a run of
  // identical inherited lanes folds into one printed row), agents, legend. Each lane and each agent is its own
  // region, so an edit, Undo or a preview response replaces only the rows whose CUTS changed. HEALTH and search
@@ -470,7 +483,6 @@
   return [box('p/deck',deckOpen(),[
    box('p/tools','<div class="deck__tools">',[leaf('p/pools',poolShelf()),leaf('p/role-search',roleSearch())]),
    leaf('p/notices',deckNotices(ds)),
-   leaf('p/pool-editor',poolEditor()),leaf('p/mode-panel',state.modePanel?modePanel():''),
    leaf('p/ruler',rulerMarkup()),
    box('p/body',`<div class="deck__body${pending?' is-pending':''}"${pending?' aria-busy="true"':''}>`,[laneGraph(),leaf('p/agents-head',agentSectionHead()),agentList()]),
    leaf('p/legend',legendMarkup())
@@ -478,7 +490,7 @@
  }
  // The deck's and the drawer's opening tags carry HEALTH, search and armed states; flipping them patches attributes only.
  function deckOpen(){return `<section class="bay deck${state.health?'':' health-off'}${state.query.trim()?' is-searching':''}${state.armedCut?' is-armed':''}" id="profile-tracks" aria-label="Монтаж">`;}
- function trayOpen(){return `<section class="tray${state.cuts?' is-open':''}${state.armedCut?' is-armed':''}${state.health?'':' health-off'}" id="cuts-collection" aria-label="Колекція CUTS">`;}
+ function trayOpen(){const mode=drawerMode();return `<section class="tray${drawerShown()?' is-open':''}${mode==='cuts'?'':' tray--editor'}${mode==='form'?' tray--form':''}${state.armedCut?' is-armed':''}${state.health?'':' health-off'}" id="cuts-collection"${mode==='form'?' role="dialog" aria-modal="true" aria-labelledby="tray-form-title"':` aria-label="${mode==='pool'?'Пули':mode==='alternatives'?'Заміни DeepSeek':'Колекція CUTS'}"`}>`;}
  function roleSearch(){return `<label class="search">${SVG.search}<input id="role-query" type="search" value="${esc(state.query)}" placeholder="Підсвітити CUT на плівці" aria-label="Підсвітити CUT на плівці" autocomplete="off"></label>`;}
  function rulerMarkup(){const steps=Math.min(stepCount(),12);return `<div class="ruler" aria-hidden="true"><span class="silk">Доріжка / роль</span><div class="ruler__cols"><span>Основна</span>${Array.from({length:steps-1},(_,i)=>`<span>Резерв ${i+1}</span>`).join('')}</div></div>`;}
  // The printed legend at the bottom of the deck; HEALTH entries hide with the switch (CSS), so it never re-renders for it.
@@ -516,32 +528,44 @@
   const mine=myProviderIds(),disabled=new Set(p().disabledProviders||[]);
   return catalog.filter(m=>acceptsRoleModel(x.role,x.group,m)&&(x.group!=='pool'||ManaOperator.isFreeModel(m))&&(x.group!=='alternatives'||!deepseek(m.provider+'/'+m.id))&&m.status!=='missing'&&!disabled.has(m.provider)&&!source.providers.find(v=>v.id===m.provider)?.expired&&(x.scope==='all'||mine.has(m.provider)));
  }
- function pickerRow(model,current=false){
-  const x=state.picker,r=model.provider+'/'+model.id,used=chain(x.role,x.group).some(v=>split(v).raw===r);
-  return `<button type="button" class="picker-row collection-cut cut-surface ${current?'is-current':''} ${deletedCut(r)?'cut-is-deleted':''} ${isLocal(model.provider)?'gpu-option':''}" data-pick="${esc(r)}" data-cut-route="${esc(r)}" data-health-route="${esc(r)}" aria-pressed="${current}" aria-label="${esc(cutTitle(r)+' · '+r)}" title="${esc(r)}"><span class="cut-hole" aria-hidden="true"></span><span class="picker-detail"><strong class="cut-title">${esc(cutTitle(r))}</strong><small class="cut-meta">${cutIdentity(r)}${current?' · Поточний CUT':used?' · На доріжці':''}${routeWarning(r)?' · Потребує уваги':''}</small></span>${isLocal(model.provider)?'<span class="gpu-badge">GPU</span>':''}</button>`;
- }
-
- // Picker: a CUT toolbar is one region; the chooser keeps its search field while only its results change.
+ // MENUS — small recessed trays with labelled keys of the panel's shape (DESIGN «Меню»). The ⋯ CUT tools are a
+ // role=menu (arrows, Home/End, Escape returns to ⋯); the quick pick is a dialog that shows the current CUT first and
+ // picks with one tap. Both carry [data-picker]; on a phone they are sheets at the bottom of the screen.
+ function pickerTitle(x){return (x.group==='alternatives'?'Заміни · '+(x.role==='profile'?'профіль':x.role.split(':')[1]):x.group==='pool'?poolNames[x.role]:x.group==='vibe'?'агент '+x.role:x.role)+' · '+(x.group==='alternatives'||x.group==='pool'?String(x.index+1).padStart(2,'0'):x.index===0?'основна':'резерв '+x.index);}
+ const MENU_CLOSE=label=>`<button type="button" class="key key--sm key--sq" data-action="picker-close" aria-label="${esc(label)}" title="Закрити · Esc"><span class="key__cap">${SVG.close}</span></button>`;
  function pickerMarkup(){
   const x=state.picker;if(!x)return leaf('picker','');
-  const list=chain(x.role,x.group),current=list[x.index];
-  const head=`<div class="picker-top"><strong>${esc(x.group==='alternatives'?'Заміни · '+(x.role==='profile'?'профіль':x.role.split(':')[1]):x.group==='vibe'?'Агент '+(x.role):x.role)} · ${x.group==='alternatives'?x.index+1:x.index===0?'основна':'резерв '+x.index}</strong>${tool('×','picker-close','icon-only','aria-label="Закрити вибір"')}</div>`;
+  const list=chain(x.role,x.group),current=list[x.index],pos=`style="top:${x.top}px;left:${x.left}px"`;
   if(x.actionsOnly){
-   const sequence=x.group==='alternatives'||x.group==='pool',isPool=poolName(current),canRemove=sequence||x.index>0||isPool&&list.length>1,waiting=pickerActionsPending();
-   return leaf('picker',`<section class="picker cut-tools" role="toolbar" tabindex="-1" aria-busy="${waiting}" aria-label="Дії з CUT ${x.index+1}: ${esc(x.role)}" style="top:${x.top}px;left:${x.left}px">${list.length>1?`<span class="cut-move-keys" role="group" aria-label="Порядок CUT"><button type="button" class="cut-key" data-action="move-node" data-direction="-1" ${waiting||x.index===0?'disabled':''} aria-label="Перемістити CUT раніше"><span aria-hidden="true">←</span><b>Раніше</b></button><button type="button" class="cut-key" data-action="move-node" data-direction="1" ${waiting||x.index===list.length-1?'disabled':''} aria-label="Перемістити CUT пізніше"><b>Пізніше</b><span aria-hidden="true">→</span></button></span>`:''}${!sequence&&temporarySlot(x.role,x.index,x.group)?'<button type="button" class="cut-key" data-action="make-permanent" '+(waiting?'disabled':'')+'><span aria-hidden="true">●</span><b>Закріпити</b></button>':''}${!sequence&&!isPool&&x.index>0?'<button type="button" class="cut-key" data-action="promote-node" '+(waiting?'disabled':'')+'><span aria-hidden="true">▰</span><b>Основна</b></button>':''}${isPool?tool('Замінити','replace-pool','cut-key',waiting?'disabled':''):''}${canRemove?'<button type="button" class="cut-key cut-eject" data-action="remove-node" '+(waiting?'disabled':'')+'><span aria-hidden="true">⏏</span><b>Прибрати</b></button>':''}<button type="button" class="cut-key cut-tools-close" data-action="picker-close" aria-label="Закрити дії з CUT">×</button></section>`);
+   const sequence=x.group==='alternatives'||x.group==='pool',isPool=poolName(current),canRemove=sequence||x.index>0||isPool&&list.length>1,waiting=pickerActionsPending(),off=waiting?' disabled':'';
+   const item=(cap,action,attr='',cls='')=>`<button type="button" class="key key--menu${cls}" role="menuitem" data-action="${action}"${attr}${off}><span class="key__cap">${cap}</span></button>`;
+   const rows=[];
+   if(!sequence&&!isPool&&x.index>0)rows.push(item(led(true,'green')+'Основна','promote-node'));
+   if(!sequence&&temporarySlot(x.role,x.index,x.group))rows.push(item(led(true,'amber')+'Закріпити','make-permanent'));
+   if(list.length>1){rows.push(item('← Раніше<span class="key__hint">⇧←</span>','move-node',' data-direction="-1"'+(x.index===0?' disabled':'')));rows.push(item('Пізніше →<span class="key__hint">⇧→</span>','move-node',' data-direction="1"'+(x.index===list.length-1?' disabled':'')));}
+   if(isPool)rows.push(item('Замінити пул…','replace-pool'));
+   if(canRemove)rows.push((rows.length?'<div class="menu__sep" role="separator"></div>':'')+item(led(true,'red')+'Прибрати','remove-node','',' key--danger'));
+   const m=current&&!isPool?split(current):null,think=m&&thinkSelect(m,x.role,x.index,x.group,'');
+   const thinking=think?`<div class="menu__row">${selWin('picker-effort','Thinking',m.effort,[...options(m.effort,m.raw).matchAll(/value="([^"]*)"[^>]*>([^<]*)</g)].map(o=>[o[1],o[2]]),'sel--sm',off)}</div>`:'';
+   return leaf('picker',`<div class="menu menu--tools" data-picker role="menu" aria-label="Дії з CUT · ${esc(pickerTitle(x))}" aria-busy="${waiting}" ${pos}><div class="menu__head"><span class="silk">${esc(pickerTitle(x))}</span>${MENU_CLOSE('Закрити дії з CUT')}</div><div class="menu__bed">${rows.join('')||'<p class="menu__note">Немає дій для цього CUT</p>'}</div>${thinking}${waiting?'<p class="menu__note">Чекає розрахунку замін…</p>':''}</div>`);
   }
-  return box('picker',`<section class="picker quick-picker" role="dialog" tabindex="-1" aria-label="${current?'Заміна':'Додавання'} CUT" style="top:${x.top}px;left:${x.left}px">`,[leaf('picker/head',`${head}${x.group==='vibe'&&agentInfo(x.role)&&agentValues(x.role).length?tool('Типово в OMP','reset-agent','role-reset','aria-label="Повернути типовий вибір OMP для агента: '+esc(x.role)+'"'):''}${x.group==='role'&&roleInfo(x.role)&&p().modelRoles[x.role]?tool('Типово в OMP','reset-role','role-reset','aria-label="Повернути типовий вибір OMP: '+esc(x.role)+'"'):''}`),leaf('picker/search',pickerSearch()),leaf('picker/hints',`${x.scope==='all'?'<p class="picker-hint">Доступ залежить від підключення провайдера.</p>':''}${x.group==='vibe'&&x.index===0&&vibeAlias(x.role)?`<p class="picker-hint">Замість ${esc(vibeAlias(x.role))} стане власний CUT агента · роль не зміниться</p>`:''}`),leaf('picker/results',pickerResults())]);
+  const reset=x.group==='vibe'&&agentInfo(x.role)&&agentValues(x.role).length?key('Типово в OMP','reset-agent','key--sm',`aria-label="Повернути типовий вибір OMP для агента: ${esc(x.role)}"`):x.group==='role'&&roleInfo(x.role)&&p().modelRoles[x.role]?key('Типово в OMP','reset-role','key--sm',`aria-label="Повернути типовий вибір OMP: ${esc(x.role)}"`):'';
+  const results=leaf('picker/results',pickerResults());
+  return box('picker',`<div class="menu menu--pick" data-picker role="dialog" aria-label="${current?'Заміна':'Додавання'} CUT · ${esc(pickerTitle(x))}" ${pos}>`,[box('picker/head','<div class="menu__head">',[leaf('picker/title',`<span class="silk">${current?'Заміна':'Додати'} · ${esc(pickerTitle(x))}</span>`),leaf('picker/count',pickerCount()),leaf('picker/keys',`${reset}${MENU_CLOSE('Закрити вибір')}`)]),leaf('picker/search',pickerSearch()),leaf('picker/hints',`${x.scope==='all'?'<p class="menu__note">Весь каталог · доступ залежить від підключення провайдера</p>':''}${x.group==='vibe'&&x.index===0&&vibeAlias(x.role)?`<p class="menu__note">Замість ${esc(vibeAlias(x.role))} стане власний CUT агента · роль не зміниться</p>`:''}`),results]);
  }
- function pickerSearch(){const x=state.picker,ids=[...myProviderIds()].sort((a,b)=>collate(providerName(a),providerName(b)));return `<div class="quick-search"><label class="search">${SVG.search}<input id="picker-search" type="search" placeholder="Знайти CUT…" value="${esc(x.query)}" aria-label="Знайти CUT" aria-controls="picker-results" autocomplete="off"></label>${opSelect('picker-provider','EDITION',x.scope==='all'?'*':x.provider,[['all','Мої'],...ids.map(id=>[id,providerName(id)]),['*','Весь каталог']])}</div>`;}
+ // How many CUTS the search leaves: a fixed-width readout in the menu's head (the field itself is never rebuilt).
+ function pickerCount(){return `<span class="menu__count"><span class="rd" style="--rd:3ch">${pickerResults.count??0}</span> CUTS</span>`;}
+ function pickerSearch(){const x=state.picker,ids=[...myProviderIds()].sort((a,b)=>collate(providerName(a),providerName(b)));return `<div class="menu__search"><label class="search">${SVG.search}<input id="picker-search" type="search" placeholder="CUT або провайдер" value="${esc(x.query)}" aria-label="Знайти CUT" aria-controls="picker-results" autocomplete="off"></label>${selWin('picker-provider','Провайдер',x.scope==='all'?'*':x.provider,[['all','Мої провайдери'],...ids.map(id=>[id,providerName(id)]),['*','Весь каталог']])}</div>`;}
  function pickerResults(){
-  const x=state.picker,current=chain(x.role,x.group)[x.index],m=current?split(current):null;
-  const pool=pickerModels(x),q=x.query.trim(),words=queryWords(q),favs=new Set(state.favs),inProfile=new Set([...Object.values(p().modelRoles),...Object.values(p().retry.fallbackChains).flat()].map(v=>split(v).raw));
+  const x=state.picker,list=chain(x.role,x.group),current=list[x.index],m=current?split(current):null;
+  const pool=pickerModels(x),q=x.query.trim(),words=queryWords(q),favs=new Set(state.favs),inProfile=new Set([...Object.values(p().modelRoles),...Object.values(p().retry.fallbackChains).flat()].map(v=>split(v).raw)),used=new Set(list.map(v=>split(v).raw));
   const found=pool.filter(a=>(x.provider==='all'||x.provider===a.provider)&&matchesWords(words,searchKey(a).pick));
   const selected=m?(catalogMap.get(m.raw)||{...m,name:short(m.id)}):null;
   if(selected&&!found.some(a=>a.provider+'/'+a.id===m.raw)&&(!q||matchesQuery(q,selected.name,selected.id,selected.provider))&&(x.provider==='all'||x.provider===selected.provider))found.unshift(selected);
   found.sort((a,b)=>Number(b.provider+'/'+b.id===m?.raw)-Number(a.provider+'/'+a.id===m?.raw)||Number(inProfile.has(b.provider+'/'+b.id))-Number(inProfile.has(a.provider+'/'+a.id))||Number(favs.has(b.provider+'/'+b.id))-Number(favs.has(a.provider+'/'+a.id)));
-  const shown=found.slice(0,x.limit);
-  return `<div class="picker-results" id="picker-results" data-filter-key="${esc(JSON.stringify([x.role,x.group,x.query,x.provider,x.scope]))}">${shown.length?shown.map(a=>pickerRow(a,a.provider+'/'+a.id===m?.raw)).join(''):'<div class="picker-empty">Збігів немає</div>'}${found.length>shown.length?tool('Ще '+(found.length-shown.length),'picker-more','picker-more'):''}</div>`;
+  const shown=found.slice(0,x.limit),filterKey=esc(JSON.stringify([x.role,x.group,x.query,x.provider,x.scope]));pickerResults.count=found.length;
+  const rows=shown.map(a=>{const r=a.provider+'/'+a.id;return drawerCut(a,{current:r===m?.raw,used:r!==m?.raw&&used.has(r)});}).join('');
+  return `<div class="menu__list" id="picker-results" role="group" aria-label="CUTS · ${found.length}" data-filter-key="${filterKey}">${rows||`<div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${q?`Нічого не знайдено за «<b>${esc(q)}</b>»`:'Немає доступних CUTS'}</span>${q?'<button type="button" class="key key--sm" data-action="picker-clear"><span class="key__cap">Очистити</span></button>':''}</div>`}${found.length>shown.length?`<div class="tray__more">${key('Ще '+(found.length-shown.length),'picker-more','key--sm')}</div>`:''}</div>`;
  }
 
  // Only real controls take focus; an automatic lane's wrapper carries the same data attributes.
@@ -550,7 +574,8 @@
   const target=[...win.querySelectorAll(`button[data-edit="${CSS.escape(x.role)}"][data-index="${index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);
   target?.focus({preventScroll:true});return !!target;
  }
- function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(restore&&x)pickerFocus(x);}
+ // Focus goes back to what opened the menu: the ⋯ key for CUT tools, the CUT (or socket) for the quick pick.
+ function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(!restore||!x)return;const more=x.actionsOnly&&[...win.querySelectorAll(`[data-slot-actions="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);if(more)more.focus({preventScroll:true});else pickerFocus(x);}
  // A changed OFF profile waits for its projection; a failed preview shows the real chain instead.
  function projectionPending(){if(!modeOff()||!diff(state.profile).length)return false;const plan=activePlan();return !plan?.data&&!plan?.error;}
  function pickerActionsPending(){const x=state.picker;return !!(x&&x.group!=='alternatives'&&x.group!=='pool'&&projectionPending());}
@@ -560,41 +585,44 @@
   [list[x.index],list[to]]=[list[to],list[x.index]];if(setChain(x.role,list,x.group,{moved:to}))x.index=to;x.focusDirection=direction;render();
   focusPickerMove(direction);
  }
- function focusPickerMove(direction){(win.querySelector(`.cut-tools [data-action=move-node][data-direction="${direction}"]:not(:disabled)`)||win.querySelector('.cut-tools [data-action=move-node]:not(:disabled)')||win.querySelector('.cut-tools'))?.focus({preventScroll:true});}
+ function focusPickerMove(direction){(win.querySelector(`.menu--tools [data-action=move-node][data-direction="${direction}"]:not(:disabled)`)||win.querySelector('.menu--tools [data-action=move-node]:not(:disabled)')||win.querySelector('.menu--tools [role=menuitem]:not(:disabled)'))?.focus({preventScroll:true});}
 
  function notify(s){state.toast=s;render();clearTimeout(timer);timer=setTimeout(()=>{state.toast='';paintRegions([leaf('toast','')]);},2700);}
  function openPicker(role,index,group,el,actionsOnly=false){
   if(!actionsOnly&&poolName(chain(role,group)[index])){state.poolTab=poolName(chain(role,group)[index]);editTray('pool',true,el);return;}
   if(group!=='pool')state.poolPanel=false;
   if((group||'role')==='role')state.role=role;
-  if(!actionsOnly&&Number(index)>=chain(role,group).length&&group!=='alternatives'&&group!=='pool'&&!(Number(index)===0&&((group||'role')==='role'&&!p().modelRoles[role]||group==='vibe'&&!agentValues(role).length))){state.cuts=true;state.cutTarget={role,index:Number(index),group:group||'role'};render();(coarsePointer()?win.querySelector('.tray [data-cut]')||win.querySelector('#cuts-resize'):win.querySelector('#cut-query'))?.focus({preventScroll:true});return;}
+  // A lane socket opens the collection with that place as its target; an editor gives the drawer back to it.
+  if(!actionsOnly&&Number(index)>=chain(role,group).length&&group!=='alternatives'&&group!=='pool'&&!(Number(index)===0&&((group||'role')==='role'&&!p().modelRoles[role]||group==='vibe'&&!agentValues(role).length))){state.poolPanel=false;state.modePanel=false;state.cuts=true;state.cutTarget={role,index:Number(index),group:group||'role'};render();(coarsePointer()?win.querySelector('.tray [data-cut]')||win.querySelector('#cuts-resize'):win.querySelector('#cut-query'))?.focus({preventScroll:true});return;}
 
   if(!actionsOnly&&temporarySlot(role,index,group)){const route=chain(role,group)[index],key=modeScope(role,group),candidate=modeList(key).findIndex(v=>split(v).raw===split(route).raw);if(candidate>=0){role=key;group='alternatives';index=candidate;}}
-  const b=el.getBoundingClientRect();state.picker={role,index:Number(index),group:group||'role',query:'',provider:'all',scope:'mine',limit:40,actionsOnly,top:Math.max(12,Math.min(b.bottom+7,innerHeight-(actionsOnly?58:360))),left:Math.max(12,Math.min(b.left,innerWidth-(actionsOnly?244:372)))};render();
+  const b=el.getBoundingClientRect();state.picker={role,index:Number(index),group:group||'role',query:'',provider:'all',scope:'mine',limit:20,actionsOnly,anchor:{top:b.top,bottom:b.bottom},top:Math.max(12,b.bottom+7),left:Math.max(12,Math.min(b.left,innerWidth-(actionsOnly?264:432)))};render();
   focusPicker();
  }
 
- function fitPicker(resize=false){
-  const el=win.querySelector('.picker'),x=state.picker;if(!el||!x)return;
-  if(el.matches('.quick-picker')){if(resize)delete x.height;if(!x.height){const max=getComputedStyle(el).maxHeight;el.style.height=max==='none'?Math.min(410,innerHeight-24)+'px':max;x.height=el.getBoundingClientRect().height;}el.style.height=x.height+'px';}
-  if(getComputedStyle(el).getPropertyValue('--picker-docked').trim()==='1')return;
-  const box=el.getBoundingClientRect();x.top=Math.max(12,Math.min(x.top,innerHeight-box.height-12));x.left=Math.max(12,Math.min(x.left,innerWidth-box.width-12));el.style.top=x.top+'px';el.style.left=x.left+'px';
+ // A menu opens at its key and stays inside the window (and above the open drawer); a phone shows it as a sheet.
+ // One read after it is mounted; its size never follows the results, so typing or an empty result never moves it.
+ function fitPicker(){
+  const el=win.querySelector('[data-picker]'),x=state.picker;if(!el||!x||narrowSurface())return;
+  const box=el.getBoundingClientRect(),floor=innerHeight-12;
+  if(x.anchor&&x.top+box.height>floor&&x.anchor.top-7-box.height>=12)x.top=x.anchor.top-7-box.height;
+  x.top=Math.max(12,Math.min(x.top,floor-box.height));x.anchor=null;x.left=Math.max(12,Math.min(x.left,innerWidth-box.width-12));el.style.top=x.top+'px';el.style.left=x.left+'px';
  }
  function refreshSearch(id){
   // Keep the real input (selection, IME and native undo) alive: its region is adopted with the typed value,
   // and only result regions are repainted.
   const previousCache=renderCache;renderCache={diffs:new Map(),keys:new Map()};
   try{
-   if(id==='role-query'){regions.reopen('p/deck',deckOpen());paintRegions([laneGraph(),agentList(),leaf('p/pool-editor',poolEditor()),leaf('p/mode-panel',state.modePanel?modePanel():'')],[leaf('p/role-search',roleSearch())]);}
-   if(id==='picker-search'&&state.picker&&!state.picker.actionsOnly)paintRegions([leaf('picker/results',pickerResults())],[leaf('picker/search',pickerSearch())]);
-   if(id==='cut-query'&&state.cuts){const cuts=collectionCuts();paintRegions([leaf('drawer/count',drawerCount(cuts)),leaf('drawer/results',drawerResults(cuts))],[leaf('drawer/search',drawerSearch())]);}
+   if(id==='role-query'){regions.reopen('p/deck',deckOpen());paintRegions([laneGraph(),agentList(),...(editorKind()?[leaf('drawer/editor',state.poolPanel?poolEditor():modePanel())]:[])],[leaf('p/role-search',roleSearch())]);}
+   if(id==='picker-search'&&state.picker&&!state.picker.actionsOnly){const results=leaf('picker/results',pickerResults());paintRegions([results,leaf('picker/count',pickerCount())],[leaf('picker/search',pickerSearch())]);}
+   if(id==='cut-query'&&drawerShown()&&drawerMode()!=='form'){const cuts=collectionCuts();paintRegions([leaf('drawer/count',drawerCount(cuts)),leaf('drawer/results',drawerResults(cuts))],[leaf('drawer/search',drawerSearch())]);}
    if(id==='catalog-query'&&state.view==='models'){const data=catalogData();paintRegions(catalogBody(data),[leaf('m/source',catalogSearch(data))]);}
   }finally{renderCache=previousCache;}
  }
  // `commit` is the blur-time change event: an unchanged value must not replace the result under the pointer.
  function searchInput(el,commit=false){
   const fields={'role-query':'query','catalog-query':'catalogQuery','cut-query':'cutQuery'},key=fields[el.id];
-  if(el.id==='picker-search'){if(!state.picker||commit&&state.picker.query===el.value)return;state.picker.query=el.value;state.picker.limit=40;}
+  if(el.id==='picker-search'){if(!state.picker||commit&&state.picker.query===el.value)return;state.picker.query=el.value;state.picker.limit=20;}
   else if(key){if(commit&&state[key]===el.value)return;state[key]=el.value;if(key==='catalogQuery'){state.analyze=null;state.page=0;}}else return;
   if(!composing)refreshSearch(el.id);
  }
@@ -602,18 +630,19 @@
  root.addEventListener('compositionend',e=>{composing=false;searchInput(e.target);scheduleBackgroundWork();});
  root.addEventListener('input',e=>{if(e.isComposing)composing=true;searchInput(e.target);});
  root.addEventListener('change',e=>searchInput(e.target,true));
- root.addEventListener('click',e=>{if(e.target.closest('.cut-tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
+ root.addEventListener('click',e=>{if(e.target.closest('.menu--tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
  root.addEventListener('click',e=>{if(e.target.closest('.dock__menu .menu button'))win.querySelector('.dock__menu')?.removeAttribute('open');},true);
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.device){state.device=b.dataset.device;state.page=0;state.picker=null;render();store();return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.query='';state.page=0;render();store();if(b.dataset.subscription){const panel=win.querySelector(`[data-quota-provider="${CSS.escape(b.dataset.subscription)}"]`);panel?.scrollIntoView({block:'center',behavior:'instant'});panel?.focus({preventScroll:true});}return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.mode){state.catalogMode=b.dataset.mode;state.catalogProvider='all';state.page=0;render();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.removeRole){const r=b.dataset.removeRole,g=b.dataset.group,a=chain(r,g);a.splice(Number(b.dataset.index),1);setChain(r,a,g);state.changes++;render();return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const prior=previous?.effort||'',old=carryEffort(prior,b.dataset.pick);a[x.index]=b.dataset.pick+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
+ root.addEventListener('toggle',e=>{const menu=e.target;if(menu.matches?.('.dock__menu')&&menu.open&&(!menu.contains(document.activeElement)||document.activeElement.matches('summary'))){menu.querySelector('.menu')?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});menu.querySelector('[role=menuitem]:not(:disabled)')?.focus({preventScroll:true});}},true);
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.device){state.device=b.dataset.device;state.page=0;state.picker=null;render();store();return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();if(b.dataset.subscription){const panel=win.querySelector(`[data-quota-provider="${CSS.escape(b.dataset.subscription)}"]`);panel?.scrollIntoView({block:'center',behavior:'instant'});panel?.focus({preventScroll:true});}return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.mode){state.catalogMode=b.dataset.mode;state.catalogProvider='all';state.page=0;render();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.removeRole){const r=b.dataset.removeRole,g=b.dataset.group,a=chain(r,g);a.splice(Number(b.dataset.index),1);setChain(r,a,g);state.changes++;render();return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const prior=previous?.effort||'',old=carryEffort(prior,b.dataset.pick);a[x.index]=b.dataset.pick+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
 
- const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='quota-expand'){state.quotasExpanded=!state.quotasExpanded;render();win.querySelector('[data-action=quota-expand]')?.focus({preventScroll:true});}if(a==='clear-search'){state.query='';render();win.querySelector('#role-query')?.focus();}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;render();}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('.picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('.picker-results').scrollTop=offset;}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){state.page+=a==='next-page'?1:-1;render();}if(a==='provider-add'){state.editProvider=null;state.modalError='';state.modal='provider';render();win.querySelector('input[name=name]')?.focus();}if(a==='modal-close'){state.modal=null;state.modalError='';render();}if(a==='provider-create'){await saveProvider();}
+ const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;render();}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('#picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('#picker-results').scrollTop=offset;}if(a==='picker-clear'){state.picker.query='';state.picker.limit=20;render();win.querySelector('#picker-search')?.focus({preventScroll:true});}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){state.page+=a==='next-page'?1:-1;render();}if(a==='provider-add')openForm('provider',{editProvider:null});if(a==='provider-create'){await saveProvider();}
 
  });
- root.addEventListener('change',e=>{const el=e.target;if(el.id==='profile-choice'||el.id==='provider-profile'||el.id==='catalog-profile-target'){state.poolPanel=false;state.profile=el.value;state.picker=null;state.armedCut=null;state.cutTarget=null;render();store();}if(el.id==='catalog-role-target'){state.role=el.value;state.picker=null;render();store();}if(el.dataset.effortRole){el.focus({preventScroll:true});const role=el.dataset.effortRole,g=el.dataset.group,a=chain(role,g),i=Number(el.dataset.index);a[i]=split(a[i]).raw+(el.value?':'+el.value:'');setChain(role,a,g);state.changes++;render();}if(el.id==='catalog-provider'){state.catalogProvider=el.value;state.analyze=null;state.page=0;render();}if(el.id==='picker-provider'){state.picker.scope=el.value==='*'?'all':'mine';state.picker.provider=el.value==='*'?'all':el.value;state.picker.limit=40;render();if(coarsePointer())win.querySelector('#picker-provider')?.focus({preventScroll:true});else focusPicker();}if(el.id==='picker-effort'){el.focus({preventScroll:true});const x=state.picker,list=chain(x.role,x.group);list[x.index]=split(list[x.index]).raw+(el.value?':'+el.value:'');setChain(x.role,list,x.group);render();}if(el.dataset.providerToggle){const id=el.dataset.providerToggle;p().disabledProviders=(p().disabledProviders||[]).filter(x=>x!==id);if(!el.checked)p().disabledProviders.push(id);state.changes++;render();}});
+ root.addEventListener('change',e=>{const el=e.target;if(el.id==='profile-choice'||el.id==='provider-profile'||el.id==='catalog-profile-target'){state.poolPanel=false;state.profile=el.value;state.picker=null;state.armedCut=null;state.cutTarget=null;render();store();}if(el.id==='catalog-role-target'){state.role=el.value;state.picker=null;render();store();}if(el.dataset.effortRole){el.focus({preventScroll:true});const role=el.dataset.effortRole,g=el.dataset.group,a=chain(role,g),i=Number(el.dataset.index);a[i]=split(a[i]).raw+(el.value?':'+el.value:'');setChain(role,a,g);state.changes++;render();}if(el.id==='catalog-provider'){state.catalogProvider=el.value;state.analyze=null;state.page=0;render();}if(el.id==='picker-provider'){state.picker.scope=el.value==='*'?'all':'mine';state.picker.provider=el.value==='*'?'all':el.value;state.picker.limit=20;render();if(coarsePointer())win.querySelector('#picker-provider')?.focus({preventScroll:true});else focusPicker();}if(el.id==='picker-effort'){el.focus({preventScroll:true});const x=state.picker,list=chain(x.role,x.group);list[x.index]=split(list[x.index]).raw+(el.value?':'+el.value:'');setChain(x.role,list,x.group);render();}});
 
  function onKeydown(e){
   const clip=e.target.closest('[data-edit]');
-  if(clip?.closest('[data-node-role],.lane__groove,.cut-grid')&&!state.picker&&!state.modal&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete'].includes(e.key)){
+  if(clip?.closest('[data-node-role],.lane__groove,.tray__grid')&&!state.picker&&!state.modal&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete'].includes(e.key)){
    e.preventDefault();const {edit:role,group}=clip.dataset,index=Number(clip.dataset.index),list=chain(role,group),step=e.key==='ArrowLeft'?-1:1;
    if(e.shiftKey&&['ArrowLeft','ArrowRight'].includes(e.key)){const to=index+step;if(to>=0&&to<list.length){[list[index],list[to]]=[list[to],list[index]];const ok=setChain(role,list,group,{moved:to});render();pickerFocus({role,group,index:ok?to:index});}return;}
    if(e.key==='Delete'){if(index<list.length&&(index>0||group==='alternatives'||group==='pool'||poolName(list[0])&&list.length>1)){list.splice(index,1);const ok=setChain(role,list,group);render();if(!pickerFocus({role,group,index:ok?Math.min(index,list.length-1):index})&&group==='vibe')win.querySelector(`[data-agent-copy="${CSS.escape(role)}"],.patch[aria-label^="${CSS.escape(role)}:"]`)?.focus({preventScroll:true});}return;}
@@ -632,19 +661,33 @@
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'&&['profiles','models'].includes(state.view)&&!state.modal){e.preventDefault();const poolContext=e.target.closest('#pool-editor')||state.picker?.group==='pool'||poolActionContext();if(state.picker)closePicker();(poolContext?savePools:save)();return;}
   if(e.key==='Escape'&&win.querySelector('.dock__menu[open]')){const menu=win.querySelector('.dock__menu');menu.removeAttribute('open');menu.querySelector('summary').focus();return;}
   if(e.key==='Escape'&&(e.defaultPrevented||e.target.closest('select')&&(CSS.supports('selector(select:open)')?e.target.closest('select').matches(':open'):true)))return;
-  if(e.key==='Escape'&&(state.picker||state.modal)){e.preventDefault();if(state.picker){closePicker();return;}state.modal=null;state.modalError='';render();return;}
+  if(e.key==='Escape'&&(state.picker||state.modal)){e.preventDefault();if(state.picker){closePicker();return;}const back=state.modal==='confirm'&&state.confirm?.back;if(back)openForm(back);else closeForm();return;}
   if(e.key==='Escape'&&!state.picker&&!state.modal&&(state.poolPanel||state.modePanel)){e.preventDefault();editTray(state.poolPanel?'pool':'alternatives',false);return;}
   if(e.key==='Enter'&&e.target.closest('#new-provider')&&!e.target.matches('textarea,select')){e.preventDefault();win.querySelector('[data-action=provider-create]')?.click();}
-  if(state.picker&&e.target.closest('.picker')){
-   const rows=[...win.querySelectorAll('.picker-results [data-pick]')];
+  // Колекція list: a listbox; arrows move the selection (and the inspector), PgUp / PgDn turn the page.
+  if(e.target.matches?.('.coll__row[role=option]')&&['ArrowDown','ArrowUp','Home','End','PageDown','PageUp'].includes(e.key)){
+   e.preventDefault();const rows=analyticalModels(),at=rows.findIndex(m=>m.provider+'/'+m.id===e.target.dataset.analyze),page=state.page*12,last=Math.min(rows.length,page+12)-1;
+   const next=e.key==='Home'?page:e.key==='End'?last:e.key==='PageDown'?Math.min(rows.length-1,at+12):e.key==='PageUp'?Math.max(0,at-12):Math.max(0,Math.min(rows.length-1,at+(e.key==='ArrowDown'?1:-1)));
+   if(rows[next]&&next!==at)selectCatalogRow(rows[next].provider+'/'+rows[next].id);return;
+  }
+  // Radio keys (history signal / measure) and the history bars: arrows move and select, the focus follows.
+  if(e.target.matches?.('[role=radio][data-radio]')&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)){e.preventDefault();const keys=[...e.target.closest('[role=radiogroup]').querySelectorAll('[role=radio]')],n=keys.length,i=keys.indexOf(e.target);keys[e.key==='Home'?0:e.key==='End'?n-1:(i+(['ArrowRight','ArrowDown'].includes(e.key)?1:-1)+n)%n]?.click();return;}
+  if(e.target.matches?.('[data-history-bin]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const n=win.querySelectorAll('[data-history-bin]').length,i=Number(e.target.dataset.historyBin),next=e.key==='Home'?0:e.key==='End'?n-1:Math.max(0,Math.min(n-1,i+(e.key==='ArrowRight'?1:-1)));scrubHistory(next,true);win.querySelector(`[data-history-bin="${next}"]`)?.focus({preventScroll:true});return;}
+  // Menus: arrows walk the enabled keys (wrapping), Home / End jump; Escape is handled above.
+  const menu=e.target.closest?.('[role=menu]');
+  if(menu&&e.target.matches('[role=menuitem]')&&['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();const items=[...menu.querySelectorAll('[role=menuitem]:not(:disabled)')],n=items.length,i=items.indexOf(e.target);items[e.key==='Home'?0:e.key==='End'?n-1:(i+(e.key==='ArrowDown'?1:-1)+n)%n]?.focus();return;}
+  // Tabs (FREE GOOD / FREE FAST): arrows move between them and select.
+  if(e.target.matches('[role=tab][data-pool-tab]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const tabs=Object.keys(poolNames),i=tabs.indexOf(e.target.dataset.poolTab),n=tabs.length;selectPoolTab(tabs[e.key==='Home'?0:e.key==='End'?n-1:(i+(e.key==='ArrowRight'?1:-1)+n)%n]);return;}
+  if(state.picker&&e.target.closest('[data-picker]')){
+   const rows=[...win.querySelectorAll('#picker-results [data-pick]')];
    if(['ArrowDown','ArrowUp'].includes(e.key)&&(e.target.id==='picker-search'||e.target.hasAttribute('data-pick'))){e.preventDefault();const i=rows.indexOf(e.target),next=i<0?(e.key==='ArrowDown'?0:rows.length-1):Math.max(0,Math.min(rows.length-1,i+(e.key==='ArrowDown'?1:-1)));rows[next]?.focus();}
-   if(e.key==='Enter'&&e.target.id==='picker-search'){e.preventDefault();if(state.picker.query.trim())rows[0]?.click();else win.querySelector('.picker-row.is-current')?.click();}
+   if(e.key==='Enter'&&e.target.id==='picker-search'){e.preventDefault();if(state.picker.query.trim())rows[0]?.click();else win.querySelector('#picker-results .is-current')?.click();}
   }
  }
  root.addEventListener('keydown',onKeydown);
  // Shortcuts keep working when a re-render left focus on <body>.
  document.addEventListener('keydown',e=>{if(e.target instanceof Element&&!e.composedPath().includes(root))onKeydown(e);});
- document.addEventListener('click',e=>{if(!e.target.closest('.dock__menu'))win.querySelector('.dock__menu')?.removeAttribute('open');if(state.picker&&!e.target.closest('.picker,[data-edit],[data-slot-actions],[data-node-role]'))closePicker(false);});
+ document.addEventListener('click',e=>{if(!e.composedPath().some(n=>n.matches?.('.dock__menu')))win.querySelector('.dock__menu')?.removeAttribute('open');if(state.picker&&!e.composedPath().some(n=>n.matches?.('[data-picker],[data-edit],[data-slot-actions],[data-node-role]')))closePicker(false);});
  // One pointer gesture for both the label and the segment edge. Native buttons
  // consume HTML dragging in WebKit; keep native buttons for click/keyboard access.
  // A completed drag swallows only its own synthetic click; keyboard clicks (detail 0) are never swallowed.
@@ -675,7 +718,7 @@
  function liftDrag(d){
   d.active=true;root.setPointerCapture(d.pointer);
   const rect=d.node.getBoundingClientRect(),tray=win.querySelector('.tray'),fromTray=!!d.node.closest('.tray'),lip=parseFloat(getComputedStyle(win.querySelector('.tray-port')||document.documentElement).getPropertyValue('--lip'))||46;
-  d.rect=rect;d.floor=window.innerHeight-(state.cuts&&!fromTray?tray?.getBoundingClientRect().height||lip:lip);
+  const editing=drawerMode()!=='cuts';d.rect=rect;d.overTray=editing;d.floor=window.innerHeight-(drawerShown()&&(!fromTray||editing)?tray?.getBoundingClientRect().height||lip:lip);
   // The page position is tracked here, so rolling it never reads layout back inside the frame loop.
   d.scroll=window.scrollY;d.maxScroll=Math.max(0,document.documentElement.scrollHeight-window.innerHeight);
   const ghost=document.createElement('div'),cut=ghostCut(d),w=Math.round(Math.max(150,Math.min(220,rect.width))),h=Math.round(Math.max(52,Math.min(76,rect.height)));
@@ -685,13 +728,13 @@
   ghost.style.transform=`translate3d(${rect.left}px,${rect.top}px,0)`;document.body.append(ghost);d.ghost=ghost;
   requestAnimationFrame(()=>ghost.classList.add('is-up'));
   d.node.classList.add('is-src');win.querySelector('#profile-tracks')?.classList.add('is-dragging');
-  if(fromTray)tray?.classList.add('is-retracted');
+  if(fromTray&&!editing)tray?.classList.add('is-retracted');
  }
  function dragFrame(){
   const d=drag;if(!d?.active)return;d.frame=0;
   markTarget(d,dropTarget(d,d.x,d.y));
   const EDGE=72,MAX=24;let v=0;
-  if(d.y<EDGE)v=-MAX*Math.min(1,(EDGE-d.y)/EDGE);else if(d.y>d.floor-EDGE)v=MAX*Math.min(1.5,(d.y-(d.floor-EDGE))/EDGE);
+  if(d.y<EDGE)v=-MAX*Math.min(1,(EDGE-d.y)/EDGE);else if(d.y>d.floor-EDGE&&!(d.overTray&&d.y>d.floor))v=MAX*Math.min(1.5,(d.y-(d.floor-EDGE))/EDGE);
   d.ghost.style.transform=`translate3d(${d.rect.left+d.x-d.x0}px,${d.rect.top+d.y-d.y0}px,0) rotate(-1.6deg) scale(1.04)`;
   // Keep rolling while the pointer is held at an edge.
   if(v){const next=Math.max(0,Math.min(d.maxScroll,d.scroll+Math.round(v)));if(next!==d.scroll){d.scroll=next;window.scrollTo(0,next);d.frame=requestAnimationFrame(dragFrame);}}
@@ -786,7 +829,7 @@
  }
  function interactionBusy(preview=false){
   const focused=document.activeElement,select=focused?.matches('select'),selectOpen=select&&(CSS.supports('selector(select:open)')?focused.matches(':open'):nativeSelectBusy);
-  return document.hidden||composing||pointerHeld||activeWrites||document.documentElement.dataset.displayTuning||state.modal||state.picker&&(!preview||!state.picker.actionsOnly)||state.saving||state.profileBusy||state.providerSaving||drag||cutGesture||drawerGesture||focused?.matches('input,textarea')||select&&(!preview||selectOpen)||win.querySelector('.dock__menu[open]');
+  return document.hidden||composing||pointerHeld||activeWrites||document.documentElement.dataset.displayTuning||state.modal||state.picker&&(!preview||!state.picker.actionsOnly)||state.saving||state.profileBusy||state.providerSaving||drag||drawerGesture||focused?.matches('input,textarea')||select&&(!preview||selectOpen)||win.querySelector('.dock__menu[open]');
  }
  function scheduleBackgroundWork(){clearTimeout(backgroundTimer);backgroundTimer=setTimeout(flushBackgroundWork,0);}
  function flushBackgroundWork(){
@@ -861,7 +904,7 @@
    await api('/api/profile',{...body,previewToken:preview.token});
    original[name]=saved;state.opFeedback='Профіль збережено для нових запусків OMP.';delete state.modePlans[name];editHistory.reset(name,original[name]);
    await reload();notify('Збережено · '+(saved.forgeMode.mode==='no-deepseek'?'Без DeepSeek':'З DeepSeek'));
-  }catch(e){if(e.status===409&&!PROBLEM_CODES.has(e.code)){state.modal='conflict';state.error=e.message;}else state.error=e.message;render();}
+  }catch(e){if(e.status===409&&!PROBLEM_CODES.has(e.code)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:e.message});modalFit='';}else state.error=e.message;render();}
   finally{state.saving=false;render();}
  }
  let chainNotes=[];
@@ -980,19 +1023,25 @@
  function rebuildBench(){const data=source.insights?.benchmarks;if(benchVersion===data?.records)return;benchVersion=data?.records;benchIndex=evidence.index(data?.records||[]);}
  function modelRecords(m){rebuildBench();return benchIndex.get(evidence.canonical(m.id))||[];}
  function evidenceCoverage(m){return evidence.coverage(modelRecords(m));}
- function evidenceLabel(m){const c=evidenceCoverage(m);return c.kind==='independent'?'Є незалежні дані':c.kind==='developer'?'Заяви розробника':'Немає даних';}
- function capabilityMarkup(m){return `<div class="model-capabilities"><span>Контекст <b>${m.contextWindow?contextTokens(m.contextWindow):'—'}</b></span><span>Вихід <b>${m.maxTokens?contextTokens(m.maxTokens):'—'}</b></span><span>Зір <b>${Array.isArray(m.input)?m.input.includes('image')?'Так':'Ні':'—'}</b></span><span>Міркування <b>${m.reasoning===true?'Так':m.reasoning===false?'Ні':'—'}</b></span></div>`;}
+ // Evidence on the body: every block names its kind in words (незалежний тест / Arena · уподобання / заява
+ // розробника), the source, the period and the tested version. Scores are 0–100 segment bars; Arena is a rating,
+ // printed as a number without a bar.
+ const EVIDENCE_KIND={benchmark:['незалежний тест','ok'],preference:['Arena · уподобання',''],developer:['заява розробника','warn']};
+ function evidenceChip(r){const [label,s]=EVIDENCE_KIND[evidence.kind(r)]||EVIDENCE_KIND.benchmark;return `<span class="chip${s?' chip--'+s:''}">${label}</span>`;}
  function evidenceCard(r,full=false){
   const kind=evidence.kind(r),preference=kind==='preference',developer=kind==='developer',scores=Object.entries(r.scores||{}),shown=full?scores:scores.slice(0,1),status=source.insights?.benchmarks?.sources?.[r.source];
-  return `<article class="evidence-card ${kind}"><header><b>${esc(developer?r.publisher:r.source)}</b><span>${developer?'Заявлено розробником':preference?'Людські уподобання':'Незалежний тест'}</span></header><p class="evidence-period">${esc(r.dateKind||'Зріз')} · ${esc(r.release)}${status?.error?' · останній знімок':''}</p><p class="evidence-version">${esc(r.id)}${r.effort?' · '+esc(r.effort):' · режим джерела'}</p>${preference?`<div class="arena-reading"><strong>${num(r.rating)}</strong><span>рейтинг${r.preliminary?' · попередній':''}<small>${r.interval?'Інтервал '+num(r.interval[0])+'–'+num(r.interval[1])+' · ':''}${num(r.votes)} голосів</small></span></div>`:`<dl class="evidence-values">${shown.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd><i aria-hidden="true"><b style="width:${Math.max(0,Math.min(100,v))}%"></b></i><strong>${num(v)}<small>%</small></strong></dd></div>`).join('')}</dl>`}${!full&&scores.length>shown.length?'<small class="evidence-more">Ще '+(scores.length-shown.length)+' · у всіх даних</small>':''}${r.samples?'<small class="evidence-more">'+num(r.samples)+' задач</small>':''}${full||preference?`<p class="evidence-method">${esc(r.note||'Результат тестованої моделі; провайдер і умови запуску можуть відрізнятися.')}${r.potentialOverlap?' Частина задач могла передувати випуску моделі.':''}</p>`:''}<a href="${esc(r.url)}" target="_blank" rel="noreferrer">${developer?'Картка моделі':'Джерело'} ↗</a></article>`;
+  return `<article class="ev"><header class="ev__head">${evidenceChip(r)}<b>${esc(developer?r.publisher:r.source)}</b><span class="print print--hint">${esc(r.dateKind||'Зріз')} · ${esc(r.release)}${status?.error?' · останній знімок':''}</span></header><p class="print print--hint ev__ver">${esc(r.id)}${r.effort?' · '+esc(r.effort):' · режим джерела'}${r.samples?' · '+num(r.samples)+' задач':''}</p>${preference?`<div class="ev__rating"><b class="rd rd--l" style="--rd:5ch">${num(r.rating)}</b><span class="print">рейтинг${r.preliminary?' · попередній':''}${r.interval?' · інтервал '+num(r.interval[0])+'–'+num(r.interval[1]):''} · ${num(r.votes)} голосів</span></div>`:`<div class="ev__rows">${shown.map(([k,v])=>`<div class="ev__row"><span>${esc(k)}</span><span class="ev__bar" style="--v:${(Math.max(0,Math.min(100,v))/100).toFixed(3)}" aria-hidden="true"><i></i></span><b class="rd" style="--rd:6ch">${num(v)}%</b></div>`).join('')}</div>`}${!full&&scores.length>shown.length?`<p class="print print--hint">Ще ${scores.length-shown.length} · у всіх даних</p>`:''}${full||preference?`<p class="print print--hint">${esc(r.note||'Результат тестованої моделі; провайдер і умови запуску можуть відрізнятися.')}${r.potentialOverlap?' Частина задач могла передувати випуску моделі.':''}</p>`:''}<a class="key key--sm ev__src" href="${esc(r.url)}" target="_blank" rel="noreferrer"><span class="key__cap">${developer?'Картка моделі':'Джерело'} ↗</span></a></article>`;
  }
  function evidenceDeck(m,full=false){
   const records=modelRecords(m),rows=full?evidence.latest(records):evidence.summary(records);
-  if(!rows.length)return '<p class="evidence-empty">Для цієї версії зіставлених тестів ще немає. Характеристики вище — з каталогу провайдера; вони не визначають якість.</p>';
-  return `<div class="evidence-deck ${full?'expanded':''}" aria-label="Виміри моделі">${rows.map(r=>evidenceCard(r,full)).join('')}</div>${!full&&evidence.latest(records).length>rows.length?'<p class="evidence-note">Інші тестовані режими — у всіх даних.</p>':''}`;
+  if(!rows.length)return '<div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>Для цієї версії зіставлених тестів ще немає. Характеристики вище — з каталогу провайдера; вони не визначають якість.</span></div>';
+  return `<div class="ev-deck" aria-label="Виміри моделі">${rows.map(r=>evidenceCard(r,full)).join('')}</div>${!full&&evidence.latest(records).length>rows.length?'<p class="print print--hint">Інші тестовані режими — у всіх даних.</p>':''}`;
  }
+ // A printed key–value row on the body (dotted leader, tabular value).
+ const pkv=(k,v)=>`<div class="pkv"><span>${k}</span><i aria-hidden="true"></i><b>${v}</b></div>`;
+ function priceLine(m){const price=priceInfo(m);return `${price.kind==='free'?'<span class="stamp stamp--free">FREE</span> ':''}${esc(price.label)}${price.subscription?' · підписка, API-тариф':price.variable?' · змінний тариф':''}`;}
  function detailsMarkup(){const m=catalogMap.get(state.detail)||{...split(state.detail),name:split(state.detail).id};
-  return `<div class="detail-title"><h2>${esc(cutTitle(state.detail))}</h2><p class="mono">${esc(state.detail)}</p><button type="button" class="tool" id="model-favorite" data-fav="${esc(state.detail)}" aria-pressed="${state.favs.includes(state.detail)}">${state.favs.includes(state.detail)?'★ В обраних':'☆ До обраних'}</button></div>${capabilityMarkup(m)}<div class="detail-price">${priceMarkup(m)}<small>Вхід / вихід · $ за 1 млн токенів</small></div><p class="evidence-note">Тести — для конкретної версії моделі, не гарантія якості FREE-маршруту. Рейтинги Arena й заяви розробника не входять у бал ролі.</p>${evidenceDeck(m,true)}`;
+  return `<div class="det"><div class="det__id"><b>${esc(cutTitle(state.detail))}</b><span class="print">${esc(providerName(m.provider))} · ${esc(state.detail)}</span></div><div class="det__kv">${pkv('Контекст',m.contextWindow?contextTokens(m.contextWindow):'—')}${pkv('Вихід',m.maxTokens?contextTokens(m.maxTokens):'—')}${pkv('Зір',Array.isArray(m.input)?m.input.includes('image')?'так':'ні':'—')}${pkv('Міркування',m.reasoning===true?'так':m.reasoning===false?'ні':'—')}${pkv('Ціна · вхід / вихід $/1M',priceLine(m))}</div><p class="print print--hint">Тести — для конкретної версії моделі, не гарантія якості FREE-маршруту. Рейтинги Arena й заяви розробника не входять у бал ролі.</p>${evidenceDeck(m,true)}</div>`;
  }
 
  function profileNameResult(value,renaming=false){
@@ -1002,36 +1051,91 @@
   return result;
  }
  function profileNameHint(value,renaming=false){const q=profileNameResult(value,renaming);return value.trim()?(q.error||'В OMP: '+q.name):'Латиниця й цифри. Пробіли → дефіс, великі літери → малі.';}
- function checkProfileName(form){
-  const input=form.elements.name,q=profileNameResult(input.value,form.id==='rename-form');
-  input.setCustomValidity(q.error);form.querySelector('.profile-name-hint').textContent=profileNameHint(input.value,form.id==='rename-form');return q;
+ // Field errors are printed under their own window (red outline + text), never as a browser bubble.
+ function checkProfileName(form,show=false){
+  const input=form.elements.name,renaming=form.id==='rename-form',q=profileNameResult(input.value,renaming),bad=!!q.error&&(show||!!input.value.trim());
+  const field=input.closest('.field');field?.classList.toggle('is-bad',bad);input.setAttribute('aria-invalid',String(bad));
+  const note=form.querySelector('.profile-name-hint');if(note)note.textContent=profileNameHint(input.value,renaming);return q;
  }
- function modalMarkup(){
-  if(!state.modal)return '';let title='',body='';
-  if(state.modal==='provider'){const v=state.editProvider?source.providers.find(x=>x.id===state.editProvider):null;title=v?'Редагувати провайдера':'Новий провайдер';body=`<form id="new-provider" autocomplete="off"><div class="form-grid"><label class="field"><span class="field__lab">Назва</span><span class="field__win"><input name="name" required maxlength="80" value="${esc(v?.name||'')}" placeholder="Мій провайдер"></span></label><label class="field"><span class="field__lab">ID</span><span class="field__win"><input name="id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" value="${esc(v?.id||'')}" ${v?'readonly':''} placeholder="my-provider"></span></label></div><label class="field"><span class="field__lab">Адреса API</span><span class="field__win"><input type="url" name="url" required value="${esc(v?.url||'')}" placeholder="https://api.example.com/v1"></span></label><div class="form-grid"><label class="field"><span class="field__lab">Формат API</span><span class="field__win"><select name="api">${[['openai-completions','OpenAI Chat'],['openai-responses','OpenAI Responses'],['anthropic-messages','Anthropic']].map(([k,l])=>`<option value="${k}" ${v?.api===k?'selected':''}>${l}</option>`).join('')}</select></span></label><label class="field"><span class="field__lab">Авторизація</span><span class="field__win"><select name="auth"><option value="apiKey">API-ключ</option><option value="none" ${v?.auth==='none'?'selected':''}>Без ключа</option></select></span></label></div><label class="field"><span class="field__lab">API-ключ ${v?.hasKey?'· залиш порожнім, щоб зберегти':''}</span><span class="field__win"><input type="password" name="key" autocomplete="new-password" placeholder="${v?.hasKey?'Збережений на сервері':'Ключ провайдера'}"></span></label><label class="field"><span class="field__lab">Список моделей</span><span class="field__win"><select name="discovery">${[['openai-models-list','Отримувати через /models'],['','Ввести вручну'],['ollama','Ollama'],['llama.cpp','llama.cpp'],['lm-studio','LM Studio'],['litellm','LiteLLM']].map(([k,l])=>`<option value="${k}" ${(v?v.discovery:'openai-models-list')===k?'selected':''}>${l}</option>`).join('')}</select></span></label><label class="field"><span class="field__lab">Додаткові ID моделей · по одному на рядок</span><span class="field__win"><textarea name="models" rows="3" placeholder="model-id">${esc(v?.manualModels?.join('\n')||'')}</textarea></span></label><label class="field"><span class="field__lab">Термін дії</span><span class="field__win"><select name="days">${v?.expires&&!v.expired?'<option value="-1" selected>Зберегти поточний термін</option>':''}<option value="0">Без обмеження</option><option value="1">24 години</option><option value="7">7 днів</option><option value="30">30 днів</option></select></span></label><p class="view-note">Після терміну невикористовуване підключення видаляється. Якщо воно ще є у профілях, панель позначить його простроченим і запропонує замінити моделі. Активні сесії не змінюються.</p><div class="modal-actions">${v?tool('Видалити','delete-provider','danger'):''}${tool(state.providerSaving?'Збереження…':'Зберегти провайдера','provider-create','primary',state.providerSaving?'disabled':'')}</div></form>`;}
-  if(state.modal==='details'){title='Дані моделі';body=detailsMarkup();}
-  if(state.modal==='conflict'){title='Змінились вихідні дані';body=`<p>${esc(state.error||'Конфігурацію змінено зовні.')}</p><p class="view-note">Твоя чернетка лишилась у вікні. Експортуй її перед завантаженням актуального профілю.</p><div class="modal-actions">${tool('Експорт чернеток','export-draft')}${tool('Скинути чернетки й оновити','discard-reload','primary')}</div>`;}
-  if(state.modal==='history'){title=prettyProfile(state.profile);body=`<p>Збереження створює резервну копію. Відновлення поверне попередні налаштування та режим цього профілю.</p><div class="modal-actions">${tool('Відновити попередню','restore-profile','',source.restorable.includes(state.profile)?'':'disabled')}</div>`;}
-  if(state.modal==='rename'){title='Перейменувати профіль';body=`<form id="rename-form"><label class="field"><span class="field__lab">Назва профілю</span><span class="field__win"><input name="name" required maxlength="64" aria-describedby="profile-name-hint" value="${esc(state.renameName??state.profile)}" autocomplete="off" spellcheck="false"></span></label><p id="profile-name-hint" class="view-note profile-name-hint" aria-live="polite">${esc(profileNameHint(state.renameName??state.profile,true))}</p><p class="view-note">Налаштування та чернетка збережуться.</p><div class="modal-actions">${tool('Скасувати','modal-close')}${tool(state.profileBusy?'Збереження…':'Перейменувати','rename-confirm','primary',state.profileBusy?'disabled':'')}</div></form>`;}
-  if(state.modal==='delete-profile'){title='Видалити '+prettyProfile(state.profile)+'?';body=`<p>Профіль зникне зі списку та стане недоступним для нових запусків OMP. Збережена версія залишиться в резервній копії.</p>${diff(state.profile).length?'<p class="view-note">Незбережену чернетку цього профілю також буде видалено.</p>':''}<div class="modal-actions">${tool('Скасувати','modal-close')}${tool(state.profileBusy?'Видалення…':'Видалити профіль','delete-confirm','danger',state.profileBusy?'disabled':'')}</div>`;}
-  if(state.modal==='clone'){title='Копія профілю';body=`<form id="clone-form"><label class="field"><span class="field__lab">Назва нового профілю</span><span class="field__win"><input name="name" required maxlength="64" aria-describedby="profile-name-hint" value="${esc(state.cloneName||'')}" placeholder="Standard FreeTier" autocomplete="off" spellcheck="false"></span></label><p id="profile-name-hint" class="view-note profile-name-hint" aria-live="polite">${esc(profileNameHint(state.cloneName||''))}</p><p class="view-note">Копіюється збережена конфігурація ${esc(prettyProfile(state.profile))}. Спочатку збережи чернетку, якщо вона потрібна в копії.</p>${tool('Створити','clone-create','primary')}</form>`;}
-  return `<div class="modal-layer"><section class="modal ${state.modal==='details'?'model-detail':''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-top"><h2>${esc(title)}</h2>${tool(icon('x'),'modal-close','icon-only','aria-label="Закрити"')}</div>${state.modalError?`<p class="error-banner" role="alert">${esc(state.modalError)}</p>`:''}${body}</section></div>`;
+ // FORMS live in the drawer (DESIGN «Меню»): the front shows the title and ×; the body is the form with recessed
+ // windows, its keys at the foot; the device body is inert while it is open (role=dialog, aria-modal).
+ function formField(name,label,input,{note='',wide=false,hint=false}={}){const bad=state.formErrors?.[name]||'';return `<div class="field${bad?' is-bad':''}${wide?' field--wide':''}" data-field="${name}"><label class="field__lab" for="f-${name}">${label}</label><div class="field__win">${input}</div><span class="field__note${hint?' profile-name-hint':''}" id="f-${name}-note"${hint?' aria-live="polite"':''}>${esc(bad||note)}</span></div>`;}
+ const formAttrs=(name,extra='')=>`id="f-${name}" name="${name}" aria-describedby="f-${name}-note"${state.formErrors?.[name]?' aria-invalid="true"':''} ${extra}`;
+ function formFoot(keys,note=''){return `<div class="tray__foot">${note?`<span class="print print--hint">${note}</span>`:'<span class="tray__grow"></span>'}${keys}</div>`;}
+ function formSpec(){
+  const kind=state.modal,busy=state.profileBusy||state.providerSaving,cancel=key('Скасувати','modal-close');
+  if(kind==='provider'){
+   const v=state.editProvider?source.providers.find(x=>x.id===state.editProvider):null,opt=(items,value)=>items.map(([k,l])=>`<option value="${k}" ${value===k?'selected':''}>${l}</option>`).join('');
+   const fields=[formField('name','Назва',`<input ${formAttrs('name','required maxlength="80"')} value="${esc(v?.name||'')}" placeholder="Мій провайдер" autocomplete="off">`,{note:'Показується на CUT і в панелі підписок'}),
+    formField('id','ID провайдера',`<input ${formAttrs('id','required maxlength="64" spellcheck="false"')} value="${esc(v?.id||'')}" ${v?'readonly':''} placeholder="my-provider" autocomplete="off">`,{note:v?'Не змінюється':'Малі латинські літери, цифри, дефіс'}),
+    formField('url','API base · адреса',`<input type="url" ${formAttrs('url','required spellcheck="false"')} value="${esc(v?.url||'')}" placeholder="https://api.example.com/v1" autocomplete="off">`,{note:'HTTP(S), без ключів, логіна й параметрів',wide:true}),
+    formField('api','Формат API',`<select ${formAttrs('api')}>${opt([['openai-completions','OpenAI Chat'],['openai-responses','OpenAI Responses'],['anthropic-messages','Anthropic']],v?.api||'openai-completions')}</select>`),
+    formField('auth','Авторизація',`<select ${formAttrs('auth')}>${opt([['apiKey','API-ключ'],['none','Без ключа']],v?.auth||'apiKey')}</select>`),
+    formField('key','API-ключ',`<input type="password" ${formAttrs('key','autocomplete="new-password"')} placeholder="${v?.hasKey?'Збережений на сервері':'Ключ провайдера'}">`,{note:v?.hasKey?'Порожньо — лишити збережений ключ (для тієї самої адреси)':'Зберігається на сервері, не в профілі'}),
+    formField('discovery','Список моделей',`<select ${formAttrs('discovery')}>${opt([['openai-models-list','Отримувати через /models'],['','Ввести вручну'],['ollama','Ollama'],['llama.cpp','llama.cpp'],['lm-studio','LM Studio'],['litellm','LiteLLM']],v?v.discovery:'openai-models-list')}</select>`),
+    formField('days','Термін дії',`<select ${formAttrs('days')}>${v?.expires&&!v.expired?'<option value="-1" selected>Зберегти поточний термін</option>':''}<option value="0">Без обмеження</option><option value="1">24 години</option><option value="7">7 днів</option><option value="30">30 днів</option></select>`,{note:'Після терміну невикористане підключення видаляється'}),
+    formField('models','Model ID · по одному на рядок',`<textarea ${formAttrs('models','rows="3" spellcheck="false"')} placeholder="model-id">${esc(v?.manualModels?.join('\n')||'')}</textarea>`,{note:'Додаткові ID або весь список, якщо його не отримувати',wide:true})];
+   return {title:v?'Провайдер · '+(v.name||v.id):'Новий провайдер',focus:v?'#f-name':'#f-name',wide:true,
+    body:`<form id="new-provider" class="form" autocomplete="off" novalidate>${fields.join('')}${formFoot(`${v?key(led(true,'red')+'Видалити','delete-provider','key--danger',busy?'disabled':''):''}${cancel}${key(state.providerSaving?'Збереження…':'Зберегти провайдера','provider-create','key--action',state.providerSaving?'disabled':'')}`,'Активні сесії OMP не змінюються. Прострочене підключення в профілях позначиться для заміни.')}</form>`};
+  }
+  if(kind==='details')return {title:'Дані CUT',sub:cutTitle(state.detail),focus:'[data-action=modal-close]',wide:true,body:detailsMarkup()+formFoot(`<button type="button" class="key key--sm" data-fav="${esc(state.detail)}" aria-pressed="${state.favs.includes(state.detail)}"><span class="key__cap">${state.favs.includes(state.detail)?'★ В обраних':'☆ До обраних'}</span></button>${key('Закрити','modal-close')}`)};
+  if(kind==='conflict')return {title:'Змінились вихідні дані',focus:'[data-action=export-draft]',body:`<div class="msg" data-s="warn">${led(true,'amber')}<span>${esc(state.error||'Конфігурацію змінено зовні.')}</span></div><p class="print">Твоя чернетка лишилась у вікні. Експортуй її перед завантаженням актуального профілю.</p>${formFoot(`${key('Експорт чернеток','export-draft')}${key(led(true,'red')+'Скинути чернетки й оновити','discard-reload','key--danger')}`)}`};
+  if(kind==='history'){const ok=source.restorable.includes(state.profile);return {title:'Попереднє збереження',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Кожне збереження створює резервну копію. Відновлення поверне попередні налаштування та режим DeepSeek профілю <b>${esc(prettyProfile(state.profile))}</b>; поточна версія лишиться в резервних.</p>${ok?'':'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Для цього профілю ще немає попередньої версії</span></div>'}${formFoot(`${cancel}${key(led(ok,'amber')+'Відновити попередню','restore-profile','',ok&&!busy?'':'disabled')}`)}`};}
+  if(kind==='rename')return {title:'Перейменувати котушку',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="rename-form" class="form form--one" novalidate>${formField('name','Нова назва',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.renameName??state.profile)}">`,{note:profileNameHint(state.renameName??state.profile,true),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Збереження…':'Перейменувати','rename-confirm','key--action',state.profileBusy?'disabled':'')}`,'Налаштування та чернетка збережуться')}</form>`};
+  if(kind==='delete-profile')return {title:'Видалити котушку',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Профіль <b>${esc(prettyProfile(state.profile))}</b> зникне зі списку й не буде доступний для нових запусків OMP. Збережена версія лишиться в резервній копії.</p>${diff(state.profile).length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Незбережену чернетку цього профілю також буде видалено</span></div>':''}${formFoot(`${cancel}${key(led(true,'red')+(state.profileBusy?'Видалення…':'Видалити профіль'),'delete-confirm','key--danger',state.profileBusy?'disabled':'')}`)}`};
+  if(kind==='clone')return {title:'Копія котушки',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="clone-form" class="form form--one" novalidate>${formField('name','Назва нового профілю',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.cloneName||'')}" placeholder="Standard FreeTier">`,{note:profileNameHint(state.cloneName||''),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Створення…':'Створити','clone-create','key--action',state.profileBusy?'disabled':'')}`,'Копіюється збережена конфігурація '+esc(prettyProfile(state.profile))+'; спершу збережи чернетку, якщо вона потрібна')}</form>`};
+  if(kind==='confirm'){const c=state.confirm||{};return {title:c.title||'Підтвердження',sub:c.sub||'',focus:'[data-action=confirm-cancel]',body:`<p class="print">${c.text||''}</p>${formFoot(`${key('Скасувати','confirm-cancel')}${key((c.danger?led(true,'red'):'')+esc(c.label||'Підтвердити'),'confirm-run',c.danger?'key--danger':'key--action',busy?'disabled':'')}`)}`};}
+  return {title:'',body:'',focus:''};
  }
- async function saveProvider(){const f=win.querySelector('#new-provider');if(!f.reportValidity()||state.providerSaving)return;const d=new FormData(f);state.providerSaving=true;const body={id:d.get('id'),name:d.get('name'),url:d.get('url'),api:d.get('api'),auth:d.get('auth'),key:d.get('key'),discovery:d.get('discovery'),models:String(d.get('models')).split('\n').map(s=>s.trim()).filter(Boolean),days:Number(d.get('days')),revision:source.providerRevision};const b=f.querySelector('[data-action=provider-create]');b.disabled=true;b.textContent='Збереження…';try{await api('/api/provider',body);state.modal=null;state.modalError='';await reload();notify('Провайдер збережений. Каталог оновлюється.');}catch(e){regions.invalidate('modal');let error=f.querySelector('.form-error');if(!error){error=document.createElement('p');error.className='error-banner form-error';error.setAttribute('role','alert');f.prepend(error);}error.textContent=e.message;b.disabled=false;b.textContent='Зберегти провайдера';}finally{state.providerSaving=false;}}
+ function formSpecFocus(){return state.modal?formSpec().focus:'';}
+ // The form drawer is as tall as its content (within the drawer's limits); measured once per form and error state.
+ function fitForm(layer){
+  const key=state.modal+'|'+state.editProvider+'|'+state.modalError+'|'+Object.keys(state.formErrors||{}).join();if(modalFit===key)return;modalFit=key;
+  const lip=layer.querySelector('.tray__lip'),body=layer.querySelector('.tray__body');if(!lip||!body)return;
+  const style=getComputedStyle(body);state.formHeight=Math.ceil(lip.offsetHeight+body.firstElementChild.scrollHeight+parseFloat(style.paddingTop)+parseFloat(style.paddingBottom)+4);resizeDrawer(state.formHeight);
+ }
+ function formTitle(f){return `<div class="tray__title tray__title--ed" id="tray-form-title">${led(true,'orange')}<span class="silk silk--ink">${esc(f.title)}</span>${f.sub?`<span class="tray__count">${esc(f.sub)}</span>`:''}</div>`;}
+ // A server refusal keeps its code next to the text (HTTP status · error code), on one reserved line.
+ function formMarkup(f){return `<div class="tray__form${f.wide?' tray__form--wide':''}">${state.modalError?`<div class="msg" data-s="bad" role="alert">${led(true,'red')}${state.modalCode?`<b class="msg__code">${esc(state.modalCode)}</b>`:''}<span>${esc(state.modalError)}</span></div>`:''}${f.body}</div>`;}
+ const errorCode=e=>[e?.status,e?.code].filter(Boolean).join(' · ');
+ // Client checks mirror the server's rules, so a field shows its problem before anything is sent.
+ function providerProblems(f){
+  const value=n=>String(f.elements[n]?.value||'').trim(),out={},editing=state.editProvider?source.providers.find(x=>x.id===state.editProvider):null;
+  if(!value('name'))out.name='Вкажи назву';
+  if(!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value('id')))out.id='ID: малі латинські літери, цифри, дефіс, до 64 знаків';
+  let url=null;try{url=new URL(value('url'));}catch{}
+  if(!url||!/^https?:$/.test(url.protocol)||url.username||url.password||url.search||url.hash)out.url='Потрібна HTTP(S)-адреса без ключів, логіна чи параметрів';
+  if(f.elements.auth.value==='apiKey'&&!value('key')&&!(editing?.hasKey&&url&&editing.url===value('url')))out.key=editing?.hasKey?'Для нової адреси введи ключ заново':'Потрібен API-ключ';
+  if(!f.elements.discovery.value&&!value('models'))out.models='Увімкни отримання списку або вкажи ID моделей';
+  return out;
+ }
+ // Server messages that belong to one field light that field too.
+ function providerField(message){return /^ID|Цей ID/.test(message)?'id':/адрес|HTTP/i.test(message)?'url':/ключ/i.test(message)?'key':/моделей|ID моделей/.test(message)?'models':'';}
+ async function saveProvider(){
+  const f=win.querySelector('#new-provider');if(!f||state.providerSaving)return;
+  const problems=providerProblems(f);
+  if(Object.keys(problems).length){state.formErrors=problems;state.modalError='';regions.invalidate('drawer/form');render();win.querySelector('.tray__form .field.is-bad input,.tray__form .field.is-bad select,.tray__form .field.is-bad textarea')?.focus();return;}
+  const d=new FormData(f);state.providerSaving=true;state.formErrors={};
+  const body={id:d.get('id'),name:d.get('name'),url:d.get('url'),api:d.get('api'),auth:d.get('auth'),key:d.get('key'),discovery:d.get('discovery'),models:String(d.get('models')).split('\n').map(s=>s.trim()).filter(Boolean),days:Number(d.get('days')),revision:source.providerRevision};
+  regions.invalidate('drawer/form');render();
+  try{await api('/api/provider',body);state.modal=null;state.modalError='';await reload();notify('Провайдер збережений. Каталог оновлюється.');}
+  catch(e){const field=providerField(e.message);state.modalError=e.message;state.modalCode=errorCode(e);if(field)state.formErrors={[field]:e.message};}
+  finally{state.providerSaving=false;regions.invalidate('drawer/form');render();}
+ }
+ // A confirmation in the drawer instead of a browser dialog: what will happen, a safe key first, the action last.
+ function askConfirm(spec){state.confirm=spec;state.modalError='';state.modalCode='';state.modal='confirm';render();}
  // OPERATOR — one control plane, three working surfaces.
  const op=ManaOperator;
  const healthNames={local:'Локально',healthy:'Є запас',risk:'Малий запас',empty:'Вичерпано',unknown:'Немає виміру',unavailable:'Недоступна'};
  const healthGlyph={local:'◈',healthy:'●',risk:'△',empty:'∅',unknown:'?',unavailable:'⊘'};
- let cutGesture=null;
  let opReportCache=null;
  function opHealth(model){return op.health({...model,free:priceInfo(model).kind==='free',expired:source.providers.find(v=>v.id===model.provider)?.expired},opReportCache||usageReports(),p().disabledProviders||[]);}
  function opRouteHealth(route){const m=split(route);return opHealth(catalogMap.get(m.raw)||m);}
  // A latching key: its LED follows aria-pressed / aria-expanded in CSS, so flipping it patches attributes only.
- function opSwitchKey(name,label,on,caption=''){return `<button type="button" class="key" data-op-switch="${name}" ${name==='cuts'?`aria-expanded="${on}" aria-controls="cuts-collection"`:`aria-pressed="${on}"`} title="${esc(caption||label)}">`;}
+ function opSwitchKey(name,label,on,caption=''){return `<button type="button" class="key" data-op-switch="${name}" ${name==='cuts'?`aria-expanded="${on}" aria-controls="cuts-collection" aria-label="Колекція CUTS"`:`aria-pressed="${on}"`}${caption?` title="${esc(caption)}"`:''}>`;}
  function opSwitchFace(name,label){return `<span class="key__cap">${led(false,name==='cuts'?'blue':'green',' data-latch')}${label}</span>`;}
  // A switch as a region: flipping it patches the key's attributes, so the pressed key itself (and its focus) stays.
  function switchRegion(key,name,label,on,caption=''){return box(key,opSwitchKey(name,label,on,caption),[leaf(key+'/face',opSwitchFace(name,label))]);}
- function opSelect(id,label,value,items){const index=Math.max(0,items.findIndex(x=>x[0]===value));return `<div class="op-selector"><span class="selector-rocker" role="group" aria-label="Крок вибору: ${esc(label)}"><button type="button" data-select-step="${id}" data-direction="-1" aria-label="${esc(label)}: попереднє" ${index===0?'disabled':''}>−</button><button type="button" data-select-step="${id}" data-direction="1" aria-label="${esc(label)}: наступне" ${index>=items.length-1?'disabled':''}>+</button></span><label class="selector-content" for="${id}"><small>${esc(label)}</small><select id="${id}" aria-label="${esc(label)}">${items.map(([k,t])=>`<option value="${esc(k)}" ${k===value?'selected':''}>${esc(t)}</option>`).join('')}</select></label></div>`;}
  // Device selector window: a native <select> behind a milled window (the system picker stays on phones).
  function selWin(id,label,value,items,cls='sel--sm',attr=''){return `<div class="sel ${cls}"><label class="silk" for="${id}">${label}</label><div class="sel__win"><select id="${id}" ${attr}>${items.map(([k,t])=>`<option value="${esc(k)}" ${k===value?'selected':''}>${esc(t)}</option>`).join('')}</select><span class="sel__chev"></span></div></div>`;}
 
@@ -1101,11 +1205,15 @@
    leaf('dock/menu',profileMenu()),leaf('dock/sep','<span class="seam seam--v"></span>'),dockSwitches(),
    leaf('feedback',operatorFeedback()),leaf('dock/context',`<p class="dock__ctx print">${ctx}${drafts}</p>`)]);
  }
+ // The reel's ⋯ menu: a small recessed tray of labelled keys; «Прийняти файл» appears when this profile's file was
+ // changed (or removed) outside Mana Tape. Arrows walk the keys, Escape returns to ⋯.
  function profileMenu(){
-  const std=state.profile==='standard',item=(label,action,attr='',cls='')=>`<button type="button" class="key key--menu ${cls}" role="menuitem" data-action="${action}" ${attr}><span class="key__cap">${label}</span></button>`;
-  return `<details class="dock__menu"><summary class="key key--sq" aria-label="Дії з профілем" title="Дії котушки"><span class="key__cap">${SVG.more}</span></summary><div class="menu" role="menu" aria-label="Дії котушки"><div class="menu__head"><span class="silk">Котушка · ${esc(prettyProfile(state.profile))}</span></div><div class="menu__bed">${item('+ Копія','clone-profile')}${item('Перейменувати','rename-profile',std?'disabled':'')}${item('Попереднє збереження','history')}${item('Скинути чернетку','reset-draft',state.changes?'':'disabled')}<div class="menu__sep" role="separator"></div>${item(led(true,'red')+'Видалити','delete-profile',std?'disabled':'','key--danger')}</div></div></details>`;
+  const std=state.profile==='standard',conflict=source.modeConflicts?.includes(state.profile),orphan=source.modeOrphans?.includes(state.profile);
+  const item=(label,action,attr='',cls='')=>`<button type="button" class="key key--menu ${cls}" role="menuitem" data-action="${action}" ${attr}><span class="key__cap">${label}</span></button>`;
+  const adopt=conflict||orphan?item(led(true,'amber')+(orphan?'Прийняти видалення':'Прийняти файл'),'adopt-profile',`data-adopt="${esc(state.profile)}"`)+'<div class="menu__sep" role="separator"></div>':'';
+  return `<details class="dock__menu"><summary class="key key--sq" aria-label="Дії з котушкою ${esc(prettyProfile(state.profile))}" aria-haspopup="menu" title="Дії котушки"><span class="key__cap">${SVG.more}</span></summary><div class="menu" role="menu" aria-label="Дії котушки ${esc(prettyProfile(state.profile))}"><div class="menu__head"><span class="silk">Котушка · ${esc(prettyProfile(state.profile))}</span></div><div class="menu__bed">${adopt}${item('Копія…','clone-profile')}${item('Перейменувати…','rename-profile',std?'disabled':'')}${item('Попереднє збереження…','history')}${item('Скинути чернетку','reset-draft',state.changes?'':'disabled')}<div class="menu__sep" role="separator"></div>${item(led(true,'red')+'Видалити…','delete-profile',std?'disabled':'','key--danger')}</div>${std?'<p class="menu__note">Standard — основний профіль: його не перейменовують і не видаляють</p>':''}</div></details>`;
  }
- function dockSwitches(){return box('dock/switches','<div class="dock__grp">',[switchRegion('dock/health','health','HEALTH',state.health,'HEALTH · ресурс підписок на CUTS'),switchRegion('dock/cuts','cuts','CUTS',state.cuts,'Колекція CUTS')]);}
+ function dockSwitches(){return box('dock/switches','<div class="dock__grp">',[switchRegion('dock/health','health','HEALTH',state.health,'HEALTH · ресурс підписок на CUTS'),switchRegion('dock/cuts','cuts','CUTS',drawerShown(),'')]);}
  // One printed status line with a reserved height: an action's result, or an error (red LED + ×). Never reflows.
  function operatorFeedback(){
   const error=state.error&&state.modal!=='conflict'?state.error:'',text=error||(state.view==='profiles'?state.opFeedback||'':'');
@@ -1125,44 +1233,74 @@
  function opProviderItems(all=false){return [['all','Усі'],...source.providers.filter(v=>all||((v.connected||v.used.length)&&!(p().disabledProviders||[]).includes(v.id)&&!v.expired)).map(v=>[v.id,providerName(v.id)]).sort((a,b)=>a[1].localeCompare(b[1]))];}
  function analyticalProviders(){const ids=state.catalogMode==='mine'?myProviderIds():state.catalogMode==='free'?new Set(catalog.filter(m=>priceInfo(m).kind==='free').map(m=>m.provider)):null;return opProviderItems(true).filter(([id])=>id==='all'||!ids||ids.has(id));}
  // The drawer collection without its search words. It is filtered and sorted again only when a filter, the
- // profile's providers or the snapshot changes; a keystroke then only scans precomputed search keys.
+ // profile's providers, the open editor or the snapshot changes; a keystroke then only scans precomputed search keys.
+ // An open editor narrows the collection to what its list accepts: a pool takes FREE CUTS only, the replacements no
+ // paid DeepSeek, and both only CUTS their role can run.
  function collectionBase(){
-  const t=state.cutTarget,key=JSON.stringify([dataVersion,state.profile,p().disabledProviders||[],t?.role,t?.group,t?.group==='vibe'?vibeAlias(t.role):'',state.cutProvider,state.freeCuts,state.cutHealth,state.cutHealth==='all'?0:(opReportCache||usageReports()).map(r=>[r.provider,r.stale])]);
+  const t=state.cutTarget,ed=editorTarget(),key=JSON.stringify([dataVersion,state.profile,p().disabledProviders||[],t?.role,t?.group,t?.group==='vibe'?vibeAlias(t.role):'',ed?.group,ed?.role,state.cutProvider,state.freeCuts,state.cutHealth,state.cutHealth==='all'?0:(opReportCache||usageReports()).map(r=>[r.provider,r.stale])]);
   if(collectionBase.key===key)return collectionBase.rows;
-  const rows=catalog.filter(m=>(!t||acceptsRoleModel(t.role,t.group||'role',m))&&(m.available||source.providers.find(v=>v.id===m.provider)?.connected)&&!routeWarning(m.provider+'/'+m.id)&&(state.cutProvider==='all'||m.provider===state.cutProvider)&&(!state.freeCuts||priceInfo(m).kind==='free')&&(state.cutHealth==='all'||opHealth(m).kind===state.cutHealth)).map(m=>({m,provider:providerName(m.provider)}));
+  const free=state.freeCuts||ed?.group==='pool';
+  const rows=catalog.filter(m=>(!t||acceptsRoleModel(t.role,t.group||'role',m))&&(!ed||acceptsRoleModel(ed.role,ed.group,m)&&(ed.group!=='pool'||ManaOperator.isFreeModel(m))&&(ed.group!=='alternatives'||!deepseek(m.provider+'/'+m.id)))&&(m.available||source.providers.find(v=>v.id===m.provider)?.connected)&&!routeWarning(m.provider+'/'+m.id)&&(state.cutProvider==='all'||m.provider===state.cutProvider)&&(!free||priceInfo(m).kind==='free')&&(state.cutHealth==='all'||opHealth(m).kind===state.cutHealth)).map(m=>({m,provider:providerName(m.provider)}));
   rows.sort((a,b)=>collate(a.m.name,b.m.name)||collate(a.provider,b.provider)||collate(a.m.id,b.m.id));
   collectionBase.key=key;return collectionBase.rows=rows.map(x=>x.m);
  }
  function collectionCuts(){const words=queryWords(state.cutQuery),rows=collectionBase();return words.length?rows.filter(m=>matchesWords(words,searchKey(m).cut)):rows;}
- // DRAWER — the CUTS collection pinned to the viewport bottom within the body. Its front edge (the lip) carries
- // the transport permanently; the body is rendered while it is open (and while it slides away).
+ // DRAWER — pinned to the viewport bottom within the body. Its front edge (the lip) carries the transport
+ // permanently. It has one face at a time: the CUTS collection; an editor (Пули, Заміни) with the collection as
+ // its source; or a form (provider, profile actions, confirmations) that holds the focus while the body is inert.
+ const GRIP='<div class="tray__grip" id="cuts-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="cuts-collection" aria-label="Висота лотка" title="Тягни вгору або вниз · ↑ / ↓ · Home / End · Enter відкриває й закриває"></div>';
+ function drawerFilters(mode){
+  const pool=mode==='pool';
+  return box('drawer/controls','<div class="tray__filters">',[leaf('drawer/provider',selWin('cut-provider','Провайдер',state.cutProvider,opProviderItems())),pool?leaf('drawer/free','<span class="chip chip--ok tray__only">лише FREE</span>'):switchRegion('drawer/free','free','FREE CUTS',state.freeCuts,'Лише підтверджені FREE CUTS'),leaf('drawer/health',selWin('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames).filter(([k])=>k!=='unavailable')])),leaf('drawer/search',drawerSearch())]);
+ }
+ function editorTitle(mode){
+  if(mode==='pool')return `<div class="tray__title tray__title--ed">${led(true,'orange')}<span class="silk silk--ink">Пули</span><span class="tray__count">спільні для всіх профілів</span></div>`;
+  const n=modeList(state.modeScope||'profile').length;return `<div class="tray__title tray__title--ed">${led(true,'orange')}<span class="silk silk--ink">Заміни DeepSeek</span><span class="tray__count"><span class="rd" style="--rd:2ch">${n}</span> CUTS · ${modeOff()?'OFF':'ON'}</span></div>`;
+ }
+ function editorTabs(mode){
+  if(mode==='pool'){const selected=state.poolTab||'free-good';return `<div class="keybed tray__tabs" role="tablist" aria-label="FREE пули">${Object.entries(poolNames).map(([name,label])=>`<button type="button" class="key key--sm" role="tab" id="pool-tab-${name}" data-pool-tab="${name}" aria-selected="${selected===name}" aria-controls="pool-editor" tabindex="${selected===name?0:-1}"><span class="key__cap">${led(selected===name,'green')}${label}<span class="rd" style="--rd:2ch">${poolDraft[name].length}</span></span></button>`).join('')}</div>`;}
+  return `<div class="tray__tabs">${selWin('mode-scope','Для',state.modeScope||'profile',modeScopes())}</div>`;
+ }
+ function sourceHead(mode){return `<span class="silk">Колекція CUTS</span><span class="print print--hint tray__srchint">${mode==='pool'?'FREE · ':''}торкнись — у кінець · перетягни — на місце</span>`;}
  function cutsTray(){
-  const open=!!state.cuts,body=open||drawerOpenShown||!!drawerClosing,t=transportParts(),cuts=collectionCuts();
-  return box('drawer','<div class="tray-port">',[box('drawer/tray',trayOpen(),[
-   box('drawer/lip','<div class="tray__lip">',[
-    leaf('drawer/grip','<div class="tray__grip" id="cuts-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="cuts-collection" aria-label="Висота лотка CUTS" title="Тягни вгору або вниз, щоб змінити висоту · ↑ / ↓ · Home / End · Enter відкриває й закриває"></div>'),
-    box('drawer/title',`<button type="button" class="tray__title" data-action="cuts-toggle" aria-expanded="${open}" aria-controls="tray-body">`,[leaf('drawer/title/face',`${led(false,'blue',' data-latch')}<span class="silk">Колекція CUTS</span>`),leaf('drawer/count',drawerCount(cuts)),leaf('drawer/hint',drawerHint())]),
-    leaf('drawer/armed',armedMarkup()),leaf('drawer/pull','<span class="tray__pull" aria-hidden="true"></span>'),
-    box('drawer/transport',`<div class="tray__transport transport" role="group" aria-label="Зміни: ${t.pool?'FREE пули':t.scope?'заміни':'котушка'}">`,[leaf('tp/scope',t.scopeHtml),leaf('tp/undo',t.undo),leaf('tp/redo',t.redo),leaf('tp/state',t.state),leaf('tp/save',t.save)]),
-    leaf('drawer/chev','<span class="tray__chev" aria-hidden="true"></span>')]),
-   box('drawer/body','<div class="tray__body" id="tray-body">',[
-    box('drawer/controls','<div class="tray__filters">',[leaf('drawer/provider',selWin('cut-provider','Провайдер',state.cutProvider,opProviderItems())),switchRegion('drawer/free','free','FREE CUTS',state.freeCuts,'Лише підтверджені FREE CUTS'),leaf('drawer/health',selWin('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames).filter(([k])=>k!=='unavailable')])),leaf('drawer/search',drawerSearch())]),
-    leaf('drawer/results',body?drawerResults(cuts):'<div class="tray__grid"></div>')])])]);
+  const mode=drawerMode(),open=drawerShown(),editor=mode==='pool'||mode==='alternatives',form=mode==='form',f=form?formSpec():null,body=open||(drawerOpenShown||!!drawerClosing)&&drawerLastMode==='cuts',t=transportParts(),cuts=form?[]:collectionCuts();
+  const transport=box('drawer/transport',`<div class="tray__transport transport" role="group" aria-label="Зміни: ${t.pool?'FREE пули':t.scope?'заміни':'котушка'}"${form?' inert':''}>`,[leaf('tp/scope',t.scopeHtml),leaf('tp/undo',t.undo),leaf('tp/redo',t.redo),leaf('tp/state',t.state),leaf('tp/save',t.save)]);
+  const close=(action,label)=>leaf('drawer/close',key(SVG.close,action,'key--sq tray__close',`aria-label="${esc(label)}" title="Закрити · Esc"`));
+  const lip=form?[leaf('drawer/grip',''),leaf('drawer/ftitle',formTitle(f)),transport,close('modal-close','Закрити: '+f.title)]
+   :editor?[leaf('drawer/grip',GRIP),leaf('drawer/etitle',editorTitle(mode)),leaf('drawer/etabs',editorTabs(mode)),leaf('drawer/armed',armedMarkup()),transport,close(mode==='pool'?'pool-close':'mode-close',mode==='pool'?'Закрити редактор пулів':'Закрити заміни DeepSeek')]
+   :[leaf('drawer/grip',GRIP),box('drawer/title',`<button type="button" class="tray__title" data-action="cuts-toggle" aria-expanded="${open}" aria-controls="tray-body">`,[leaf('drawer/title/face',`${led(false,'blue',' data-latch')}<span class="silk">Колекція CUTS</span>`),leaf('drawer/count',drawerCount(cuts)),leaf('drawer/hint',drawerHint())]),
+    leaf('drawer/armed',armedMarkup()),leaf('drawer/pull','<span class="tray__pull" aria-hidden="true"></span>'),transport,leaf('drawer/chev','<span class="tray__chev" aria-hidden="true"></span>')];
+  const results=form?null:leaf('drawer/results',body&&!(editor&&state.sourceLater)?drawerResults(cuts):'<div class="tray__grid"></div>');
+  const content=form?[leaf('drawer/form',formMarkup(f))]
+   :editor?[leaf('drawer/editor',mode==='pool'?poolEditor():modePanel()),box('drawer/source','<section class="tray__source" aria-label="Колекція CUTS · джерело для редактора">',[box('drawer/srchead','<div class="tray__srchead">',[leaf('drawer/srclabel',sourceHead(mode)),leaf('drawer/count',drawerCount(cuts))]),drawerFilters(mode),results])]
+   :[drawerFilters(mode),results];
+  return box('drawer','<div class="tray-port">',[box('drawer/tray',trayOpen(),[box('drawer/lip','<div class="tray__lip">',lip),box('drawer/body',`<div class="tray__body${editor?' tray__body--ed':form?' tray__body--form':''}" id="tray-body">`,content)])]);
  }
  function drawerHint(){const t=state.cutTarget;return t?`<span class="tray__hint tray__hint--target">· місце: ${esc(t.role)} · ${t.index===0?'основна':'резерв '+t.index}</span>`:`<span class="tray__hint">· ${narrowSurface()?'обери CUT і торкнись гнізда':'перетягни CUT на доріжку або обери CUT і місце'}</span>`;}
  function armedMarkup(){const r=state.armedCut;if(!r)return '<span class="tray__armed" aria-live="polite"></span>';const name=poolNames[poolName(r)]||cutTitle(r);return `<span class="tray__armed" aria-live="polite">${led(true,'blue')}<span class="tray__armed-txt"><small>Обрано · торкнись CUT для заміни або гнізда «+»</small><b title="${esc(name+(poolName(r)?'':' · '+providerName(split(r).provider)))}">${esc(name)}</b></span><button type="button" class="key" data-action="cancel-cut"><span class="key__cap">Скасувати</span></button></span>`;}
  function drawerSearch(){return `<label class="search">${SVG.search}<input id="cut-query" type="search" aria-label="Знайти CUT у колекції" placeholder="Знайти CUT…" value="${esc(state.cutQuery)}" autocomplete="off"></label>`;}
  function drawerCount(cuts){return `<span class="tray__count"><span class="rd" style="--rd:3ch">${cuts.length}</span> CUTS</span>`;}
- function drawerCut(m){
-  const route=m.provider+'/'+m.id,deleted=deletedCut(route),free=!deleted&&freeRoute(route),health=healthMarks(route),title=cutTitle(route),provider=providerName(m.provider),armed=state.armedCut===route;
-  return `<button type="button" class="cut${free?' cut--free':''}${deleted?' cut--deleted':''}${armed?' is-armed':''}" data-p="${providerSlot(m.provider)}" data-cut="${esc(route)}" aria-pressed="${armed}" aria-label="${esc(title+' · '+provider+(free?' · FREE':'')+' · '+route)}" title="${esc(title+'\n'+route)}"><span class="cut__edge"></span><span class="cut__name cut__name--split">${nameMarkup(title)}</span><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b><span class="cut__think">${m.reasoning===false?'без thinking':isLocal(m.provider)?'локально':'типово'}</span>${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${health.bar}</button>`;
+ // A CUT that is chosen rather than edited (collection, quick pick): the same tape, a button, one tooltip.
+ // The quick pick marks the current CUT («зараз») and the ones already on the lane.
+ function drawerCut(m,pick=null){
+  const route=m.provider+'/'+m.id,deleted=deletedCut(route),free=!deleted&&freeRoute(route),health=healthMarks(route),title=cutTitle(route),provider=providerName(m.provider),armed=!pick&&state.armedCut===route;
+  const note=pick?.current?'поточний CUT':pick?.used?'на доріжці':'',warn=routeWarning(route)?'потребує уваги':'';
+  const think=pick?[note,warn].filter(Boolean).join(' · ')||(m.reasoning===false?'без thinking':isLocal(m.provider)?'локально':provider):m.reasoning===false?'без thinking':isLocal(m.provider)?'локально':'типово';
+  const attrs=pick?`data-pick="${esc(route)}" data-cut-route="${esc(route)}" aria-pressed="${!!pick.current}"`:`data-cut="${esc(route)}" aria-pressed="${armed}"`;
+  return `<button type="button" class="cut${free?' cut--free':''}${deleted?' cut--deleted':''}${armed?' is-armed':''}${pick?.current?' is-current':''}" data-p="${providerSlot(m.provider)}" ${attrs} aria-label="${esc(title+' · '+provider+(free?' · FREE':'')+(note?' · '+note:'')+' · '+route+(health.text?' · '+health.text:''))}" title="${esc([title+' · '+provider,route,health.text].filter(Boolean).join('\n'))}"><span class="cut__edge"></span><span class="cut__name cut__name--split">${nameMarkup(title)}</span><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b><span class="cut__think">${esc(think)}</span>${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${health.bar}</button>`;
  }
  function drawerResults(cuts){
   const shown=cuts.slice(0,state.cutLimit||60),key=esc(JSON.stringify([state.cutProvider,state.cutHealth,state.freeCuts,state.cutQuery]));
   if(!shown.length)return `<div class="tray__grid is-empty" data-filter-key="${key}"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${state.cutQuery.trim()?`Нічого не знайдено за «<b>${esc(state.cutQuery.trim())}</b>»`:'Немає CUTS за цими фільтрами'}</span>${state.cutQuery.trim()?'<button type="button" class="key key--sm" data-action="cuts-clear"><span class="key__cap">Очистити</span></button>':''}</div></div>`;
-  return `<div class="tray__grid" data-filter-key="${key}">${shown.map(drawerCut).join('')}${cuts.length>shown.length?`<div class="tray__more"><button type="button" class="key key--sm" data-action="cuts-more"><span class="key__cap">Ще ${Math.min(60,cuts.length-shown.length)}</span></button></div>`:''}</div>`;
+  return `<div class="tray__grid" data-filter-key="${key}">${shown.map(m=>drawerCut(m)).join('')}${cuts.length>shown.length?`<div class="tray__more"><button type="button" class="key key--sm" data-action="cuts-more"><span class="key__cap">Ще ${Math.min(60,cuts.length-shown.length)}</span></button></div>`:''}</div>`;
  }
- let drawerGesture=null,drawerClosing=0,drawerOpenShown=false;
+ let drawerGesture=null,drawerClosing=0,drawerOpenShown=false,drawerLastMode='cuts';
+ // The drawer's face: a form holds the focus; an editor keeps the collection as its source; otherwise the collection.
+ function drawerMode(){return state.modal?'form':state.poolPanel?'pool':state.modePanel?'alternatives':'cuts';}
+ function drawerShown(){return !!(state.cuts||state.modal||state.poolPanel||state.modePanel);}
+ // Each face remembers its own height: the collection and the editors by a user resize, a form by its content.
+ function heightKey(){const mode=drawerMode();return mode==='cuts'?'drawerHeight':mode==='form'?'formHeight':'editorHeight';}
+ function preferredHeight(){return state[heightKey()];}
  // Geometry of the fixed drawer: as wide as the body (8px from each edge on a phone); its height keeps ≈220px of
  // the page visible, and the spacer after the body equals the drawer, so every lane can be scrolled above it.
  // The default follows the window; only a user resize is remembered, and a smaller window never overwrites it.
@@ -1182,28 +1320,28 @@
  // The write pass: port, drawer, spacer and the page's scroll padding take their sizes directly; no inherited
  // custom property changes, so a resize restyles these few elements instead of the whole window.
  function setDrawerHeight({port,tray,grip,spacer},height,{viewport,lip,max,min,left,width},remember=false){
-  const preferred=Number.isFinite(height)?height:Math.min(290,viewport*.43);
+  const mode=drawerMode(),preferred=Number.isFinite(height)?height:mode==='cuts'?Math.min(290,viewport*.43):mode==='form'?Math.min(480,viewport*.6):width<=760?max:Math.min(470,viewport*.55);
   height=Math.round(Math.max(min,Math.min(max,preferred)));
-  if(remember)state.drawerHeight=height;
+  if(remember&&mode!=='form')state[heightKey()]=height;
   port.style.left=left+'px';port.style.width=width+'px';port.style.height=(height+40)+'px';tray.style.height=height+'px';
-  const open=!!state.cuts,shown=open?height:lip;
+  const open=drawerShown(),shown=open?height:lip;
   // On close the page shrinks only after the drawer slid in; on open it grows at once.
   if(spacer&&(open||!drawerClosing))spacer.style.height=(shown+28)+'px';
   document.documentElement.style.setProperty('scroll-padding-bottom',(shown+12)+'px');
-  grip.setAttribute('aria-valuemin',min);grip.setAttribute('aria-valuemax',max);grip.setAttribute('aria-valuenow',height);grip.setAttribute('aria-valuetext',height+' пікселів');
+  if(grip){grip.setAttribute('aria-valuemin',min);grip.setAttribute('aria-valuemax',max);grip.setAttribute('aria-valuenow',height);grip.setAttribute('aria-valuetext',height+' пікселів');}
  }
  function finishDrawerResize(cancel=false){
   const g=drawerGesture;if(!g)return;drawerGesture=null;if(g.frame)cancelAnimationFrame(g.frame);g.parts.tray.classList.remove('is-resizing');
-  if(cancel){state.drawerHeight=g.preferred;resizeDrawer(state.drawerHeight);}else{if(g.next!=null)setDrawerHeight(g.parts,g.next,g.limits,true);storeOperator();}
+  if(cancel){state[g.key]=g.preferred;resizeDrawer(preferredHeight());}else{if(g.next!=null)setDrawerHeight(g.parts,g.next,g.limits,true);storeOperator();}
   if(root.hasPointerCapture(g.pointer))root.releasePointerCapture(g.pointer);render();
  }
  root.addEventListener('pointerdown',e=>{
   const grip=e.target.closest('#cuts-resize');if(!grip||e.button!==0||drawerGesture)return;
   e.preventDefault();grip.focus({preventScroll:true});
   // The grip of a closed drawer opens it; geometry is then read once per gesture.
-  if(!state.cuts){state.cuts=true;render();}
+  if(!drawerShown()){state.cuts=true;render();}
   const parts=drawerParts();if(!parts)return;
-  drawerGesture={pointer:e.pointerId,y:e.clientY,height:parts.tray.getBoundingClientRect().height,preferred:state.drawerHeight,parts,limits:drawerLimits(parts),next:null,frame:0};
+  drawerGesture={pointer:e.pointerId,y:e.clientY,height:parts.tray.getBoundingClientRect().height,key:heightKey(),preferred:preferredHeight(),parts,limits:drawerLimits(parts),next:null,frame:0};
   parts.tray.classList.add('is-resizing');root.setPointerCapture(e.pointerId);
  });
  // A move only records the height; it is written at most once per frame.
@@ -1215,21 +1353,37 @@
  root.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&drawerGesture){e.preventDefault();finishDrawerResize(true);return;}
   if(e.target.id!=='cuts-resize')return;
-  if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleDrawer(!state.cuts);return;}
+  if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleDrawer(!drawerShown());return;}
   if(!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;
-  e.preventDefault();if(!state.cuts){state.cuts=true;render();}
+  e.preventDefault();if(!drawerShown()){state.cuts=true;render();}
   resizeDrawer(e.key==='Home'?0:e.key==='End'?window.innerHeight:e.target.closest('.tray').getBoundingClientRect().height+(e.key==='ArrowUp'?24:-24),true);storeOperator();
  });
- function toggleDrawer(open){if(!open){state.armedCut=state.armedCut&&narrowSurface()?state.armedCut:null;state.cutTarget=null;}state.cuts=open;render();storeOperator();}
+ // Closing the drawer also closes an editor in it (its draft stays); the CUTS key and the grip open the collection.
+ function toggleDrawer(open){if(!open){state.armedCut=state.armedCut&&narrowSurface()?state.armedCut:null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;}state.cuts=open;render();storeOperator();}
  // After a render: the drawer is placed when it or the body changed; a closing drawer frees the page after its slide.
  function settleDrawer(out,force=false){
-  const open=!!state.cuts;
+  const open=drawerShown();
+  // A drawer that slides away after an editor or a form shows the collection's lip only (its grid stays empty).
+  if(open)drawerLastMode=drawerMode();
   if(open!==drawerOpenShown){
    drawerOpenShown=open;clearTimeout(drawerClosing);drawerClosing=0;
-   if(!open){const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;drawerClosing=setTimeout(()=>{drawerClosing=0;resizeDrawer(state.drawerHeight);if(!state.cuts)paintRegions([leaf('drawer/results','<div class="tray__grid"></div>')]);},reduced?0:430);}
+   if(!open){const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;drawerClosing=setTimeout(()=>{drawerClosing=0;resizeDrawer(preferredHeight());if(!drawerShown())paintRegions([leaf('drawer/results','<div class="tray__grid"></div>')]);},reduced?0:430);}
    force=true;
   }
-  if(force||out.all||touched(out,'drawer')||touched(out,'main')||touched(out,'meters'))resizeDrawer(state.drawerHeight);
+  if(force||out.all||touched(out,'drawer')||touched(out,'main')||touched(out,'meters'))resizeDrawer(preferredHeight());
+ }
+ // A tap on a CUT in the editor's source adds it at the end of the open list (a drag puts it in place instead).
+ // The focus stays on the source, so several CUTS can be added in a row; the editor's line says what happened.
+ function appendToEditor(route,from){
+  const t=editorTarget();if(!t||state.saving)return;
+  const list=chain(t.role,t.group),name=t.group==='pool'?poolNames[t.role]:'заміни';
+  if(t.group==='alternatives'&&String(t.role).startsWith('vibe:')&&vibeAlias(t.role.slice(5))){notify('Заміни цього агента налаштовуються в його ролі.');return;}
+  if(list.some(r=>split(r).raw===route)){state.editorMsg='Уже в списку · '+cutTitle(route);paintRegions([leaf('drawer/editor',t.group==='pool'?poolEditor():modePanel())]);return;}
+  if(t.group==='alternatives'&&list.length>=12){notify('У замінах може бути до 12 CUTS.');return;}
+  const m=catalogMap.get(route);if(!m||routeWarning(route)){notify('Цей CUT зараз недоступний. Обери інший.');return;}
+  if(!setChain(t.role,[...list,route],t.group))return;
+  state.editorMsg='Додано · '+cutTitle(route)+' → '+name+' · '+String(list.length+1).padStart(2,'0');render();
+  if(from&&!from.isConnected)win.querySelector(`.tray__source [data-cut="${CSS.escape(route)}"]`)?.focus({preventScroll:true});
  }
  // An armed CUT stays placeable when the drawer filters change; only real availability decides.
  function placeCut(route,target){
@@ -1251,19 +1405,25 @@
   if(list.length>(group==='pool'?Infinity:group==='vibe'?30:group==='alternatives'?12:31)){notify('Доріжка вже має максимальну кількість CUTS.');return;}
   if(!setChain(role,list,group,existing>=0?{inserted:Math.min(index,list.length-1)}:{}))return;
   state.cutTarget=null;state.armedCut=null;if(narrowSurface())state.cuts=false;
+  if(group==='pool'||group==='alternatives')state.editorMsg='Вставлено · '+cutTitle(route)+' · '+String(Math.min(index,list.length-1)+1).padStart(2,'0');
   state.opFeedback=withNotes('Вставлено '+short(split(route).id)+' · '+providerName(split(route).provider)+' → '+role+(old?.effort&&!effort&&existing<0&&!thinkingOff(role,group)?' · thinking → типово':''));render();if(narrowSurface()){pickerFocus({role,index,group});scrollToControl(document.activeElement);}
  }
  function contextTokens(n){return n>=1e6?num(n/1e6)+'M':num(n/1e3)+'K';}
  function opPriceValue(m){const q=priceInfo(m);return q.kind==='free'?0:Number.isFinite(m.cost?.input)&&Number.isFinite(m.cost?.output)&&(m.cost.input||m.cost.output)?(m.cost.input+m.cost.output)/2:null;}
- function analyticalModels(){
-  const mine=myProviderIds(),words=queryWords(state.catalogQuery),favs=new Set(state.favs),changed=new Set(source.changes.map(x=>x.route));
-  let rows=catalog.filter(m=>(state.catalogMode!=='mine'||mine.has(m.provider))&&(state.catalogProvider==='all'||m.provider===state.catalogProvider)&&matchesWords(words,searchKey(m).cut)&&(state.catalogMode!=='free'||priceInfo(m).kind==='free')&&(state.catalogMode!=='used'||referenced.has(m.provider+'/'+m.id))&&(state.catalogMode!=='fav'||favs.has(m.provider+'/'+m.id))&&(state.catalogMode!=='changes'||changed.has(m.provider+'/'+m.id)));
-  rows=rows.filter(m=>!state.catalogEvidence||state.catalogEvidence==='all'||evidenceCoverage(m).kind===state.catalogEvidence);
-  // Sort keys are computed once per row, not inside the comparator.
+ // Колекція rows are filtered and sorted only when a filter, the role or the data slice changes; a search keystroke
+ // then filters the sorted rows by their precomputed search keys (the order does not depend on the words).
+ function catalogBase(){
+  const used=state.catalogMode==='used',key=JSON.stringify([dataVersion,state.catalogMode,state.catalogProvider,state.catalogEvidence||'all',state.catalogSort,state.role,state.benchSource,state.benchRelease,state.catalogMode==='fav'?state.favs:0,used?[...referenced].length+'|'+[...referenced].join():0]);
+  if(catalogBase.key===key)return catalogBase.rows;
+  const mine=myProviderIds(),favs=new Set(state.favs),changed=new Set(source.changes.map(x=>x.route));
+  let rows=catalog.filter(m=>(state.catalogMode!=='mine'||mine.has(m.provider))&&(state.catalogProvider==='all'||m.provider===state.catalogProvider)&&(state.catalogMode!=='free'||priceInfo(m).kind==='free')&&(!used||referenced.has(m.provider+'/'+m.id))&&(state.catalogMode!=='fav'||favs.has(m.provider+'/'+m.id))&&(state.catalogMode!=='changes'||changed.has(m.provider+'/'+m.id)));
+  if(state.catalogEvidence&&state.catalogEvidence!=='all')rows=rows.filter(m=>evidenceCoverage(m).kind===state.catalogEvidence);
+  // Sort keys are computed once per row, never inside the comparator.
   const keyed=rows.map(m=>{const score=opEvidence(m)?.score??-1,cost=opPriceValue(m)??Infinity,coverage=state.catalogSort==='evidence'?evidenceCoverage(m):null;return {m,score,cost,coverage,value:score>=0&&cost>0&&cost<Infinity?score/cost:-Infinity};});
   keyed.sort(state.catalogSort==='evidence'?(a,b)=>b.coverage.sources.length-a.coverage.sources.length||b.coverage.claims-a.coverage.claims||collate(a.m.name,b.m.name):state.catalogSort==='price'?(a,b)=>a.cost-b.cost||b.score-a.score:state.catalogSort==='value'?(a,b)=>b.value-a.value||b.score-a.score:state.catalogSort==='name'?(a,b)=>collate(a.m.name,b.m.name):(a,b)=>b.score-a.score||a.cost-b.cost);
-  return keyed.map(x=>x.m);
+  catalogBase.key=key;return catalogBase.rows=keyed.map(x=>x.m);
  }
+ function analyticalModels(){const words=queryWords(state.catalogQuery),rows=catalogBase();return words.length?rows.filter(m=>matchesWords(words,searchKey(m).cut)):rows;}
  // Колекція screens: the price × score scatter and the inspector on black glass, each with its own ТОН encoder.
  function analyzerPlot(rows){
   const rated=rows.map(m=>({m,q:opEvidence(m),cost:opPriceValue(m)})).filter(x=>x.q&&x.cost!==null),paid=rated.filter(x=>x.cost>0),minCost=Math.min(.1,...paid.map(x=>x.cost)),maxCost=Math.max(10,...paid.map(x=>x.cost)),selected=state.analyze||rows[0]?.provider+'/'+rows[0]?.id;
@@ -1273,100 +1433,165 @@
   const plot=rated.length?`<div class="g-plot" role="group" aria-label="Оцінка ролі та довідкова API ціна"><div class="g-plot__zone" style="--w:.11"><span>FREE</span></div>${ticks.map(n=>`<i class="g-plot__tick" style="--x:${f(xpos(n))}"></i>`).join('')}${rated.slice(0,180).map(({m,q,cost})=>{const route=m.provider+'/'+m.id,active=route===selected,label=cutTitle(route)+' · '+providerName(m.provider)+' · оцінка '+num(q.score)+' · $'+num(cost);return `<button type="button" class="g-plot__pt${cost===0?' is-free':''}" data-analyze="${esc(route)}" style="--x:${f(xpos(cost))};--y:${f(q.score/100)}" aria-pressed="${active}" aria-label="${esc(label)}" title="${esc(label)}"></button>`;}).join('')}<div class="g-plot__y"><span>100</span><span>50</span><span>0</span></div></div><div class="g-plot__x g-plot__x--abs"><span style="--x:${f(xpos(0))}">FREE</span>${ticks.map(n=>`<span style="--x:${f(xpos(n))}">$${n<.1?n.toPrecision(1):num(n)}</span>`).join('')}</div>`:`<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Немає зіставних тестів і цін для цього зрізу</span></div>`;
   return `<div class="screen screen--wide" data-screen="analysis" data-screen-default="200">${glass(`<div class="g-head"><span class="g-name">ЦІНА × ТЕСТИ</span><span class="g-age">${esc(state.benchSource)} · ${esc(state.benchRelease)}</span><span class="g-grow"></span>${chosen?`<span class="g-acc g-head__sel">${esc(cutTitle(chosen.m.provider+'/'+chosen.m.id))} · ${num(chosen.q.score)}</span>`:''}</div>${plot}<div class="g-legend"><span>оцінка ролі / 100</span><span>середнє input / output · <b>$</b>/1M · лог. шкала</span><span>довідкова ціна API, не рахунок підписки${rated.length>180?' · на графіку перші 180':''}</span></div>`)}<div class="screen__chin"><span class="screen__id">${led(rated.length>0,'green')}<span class="silk">аналіз</span></span><span class="strip__grow"></span>${hueEncoder('analysis','Ціна × тести',200)}</div></div>`;
  }
+ // The best tested CUT of each provider for the role: keys that narrow the collection to that provider.
  function providerFitStrip(rows){
   if(state.catalogProvider!=='all')return '';
   const best=new Map();for(const m of rows){const q=opEvidence(m);if(q&&(!best.has(m.provider)||best.get(m.provider).q.score<q.score))best.set(m.provider,{m,q});}
-  return `<p class="role-comparison-label">Найкращі тестовані CUTS провайдерів · ${esc((labels[state.role]||state.role))}</p><div class="provider-fits" aria-label="Найкращі тестовані моделі провайдерів для ролі">${[...best.values()].sort((a,b)=>b.q.score-a.q.score).slice(0,5).map(({m,q})=>`<button type="button" data-catalog-provider="${esc(m.provider)}"><span>${esc(providerName(m.provider))}<b>${num(q.score)}</b></span><small>${esc(cutTitle(m.provider+'/'+m.id))} · ${esc(q.record.effort||'типово')}</small></button>`).join('')}</div>`;
+  if(!best.size)return '';
+  return `<div class="coll__fits" role="group" aria-label="Найкращі тестовані CUTS провайдерів · ${esc(labels[state.role]||state.role)}"><span class="silk">Найкращі · ${esc(state.role)}</span>${[...best.values()].sort((a,b)=>b.q.score-a.q.score).slice(0,5).map(({m,q})=>`<button type="button" class="key" data-catalog-provider="${esc(m.provider)}" aria-label="${esc(providerName(m.provider)+' · '+cutTitle(m.provider+'/'+m.id)+' · оцінка '+num(q.score))}"><span class="key__cap"><span class="key__txt"><b>${esc(providerName(m.provider))} <span class="rd" style="--rd:4ch">${num(q.score)}</span></b><span class="key__sub">${esc(cutTitle(m.provider+'/'+m.id))} · ${esc(q.record.effort||'типово')}</span></span></span></button>`).join('')}</div>`;
  }
-
+ // Evidence on the inspector glass: the kind is a word on a chip (тест / Arena / заява), the source next to it.
+ const KIND_CHIP={benchmark:['тест','ok'],preference:['Arena',''],developer:['заява','warn']};
  function evidenceRows(m){
-  return evidence.summary(modelRecords(m)).map(r=>{const kind=evidence.kind(r),[label,s]=kind==='developer'?['заява розробника','warn']:kind==='preference'?['Arena · уподобання','']:['незалежний тест','ok'];const [k,v]=Object.entries(r.scores||{})[0]||[];
-   const value=kind==='preference'?num(r.rating):v!=null?num(v)+'%':'—';
-   return `<div class="g-kv" title="${esc((kind==='developer'?r.publisher:r.source)+' · '+(r.release||'')+' · '+r.id+(r.effort?' · '+r.effort:''))}"><span><span class="g-chip"${s?` data-s="${s}"`:''}>${esc(kind==='developer'?r.publisher:r.source)}</span> ${esc(kind==='preference'?label:(k||label))}</span><i></i><b>${value}</b></div>`;}).join('');
+  return evidence.summary(modelRecords(m)).map(r=>{const kind=evidence.kind(r),[label,s]=KIND_CHIP[kind]||KIND_CHIP.benchmark,[k,v]=Object.entries(r.scores||{})[0]||[];
+   const value=kind==='preference'?num(r.rating):v!=null?num(v)+'%':'—',what=kind==='preference'?'уподобання':kind==='developer'?(r.publisher||'розробник')+(k?' · '+k:''):(r.source==='Artificial Analysis'?'AA':r.source)+(k?' · '+k:'');
+   return `<div class="g-kv" title="${esc((kind==='developer'?r.publisher:r.source)+' · '+(r.release||'')+' · '+r.id+(r.effort?' · '+r.effort:''))}"><span><span class="g-chip"${s?` data-s="${s}"`:''}>${label}</span> ${esc(what)}</span><i></i><b>${value}</b></div>`;}).join('');
  }
  function analyzerDetail(rows){
   const m=catalogMap.get(state.analyze)||rows[0];
   const chin=(extra='')=>`<div class="screen__chin">${extra}<span class="strip__grow"></span>${hueEncoder('inspector','Інспектор CUT',200)}</div>`;
-  if(!m)return `<div class="screen screen--insp" data-screen="inspector" data-screen-default="200">${glass('<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Зміни фільтри, щоб побачити моделі.</span></div>')}${chin()}</div>`;
+  if(!m)return `<div class="screen screen--insp" data-screen="inspector" data-screen-default="200" id="coll-inspector" tabindex="-1">${glass('<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Немає CUTS за цими фільтрами</span></div>')}${chin()}</div>`;
   const route=m.provider+'/'+m.id,q=opEvidence(m),h=opHealth(m),editions=catalog.filter(x=>op.normalize(x.id)===op.normalize(m.id)),fav=state.favs.includes(route),[hcls]=HEALTH_VIEW[h.kind]||HEALTH_VIEW.unknown;
   const kv=(k,v,title='')=>`<div class="g-kv"${title?` title="${esc(title)}"`:''}><span>${k}</span><i></i><b>${v}</b></div>`;
-  const tests=q?`${kv(esc(labels[state.role]||state.role),num(q.score),'Зважена оцінка тестів / 100')}<div class="g-score" style="--v:${(q.score/100).toFixed(3)}"><i></i></div>${Object.entries(q.weights).map(([k,w])=>`${kv(esc(k)+' · '+Math.round(w*100)+'%',num(q.record.scores[k]))}<div class="g-score" style="--v:${(Math.max(0,Math.min(100,q.record.scores[k]||0))/100).toFixed(3)}"><i></i></div>`).join('')}<div class="g-hint">${esc(q.record.id)} · ${esc(q.record.effort||'режим джерела')} · ${esc(q.record.source)} · ${esc(q.record.release)} · оцінка — орієнтир для ролі, не тест провайдера</div>`:`${kv(esc(labels[state.role]||state.role),'—')}<div class="g-hint">Для цієї ролі та версії немає повного набору тестів; окремі виміри нижче.</div>`;
+  const tests=q?`${kv(esc(labels[state.role]||state.role)+' · бал',num(q.score),'Зважена оцінка тестів / 100')}<div class="g-score" style="--v:${(q.score/100).toFixed(3)}"><i></i></div>${Object.entries(q.weights).map(([k,w])=>`${kv(esc(k)+' · '+Math.round(w*100)+'%',num(q.record.scores[k]))}<div class="g-score" style="--v:${(Math.max(0,Math.min(100,q.record.scores[k]||0))/100).toFixed(3)}"><i></i></div>`).join('')}<div class="g-hint">${esc(q.record.id)} · ${esc(q.record.effort||'режим джерела')} · ${esc(q.record.source)} · ${esc(q.record.release)} · орієнтир для ролі, не тест провайдера</div>`:`${kv(esc(labels[state.role]||state.role)+' · бал','—')}<div class="g-hint">Для цієї ролі та версії немає повного набору тестів; окремі виміри нижче.</div>`;
   const caps=`${kv('контекст',m.contextWindow?contextTokens(m.contextWindow):'—')}${kv('вихід',m.maxTokens?contextTokens(m.maxTokens):'—')}${kv('зір',Array.isArray(m.input)?m.input.includes('image')?'так':'ні':'—')}${kv('міркування',m.reasoning===true?'так':m.reasoning===false?'ні':'—')}`;
   const list=[...editions].sort((a,b)=>(opPriceValue(a)??Infinity)-(opPriceValue(b)??Infinity)).slice(0,state.allEditions?editions.length:4);
   const eds=list.map(x=>`<button type="button" class="g-kv g-kv--btn" data-analyze="${esc(x.provider+'/'+x.id)}"${x===m?' aria-current="true"':''}><span>${esc(providerName(x.provider))}</span><i></i><b>${esc(priceInfo(x).label)}</b></button>`).join('');
-  const glassInner=`<div class="g-insp"><div class="g-insp__title"><b>${esc(cutTitle(route))}</b><span class="g-chip g-chip--dim">${esc(providerName(m.provider))}</span></div><div class="g-dim g-insp__id">${esc(m.id)}</div><div class="g-rule"></div>${tests}<div class="g-rule"></div>${caps}${kv('ціна · вхід / вихід $/1M',esc(priceInfo(m).label))}${evidenceRows(m)?`<div class="g-rule"></div>${evidenceRows(m)}`:''}<div class="g-rule"></div><div class="g-hint">EDITION · вхід / вихід $/1M</div>${eds}<div class="g-msg" data-s="${hcls==='ok'||hcls==='gpu'?'ok':hcls==='low'?'warn':hcls==='zero'||hcls==='off'?'bad':''}"><span>${healthGlyph[h.kind]} ${esc(h.label)}</span></div></div>`;
-  return `<div class="screen screen--insp" data-screen="inspector" data-screen-default="200" tabindex="-1">${glass(glassInner)}${chin(`<button type="button" class="key key--sm key--sq" data-fav="${esc(route)}" aria-pressed="${fav}" aria-label="${fav?'Прибрати з обраних':'В обране'}" title="${fav?'В обраних':'До обраних'}"><span class="key__cap">${fav?'★':'☆'}</span></button><button type="button" class="key key--sm" data-model-detail="${esc(route)}"><span class="key__cap">Всі дані</span></button>${editions.length>4?`<button type="button" class="key key--sm" data-action="all-editions" aria-pressed="${!!state.allEditions}"><span class="key__cap">${state.allEditions?'Стиснути':'Усі EDITION · '+editions.length}</span></button>`:''}`)}</div>`;
+  const ev=evidenceRows(m);
+  const glassInner=`<div class="g-insp"><div class="g-insp__title"><b>${esc(cutTitle(route))}</b><span class="g-chip g-chip--dim">${esc(providerName(m.provider))}</span></div><div class="g-dim g-insp__id">${esc(m.id)}</div><div class="g-rule"></div>${tests}<div class="g-rule"></div>${caps}${kv('ціна · вхід / вихід $/1M',esc(priceInfo(m).label))}${ev?`<div class="g-rule"></div><div class="g-hint">тест — незалежний · Arena — людські уподобання · заява — розробник</div>${ev}`:''}<div class="g-rule"></div><div class="g-hint">EDITION · вхід / вихід $/1M</div>${eds}<div class="g-msg" data-s="${hcls==='ok'||hcls==='gpu'?'ok':hcls==='low'?'warn':hcls==='zero'||hcls==='off'?'bad':''}"><span>${healthGlyph[h.kind]} ${esc(h.label)}</span></div></div>`;
+  return `<div class="screen screen--insp" data-screen="inspector" data-screen-default="200" id="coll-inspector" tabindex="-1" aria-label="Інспектор CUT · ${esc(cutTitle(route))}">${glass(glassInner)}${chin(`<button type="button" class="key key--sm coll__back" data-action="coll-back" aria-label="До списку CUTS"><span class="key__cap">↑ До списку</span></button><button type="button" class="key key--sm key--sq" data-fav="${esc(route)}" aria-pressed="${fav}" aria-label="${fav?'Прибрати з обраних':'Додати в обрані'}" title="${fav?'В обраних':'До обраних'}"><span class="key__cap">${fav?'★':'☆'}</span></button><button type="button" class="key key--sm" data-model-detail="${esc(route)}"><span class="key__cap">Всі дані</span></button>${editions.length>4?`<button type="button" class="key key--sm" data-action="all-editions" aria-pressed="${!!state.allEditions}"><span class="key__cap">${state.allEditions?'Стиснути':'Усі EDITION · '+editions.length}</span></button>`:''}`)}</div>`;
  }
- function evidenceSourceLine(m){const c=evidenceCoverage(m);return [...c.sources.map(s=>({'Artificial Analysis':'AA','LiveBench':'LiveBench','LiveCodeBench':'LiveCodeBench','Arena':'Arena'}[s]||s)),...(c.claims?['Заяви розробника']:[])].join(' · ')||'Без зіставлених тестів';}
- function evidenceCoverageLine(rows){const counts={independent:0,developer:0,unknown:0};for(const m of rows)counts[evidenceCoverage(m).kind]++;return `${rows.length} CUTS · незалежні дані: ${counts.independent} · лише заяви: ${counts.developer} · без даних: ${counts.unknown}`;}
+ // A row's evidence as printed chips with words: «тест AA», «Arena», «заява» (the legend above the list explains).
+ const SOURCE_SHORT={'Artificial Analysis':'AA'};
+ function evidenceChips(m){const c=evidenceCoverage(m),chips=c.sources.map(s=>s==='Arena'?'<span class="chip">Arena</span>':`<span class="chip chip--ok">тест ${esc(SOURCE_SHORT[s]||s)}</span>`);if(c.claims)chips.push('<span class="chip chip--warn">заява</span>');return chips.join('')||'<span class="coll__none">без тестів</span>';}
+ function evidenceCoverageLine(rows){const counts={independent:0,developer:0,unknown:0};for(const m of rows)counts[evidenceCoverage(m).kind]++;return `<b>${rows.length}</b> CUTS · незалежні дані: <b>${counts.independent}</b> · лише заяви: <b>${counts.developer}</b> · без даних: <b>${counts.unknown}</b>`;}
  // Колекція: controls, search field and every result block are regions; a search keystroke repaints only
  // the result blocks whose content changed (catalogBody), never the field being typed into.
  function catalogData(){
   const rows=analyticalModels(),per=12;state.page=Math.max(0,Math.min(state.page,Math.ceil(rows.length/per)-1));const shown=rows.slice(state.page*per,(state.page+1)*per),selected=source.providers.find(v=>v.id===state.catalogProvider);
-  const releases=[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source===state.benchSource).map(b=>b.release))].sort().reverse();
-  return {rows,shown,selected,releases,per};
+  return {rows,shown,selected,per};
  }
- function operatorCatalog(){const data=catalogData();return box('m/catalog','<section class="catalog-surface">',[leaf('m/controls',catalogControls()),leaf('m/source',catalogSearch(data)),...catalogBody(data)]);}
- function catalogControls(){return `<div class="surface-controls">${opSelect('catalog-provider','Провайдер',state.catalogProvider,analyticalProviders())}${opSelect('op-role','Роль',state.role,roleKeys.map(r=>[r,(labels[r]||r)]))}${opSelect('op-sort','Порядок',state.catalogSort,[['score','Топ за балом ролі'],['evidence','Покриття тестами'],['price','Нижча ціна'],['value','Тести / API $'],['name','За назвою']])}${opSelect('op-scope','Колекція',state.catalogMode,[['mine','Мої'],['all','Увесь каталог'],['free','FREE CUTS'],['used','У профілях'],['fav','Обрані'],['changes','Нові / зниклі']])}${tool('+ Провайдер','provider-add')}</div>`;}
- function catalogSearch({releases}){return `<div class="analysis-source-controls"><label class="search">${SVG.search}<input id="catalog-query" type="search" value="${esc(state.catalogQuery)}" placeholder="CUT або провайдер" aria-label="Пошук CUTS"></label>${opSelect('op-source','Бал ролі',state.benchSource,[['Artificial Analysis','Artificial Analysis'],['LiveBench','LiveBench']])}${opSelect('op-release','Зріз',state.benchRelease,releases.map(r=>[r,r]))}${opSelect('op-evidence','Дані',state.catalogEvidence||'all',[['all','Усі'],['independent','Незалежні'],['developer','Лише заяви'],['unknown','Без даних']])}</div>`;}
+ function catalogReleases(){return [...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source===state.benchSource).map(b=>b.release))].sort().reverse();}
+ function operatorCatalog(){const data=catalogData();return box('m/catalog','<section class="coll" aria-label="Колекція CUTS · аналітика">',[box('m/ctl','<div class="bay coll__ctl">',[leaf('m/source',catalogSearch(data)),leaf('m/controls',catalogControls())]),...catalogBody(data)]);}
+ function catalogControls(){
+  const releases=catalogReleases();
+  return `${selWin('catalog-provider','Провайдер',state.catalogProvider,analyticalProviders())}${selWin('op-scope','Колекція',state.catalogMode,[['mine','Мої'],['all','Увесь каталог'],['free','FREE CUTS'],['used','У профілях'],['fav','Обрані'],['changes','Нові / зниклі']])}${selWin('op-role','Роль',state.role,roleKeys.map(r=>[r,labels[r]&&labels[r]!==r?r+' · '+labels[r]:r]))}${selWin('op-sort','Порядок',state.catalogSort,[['score','Топ за балом ролі'],['evidence','Покриття тестами'],['price','Нижча ціна'],['value','Тести / API $'],['name','За назвою']])}<span class="seam seam--v coll__seam"></span>${selWin('op-source','Бал ролі',state.benchSource,[['Artificial Analysis','Artificial Analysis'],['LiveBench','LiveBench']])}${selWin('op-release','Зріз',state.benchRelease,releases.length?releases.map(r=>[r,r]):[['','—']],'sel--sm',releases.length?'':'disabled')}${selWin('op-evidence','Дані',state.catalogEvidence||'all',[['all','Усі'],['independent','Незалежні'],['developer','Лише заяви'],['unknown','Без даних']])}${key('+ Провайдер','provider-add','coll__add')}`;
+ }
+ function catalogSearch(){return `<label class="search coll__search">${SVG.search}<input id="catalog-query" type="search" value="${esc(state.catalogQuery)}" placeholder="CUT або провайдер" aria-label="Знайти CUT у колекції" autocomplete="off"></label>`;}
+ function ledgerRow(m,selected){
+  const route=m.provider+'/'+m.id,q=opEvidence(m),h=opHealth(m),[hcls,glyph]=HEALTH_VIEW[h.kind]||HEALTH_VIEW.unknown,price=priceInfo(m),title=cutTitle(route);
+  return `<button type="button" class="list__row coll__row" role="option" aria-selected="${selected}" tabindex="${selected?0:-1}" data-analyze="${esc(route)}" title="${esc(title+'\n'+route)}">${led(selected,'blue')}<span class="coll__name"><b>${esc(title)}</b><small>${esc(providerName(m.provider))} · ${esc(m.id)}${m.status==='missing'?' · DELETED':''}</small><span class="coll__ev">${evidenceChips(m)}</span></span><span class="coll__score"><b class="rd" style="--rd:4ch">${q?num(q.score):'—'}</b><small>${q?esc(q.record.effort||'типово'):{independent:'немає бала',developer:'лише заяви',unknown:'немає даних'}[evidenceCoverage(m).kind]}</small></span><span class="coll__price">${price.kind==='free'?'<span class="stamp stamp--free">FREE</span>':`<b>${esc(price.label)}</b>`}<small>${price.kind==='free'?'безкоштовно':price.subscription?'підписка · API-тариф':price.variable?'змінний тариф':price.kind==='paid'?'вхід / вихід':price.kind==='local'?'власний GPU':'немає тарифу'}</small></span><span class="coll__ctx"><b class="rd" style="--rd:5ch">${m.contextWindow?contextTokens(m.contextWindow):'—'}</b><small><span class="hs hs--${hcls}" aria-hidden="true">${glyph}</span> ${esc(h.label)}</small></span></button>`;
+ }
  function catalogBody({rows,shown,selected,per}=catalogData()){
-  return [leaf('m/coverage',`<p class="evidence-coverage">${evidenceCoverageLine(rows)}</p>`),leaf('m/cartridge',selected?`<section class="provider-cartridge"><span class="cartridge-plug" aria-hidden="true">⏚</span><div><strong>${esc(providerName(selected.id))}</strong><small>${selected.count} моделей · ${selected.expired?'Термін минув':selected.connected?'Доступний в OMP':'Доступ не підтверджено'}${selected.expires?' · до '+timeLabel(selected.expires):''}</small></div><label class="check-field"><input type="checkbox" data-provider-toggle="${esc(selected.id)}" ${(p().disabledProviders||[]).includes(selected.id)?'':'checked'}>У профілі</label>${selected.custom||selected.managed?`<button type="button" class="tool" data-edit-provider="${esc(selected.id)}">Підключення</button>`:''}<span>${rows.filter(m=>opEvidence(m)).length} тестованих маршрутів для ${esc(state.role)}</span></section>`:''),leaf('m/fits',providerFitStrip(rows)),leaf('m/selection',rows.length?`<div class="catalog-selection"><span>Обрано: <b>${esc(cutTitle(state.analyze||rows[0].provider+'/'+rows[0].id))}</b></span><button type="button" class="tool" data-model-detail="${esc(state.analyze||rows[0].provider+'/'+rows[0].id)}">Дані CUT ↗</button></div>`:''),
-   box('m/layout','<div class="analysis-layout">',[box('m/main','<div class="analysis-main">',[leaf('m/plot',analyzerPlot(rows)),leaf('m/ledger',`<div class="cut-ledger"><header><span>${rows.length} EDITION · ${esc((labels[state.role]||state.role))}</span><span>ТЕСТ / 100</span><span>INPUT / OUTPUT · $/1M</span><span>КОНТЕКСТ</span></header>${shown.map(m=>{const q=opEvidence(m),route=m.provider+'/'+m.id,h=opHealth(m);return `<button type="button" class="ledger-cut ${state.analyze===route?'selected':''}" data-analyze="${esc(route)}" title="${esc(route)}" aria-label="${esc(cutTitle(route)+' · '+route)}"><span><b>${esc(cutTitle(route))}</b><small>${esc(providerName(m.provider))} · ${esc(m.id)} ${m.status==='missing'?' · Зникла':''}</small><small class="ledger-evidence">${evidenceSourceLine(m)}</small></span><span class="ledger-score">${q?num(q.score):'—'}<small>${q?esc(q.record.effort||'типово'):evidenceLabel(m)}</small></span><span>${priceMarkup(m)}</span><span>${m.contextWindow?contextTokens(m.contextWindow):'—'}<small class="health-${h.kind}">${healthGlyph[h.kind]} ${h.label}</small></span></button>`;}).join('')}</div>`),leaf('m/pagination',`<div class="pagination"><span>${rows.length?state.page*per+1:0}–${Math.min((state.page+1)*per,rows.length)} / ${rows.length}</span><div>${tool('←','prev-page','',state.page===0?'disabled':'')}${tool('→','next-page','',(state.page+1)*per>=rows.length?'disabled':'')}</div></div>`)]),leaf('m/inspector',analyzerDetail(rows))]),
-   leaf('m/note',`<p class="evidence-note">Порівняння в одному джерелі й зрізі. У каталозі показано найкращий доступний тестований режим; назва режиму — біля бала. Ціни невідомого типу й безкоштовні маршрути не ранжуються за «тести / $».</p>`)];
+  const pick=state.analyze||(rows[0]?rows[0].provider+'/'+rows[0].id:''),q=state.catalogQuery.trim(),pages=Math.max(1,Math.ceil(rows.length/per));
+  const ledger=shown.length?`<div class="coll__lhead" aria-hidden="true"><span>CUT · провайдер · дані</span><span>бал / 100</span><span>$ / 1M</span><span>контекст</span></div><div class="list coll__list" role="listbox" aria-label="CUTS · ${esc(labels[state.role]||state.role)} · сторінка ${state.page+1} з ${pages}">${shown.map(m=>ledgerRow(m,m.provider+'/'+m.id===pick)).join('')}</div><div class="coll__goto"><button type="button" class="key key--sm" data-action="coll-details"><span class="key__cap">Дані обраного CUT ↓</span></button></div>`
+   :`<div class="list coll__list"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${q?`Нічого не знайдено за «<b>${esc(q)}</b>»`:'Немає CUTS за цими фільтрами'}</span>${q?'<button type="button" class="key key--sm" data-action="catalog-clear"><span class="key__cap">Очистити</span></button>':''}</div></div>`;
+  const cartridge=selected?`<div class="bay coll__cart">${led(true,selected.expired?'red':selected.connected?'green':'amber')}<span class="coll__cartname"><b>${esc(providerName(selected.id))}</b><small>${selected.count} моделей · ${selected.expired?'термін минув':selected.connected?'доступний в OMP':'доступ не підтверджено'}${selected.expires?' · до '+esc(timeLabel(selected.expires)):''}</small></span><button type="button" class="key key--sm" data-provider-toggle="${esc(selected.id)}" aria-pressed="${!(p().disabledProviders||[]).includes(selected.id)}"><span class="key__cap">${led(false,'green',' data-latch')}У профілі</span></button>${selected.custom||selected.managed?`<button type="button" class="key key--sm" data-edit-provider="${esc(selected.id)}"><span class="key__cap">Підключення…</span></button>`:''}<span class="print">${rows.filter(m=>opEvidence(m)).length} тестованих маршрутів для ${esc(state.role)}</span></div>`:'';
+  return [leaf('m/coverage',`<div class="coll__cov"><p class="print">${evidenceCoverageLine(rows)}</p><p class="print print--hint">тест — незалежний тест · Arena — людські уподобання (рейтинг) · заява — заява розробника</p></div>`),leaf('m/cartridge',cartridge),leaf('m/fits',providerFitStrip(rows)),
+   box('m/layout','<div class="coll__layout">',[box('m/main','<div class="coll__main">',[leaf('m/plot',analyzerPlot(rows)),leaf('m/ledger',`<div class="coll__ledger">${ledger}</div>`),leaf('m/pagination',rows.length>per?`<div class="keybed coll__pager" role="group" aria-label="Сторінки">${key('←','prev-page','key--sm key--sq',`aria-label="Попередня сторінка"${state.page===0?' disabled':''}`)}<span class="coll__page"><span class="rd" style="--rd:9ch">${state.page*per+1}–${Math.min((state.page+1)*per,rows.length)} / ${rows.length}</span></span>${key('→','next-page','key--sm key--sq',`aria-label="Наступна сторінка"${(state.page+1)*per>=rows.length?' disabled':''}`)}</div>`:'')]),leaf('m/inspector',analyzerDetail(rows))]),
+   leaf('m/note',`<p class="print print--hint coll__note">Порівняння в одному джерелі й зрізі. У каталозі — найкращий доступний тестований режим; його назва біля бала. Ціни невідомого типу й безкоштовні маршрути не ранжуються за «тести / $».</p>`)];
  }
- function historyBins(points){if(!points.length)return [];const start=Math.min(...points.map(x=>x.timestamp)),end=Math.max(...points.map(x=>x.timestamp)),map=new Map(points.map(x=>[x.timestamp,x])),out=[];for(let t=Math.max(start,end-167*3600000);t<=end;t+=3600000)out.push(map.get(t)||{timestamp:t,gap:true});return out;}
- // Історія screen: the hourly bars on black glass (selected hour lit), the reading and the hour's sample.
- function historyScreen(bins,index,active,metric,labelsM,peak,stats,o){
+ function historyBins(points){if(historyBins.memo?.points===points)return historyBins.memo.bins;let out=[];if(points.length){const start=Math.min(...points.map(x=>x.timestamp)),end=Math.max(...points.map(x=>x.timestamp)),map=new Map(points.map(x=>[x.timestamp,x]));for(let t=Math.max(start,end-167*3600000);t<=end;t+=3600000)out.push(map.get(t)||{timestamp:t,gap:true});}historyBins.memo={points,bins:out};return out;}
+ // Історія: the hourly bars on black glass (selected hour lit), the reading and the hour's sample. The screen element
+ // stays; only its glass content is replaced, so scrubbing never repaints the palette.
+ const HISTORY_SIGNALS=[['requests','Запити'],['tokens','Токени'],['errors','Помилки'],['cost','API $']];
+ const HISTORY_SORTS=[['totalRequests','Запити'],['totalCost','API оцінка'],['avgTokensPerSecond','Швидкість'],['failedRequests','Помилки']];
+ function historyData(){
+  const stats=source.insights?.stats||{},bins=historyBins(stats.timeSeries||[]),metric=state.historyMetric,selected=bins.findIndex(b=>b.timestamp===state.historyAt),index=selected>=0?selected:Math.max(0,bins.length-1);
+  return {stats,o:stats.overall||{},bins,metric,index,active:bins[index],peak:Math.max(1,...bins.map(b=>b[metric]||0)),labelsM:Object.fromEntries(HISTORY_SIGNALS)};
+ }
+ function historyRead({active,metric,labelsM}){return `<div class="g-bars__read" aria-live="polite"><span class="g-acc">${active?esc(timeLabel(active.timestamp/1000)):'немає даних'}</span><b class="win__v">${num(active?.[metric])}</b><span class="g-dim">${active?.gap?'немає виміру':esc(labelsM[metric])+' за годину'}</span></div>`;}
+ // The bars never carry the selection in their string: scrubbing repaints the reading and the sample only, and
+ // markHistoryBin() lights the chosen bar (aria-selected, roving tabindex) as a decoration.
+ function historyPlot({bins,metric,labelsM,peak}){
   const step=Math.max(1,Math.round(bins.length/6)),hourLabel=t=>{const d=new Date(t);return d.getHours()===0?d.getDate()+'д':String(d.getHours()).padStart(2,'0');};
   const axis=bins.length?bins.filter((b,i)=>i%step===0||i===bins.length-1).map(b=>`<span>${hourLabel(b.timestamp)}</span>`).join(''):'';
-  const plot=bins.length?`<div class="g-bars__plot" role="listbox" aria-label="Погодинна історія OMP" style="--plot-h:96px">${bins.map((b,i)=>`<button type="button" data-history-bin="${i}" role="option" aria-selected="${index===i}"${b.gap?' class="is-empty"':''} style="--h:${b.gap?0:Math.max(.02,(b[metric]||0)/peak).toFixed(3)}" aria-label="${esc(timeLabel(b.timestamp/1000)+' · '+(b.gap?'немає виміру':num(b[metric])+' '+labelsM[metric]))}"></button>`).join('')}</div><div class="g-bars__axis">${axis}</div>`:'<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Ще немає вимірів</span></div>';
-  const cell=(l,v)=>`<div class="win"><div class="win__top"><span class="win__l">${l}</span><b class="win__v">${v}</b></div></div>`;
-  return `<div class="screen screen--wide" data-screen="history" data-screen-default="150">${glass(`<div class="g-head"><span class="g-name">ІСТОРІЯ OMP</span><span class="g-age">${esc(stats.scope||'OMP')}</span><span class="g-grow"></span><span class="g-acc">${esc(labelsM[metric])}</span></div><div class="g-bars"><div class="g-bars__read"><span class="g-acc">${active?esc(timeLabel(active.timestamp/1000)):'немає даних'}</span><b class="win__v">${num(active?.[metric])}</b><span class="g-dim">${active?.gap?'немає виміру':esc(labelsM[metric])+' за годину'}</span></div>${plot}</div><div class="g-rule"></div><div class="wins wins--sample">${cell('Запити',num(active?.requests))}${cell('Помилки',num(active?.errors))}${cell('Токени',num(active?.tokens))}${cell('API ≈ $',num(active?.cost))}</div>`)}<div class="screen__chin"><span class="screen__id">${led(bins.length>0,'green')}<span class="silk">ця година</span></span><span class="strip__grow"></span>${hueEncoder('history','Історія роботи',150)}</div></div>`;
+  return bins.length?`<div class="g-bars__plot" role="listbox" aria-label="Погодинна історія OMP · ${esc(labelsM[metric])}" style="--plot-h:96px">${bins.map((b,i)=>`<button type="button" data-history-bin="${i}" role="option" aria-selected="false" tabindex="-1"${b.gap?' class="is-empty"':''} style="--h:${b.gap?0:Math.max(.02,(b[metric]||0)/peak).toFixed(3)}" aria-label="${esc(timeLabel(b.timestamp/1000)+' · '+(b.gap?'немає виміру':num(b[metric])+' '+labelsM[metric]))}"></button>`).join('')}</div><div class="g-bars__axis" aria-hidden="true">${axis}</div>`:'<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Ще немає вимірів</span></div>';
  }
- // Історія: the shuttle, the LCD and each summary block are regions; scrubbing repaints the shuttle and LCD.
+ function historySample({active}){const cell=(l,v)=>`<div class="win"><div class="win__top"><span class="win__l">${l}</span><b class="win__v">${v}</b></div></div>`;return `<div class="wins wins--sample">${cell('Запити',num(active?.requests))}${cell('Помилки',num(active?.errors))}${cell('Токени',num(active?.tokens))}${cell('API ≈ $',num(active?.cost))}</div>`;}
+ function historyGlass(data){
+  const {metric,labelsM,stats}=data;
+  return box('h/g','<div class="g">',[leaf('h/ghead',`<div class="g-head"><span class="g-name">ІСТОРІЯ OMP</span><span class="g-age">${esc(stats.scope||'OMP')}</span><span class="g-grow"></span><span class="g-acc">${esc(labelsM[metric])}</span></div>`),box('h/bars','<div class="g-bars">',[leaf('h/read',historyRead(data)),leaf('h/plot',historyPlot(data))]),leaf('h/rule','<div class="g-rule"></div>'),leaf('h/sample',historySample(data))]);
+ }
+ function markHistoryBin(){
+  const plot=win.querySelector('.g-bars__plot');if(!plot)return;const i=String(historyData().index);
+  for(const el of plot.querySelectorAll('[aria-selected=true]'))if(el.dataset.historyBin!==i){el.setAttribute('aria-selected','false');el.tabIndex=-1;}
+  const el=plot.querySelector(`[data-history-bin="${i}"]`);if(el&&el.getAttribute('aria-selected')!=='true'){el.setAttribute('aria-selected','true');el.tabIndex=0;}
+ }
+ function historyScreen(data){
+  return box('h/lcd','<div class="screen screen--wide" data-screen="history" data-screen-default="150">',[nest('h/win',GLASS_OPEN,[box('h/content','<div class="glass__content">',[historyGlass(data)]),leaf('h/sweep','<div class="glass__sweep"></div>')]),leaf('h/chin',`<div class="screen__chin"><span class="screen__id">${led(data.bins.length>0,'green')}<span class="silk">ця година</span></span><span class="strip__grow"></span>${hueEncoder('history','Історія роботи',150)}</div>`)]);
+ }
+ // A keyed choice (signal, measure): radio keys in one bed; arrows move and select.
+ function radioKeys(name,label,value,items){return `<div class="keybed" role="radiogroup" aria-label="${esc(label)}">${items.map(([k,t])=>`<button type="button" class="key key--sm" role="radio" data-radio="${name}" data-value="${esc(k)}" aria-checked="${k===value}" tabindex="${k===value?0:-1}"><span class="key__cap">${led(k===value,'orange')}${esc(t)}</span></button>`).join('')}</div>`;}
+ function historyPosition({bins,index,active}){return `<span class="rd" style="--rd:5ch">${active?dateFormat({hour:'2-digit',minute:'2-digit'}).format(active.timestamp):'—'}</span>`;}
+ function historyFader({bins,index,active}){return `<input class="fader" id="history-position" type="range" min="0" max="${Math.max(1,bins.length-1)}" value="${index}" step="1" aria-label="Позиція в історії" aria-valuetext="${esc(active?timeLabel(active.timestamp/1000):'немає даних')}" ${!bins.length?'disabled':''}>`;}
+ // Історія: controls, the screen, the counters and every list are regions; scrubbing the fader repaints the glass
+ // content and the position readout only (the fader itself is adopted, so the hand never loses it).
  function historySurface(){
-  const stats=source.insights?.stats||{},o=stats.overall||{},bins=historyBins(stats.timeSeries||[]),metric=state.historyMetric,labelsM={requests:'Запити',tokens:'Токени',errors:'Помилки',cost:'API $'},selected=bins.findIndex(b=>b.timestamp===state.historyAt),index=selected>=0?selected:Math.max(0,bins.length-1),active=bins[index],peak=Math.max(1,...bins.map(b=>b[metric]||0)),models=[...(stats.byModel||[])].sort((a,b)=>(b[state.historySort]||0)-(a[state.historySort]||0)),max=Math.max(1,...models.map(m=>m[state.historySort]||0));
-  return box('h/surface','<section class="history-surface">',[
-   leaf('h/controls',`<div class="surface-controls">${opSelect('history-metric','Сигнал',metric,Object.entries(labelsM))}<label class="history-fader"><span class="silk">позиція <output class="rd" style="--rd:5ch">${active?dateFormat({hour:'2-digit',minute:'2-digit'}).format(active.timestamp):'—'}</output></span><input class="fader" id="history-position" type="range" min="0" max="${Math.max(1,bins.length-1)}" value="${index}" step="1" aria-label="Позиція в історії" ${!bins.length?'disabled':''}></label><span class="history-period">${o.firstTimestamp?timeLabel(o.firstTimestamp/1000)+' — '+timeLabel(o.lastTimestamp/1000):'Ще немає вимірів'}<small>${esc(stats.scope||'OMP')} · оновлено ${timeLabel(stats.at)}</small></span></div>`),
-   leaf('h/lcd',historyScreen(bins,index,active,metric,labelsM,peak,stats,o)),
-   leaf('h/total',`<p class="section-engraving history-total-label">УВЕСЬ ПЕРІОД ЗВІТУ</p>`),
-   leaf('h/counters',`<div class="transport-counters"><div><span>ЗАПИТІВ</span><b>${num(o.totalRequests)}</b></div><div><span>ПОМИЛКИ</span><b>${num(o.failedRequests)} <small>${o.errorRate!=null?num(o.errorRate*100)+'%':'—'}</small></b></div><div><span>КЕШ</span><b>${o.cacheRate!=null?num(o.cacheRate*100)+'%':'—'}</b></div><div><span>ПЕРШИЙ ТОКЕН</span><b>${o.avgTtft!=null?num(o.avgTtft/1000)+' с':'—'}</b></div><div><span>ШВИДКІСТЬ</span><b>${num(o.avgTokensPerSecond)} <small>ток/с</small></b></div></div>`),
-   leaf('h/sort',`<div class="surface-controls"><span class="section-engraving">ВНЕСОК МОДЕЛЕЙ · ВЕСЬ ПЕРІОД</span>${opSelect('history-sort','Вимір',state.historySort,[['totalRequests','Запити'],['totalCost','API оцінка'],['avgTokensPerSecond','Швидкість'],['failedRequests','Помилки']])}</div>`),
-   leaf('h/mixdown',`<div class="mixdown">${models.map(m=>`<div class="mix-channel"><span class="mix-label"><b>${esc(short(m.model))}</b><small>${esc(providerName(m.provider))}</small></span><span class="mix-meter"><i style="width:${(m[state.historySort]||0)/max*100}%"></i></span><strong>${num(m[state.historySort])}</strong><span class="mix-detail">${num(m.failedRequests)} помилок · ${num(m.avgTokensPerSecond)} ток/с · ${m.avgTtft!=null?num(m.avgTtft/1000)+' с':'—'}</span></div>`).join('')||'<p class="empty-state">Статистика ще не зібрана</p>'}</div>`),
-   leaf('h/note',`<p class="evidence-note">${source.demo?'Синтетичні дані DEMO.':'Реальні агрегати OMP, не журнал окремих задач.'} Погодинний вибір змінює верхній вимір; внесок моделей — за весь період. API $ — оцінка за тарифами, не платіж підписки. ${esc(stats.error||'')}</p>`),
-   leaf('h/splices',`<div class="catalog-splices"><h3>Зміни колекції</h3>${source.changes.slice(-8).reverse().map(c=>`<div><span>${c.kind==='new'?'+':'−'}</span><b>${esc(cutTitle(c.route))}</b><small>${esc(providerName(split(c.route).provider))} · ${timeLabel(c.at)}</small></div>`).join('')||'<p class="evidence-note">Після першого знімка змін немає.</p>'}</div>`)
+  const data=historyData(),{stats,o}=data,models=[...(stats.byModel||[])].sort((a,b)=>(b[state.historySort]||0)-(a[state.historySort]||0)),max=Math.max(1,...models.map(m=>m[state.historySort]||0));
+  const counter=(label,value,unit='')=>`<div class="counter"><span class="silk">${label}</span><span class="counter__win"><b>${value}</b>${unit?`<small>${unit}</small>`:''}</span></div>`;
+  const unitFor={totalRequests:'',totalCost:'$',avgTokensPerSecond:'ток/с',failedRequests:''};
+  return box('h/surface','<section class="hist" aria-label="Історія OMP">',[
+   box('h/controls','<div class="bay hist__ctl">',[leaf('h/signal',`<div class="hist__grp"><span class="silk">Сигнал</span>${radioKeys('history-metric','Сигнал історії',data.metric,HISTORY_SIGNALS)}</div>`),
+    box('h/pos','<div class="hist__pos">',[leaf('h/posout',`<span class="silk"><label for="history-position">Позиція</label> ${historyPosition(data)}</span>`),leaf('h/fader',historyFader(data))]),
+    leaf('h/period',`<div class="hist__period"><span class="silk">Період</span><b>${o.firstTimestamp?esc(timeLabel(o.firstTimestamp/1000))+' — '+esc(timeLabel(o.lastTimestamp/1000)):'ще немає вимірів'}</b><small class="print print--hint">${esc(stats.scope||'OMP')} · оновлено ${esc(timeLabel(stats.at))}</small></div>`)]),
+   historyScreen(data),
+   leaf('h/counters',`<div class="hist__sum"><span class="silk">Увесь період звіту</span><div class="hist__counters" role="group" aria-label="Увесь період звіту">${counter('Запитів',num(o.totalRequests))}${counter('Помилки',num(o.failedRequests),o.errorRate!=null?num(o.errorRate*100)+'%':'')}${counter('Кеш',o.cacheRate!=null?num(o.cacheRate*100)+'%':'—')}${counter('Перший токен',o.avgTtft!=null?num(o.avgTtft/1000):'—',o.avgTtft!=null?'с':'')}${counter('Швидкість',num(o.avgTokensPerSecond),'ток/с')}</div></div>`),
+   leaf('h/sort',`<div class="hist__head"><span class="silk">Внесок моделей · весь період</span><span class="subhead__rule"></span>${radioKeys('history-sort','Вимір внеску',state.historySort,HISTORY_SORTS)}</div>`),
+   leaf('h/mixdown',models.length?`<div class="list hist__mix" role="list" aria-label="Внесок моделей">${models.map(m=>`<div class="hist__row" role="listitem"><span class="hist__name"><b title="${esc(m.provider+'/'+m.model)}">${esc(cutTitle(m.provider+'/'+m.model))}</b><small>${esc(providerName(m.provider))}${split(m.model).effort?' · '+esc(split(m.model).effort):''}</small></span><span class="hist__bar" style="--v:${((m[state.historySort]||0)/max).toFixed(3)}" aria-hidden="true"><i></i></span><b class="rd hist__val" style="--rd:7ch">${num(m[state.historySort])}${unitFor[state.historySort]?' <small>'+unitFor[state.historySort]+'</small>':''}</b><span class="print print--hint hist__detail">${num(m.failedRequests)} помилок · ${num(m.avgTokensPerSecond)} ток/с · ${m.avgTtft!=null?num(m.avgTtft/1000)+' с':'—'}</span></div>`).join('')}</div>`:'<div class="list hist__mix"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>Статистика ще не зібрана</span></div></div>'),
+   leaf('h/splices',`<div class="hist__head"><span class="silk">Зміни колекції</span><span class="subhead__rule"></span></div>${source.changes.length?`<div class="list hist__changes" role="list">${source.changes.slice(-8).reverse().map(c=>`<div class="hist__change" role="listitem"><span class="hist__sign${c.kind==='new'?' is-new':''}" aria-label="${c.kind==='new'?'нова':'зникла'}">${c.kind==='new'?'+':'−'}</span><b>${esc(cutTitle(c.route))}</b><small>${esc(providerName(split(c.route).provider))} · ${esc(timeLabel(c.at))}</small></div>`).join('')}</div>`:'<div class="list hist__changes"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>Після першого знімка змін немає</span></div></div>'}`),
+   leaf('h/note',`<p class="print print--hint hist__note">${source.demo?'Синтетичні дані DEMO.':'Реальні агрегати OMP, не журнал окремих задач.'} Погодинний вибір змінює екран; внесок моделей — за весь період. API $ — оцінка за тарифами, не платіж підписки. ${esc(stats.error||'')}</p>`)
   ]);
+ }
+ // Scrub: the bar, the reading and the sample follow the fader live; the fader keeps its own element.
+ function scrubHistory(index,commit=false){
+  const bins=historyBins(source.insights?.stats?.timeSeries||[]),bin=bins[index];if(!bin)return;
+  state.historyAt=bin.timestamp;const data=historyData();
+  paintRegions([leaf('h/read',historyRead(data)),leaf('h/sample',historySample(data)),leaf('h/posout',`<span class="silk"><label for="history-position">Позиція</label> ${historyPosition(data)}</span>`)],[leaf('h/fader',historyFader(data))]);
+  markHistoryBin();const fader=win.querySelector('#history-position');if(fader&&fader.value!==String(index))fader.value=String(index);fader?.setAttribute('aria-valuetext',timeLabel(bin.timestamp/1000));
+  if(commit)store();
  }
  root.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&!e.defaultPrevented&&!state.modal&&!state.picker&&!e.target.matches('select')&&state.armedCut){e.preventDefault();state.armedCut=null;state.cutTarget=null;state.opFeedback='Вставку скасовано.';render();(win.querySelector('#cut-query')||win.querySelector('[data-op-switch=cuts]'))?.focus({preventScroll:true});return;}
  });
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
-  if(b.dataset.selectStep){const el=win.querySelector('#'+CSS.escape(b.dataset.selectStep));if(el){el.selectedIndex=Math.max(0,Math.min(el.options.length-1,el.selectedIndex+Number(b.dataset.direction)));el.dispatchEvent(new Event('change',{bubbles:true}));win.querySelector(`[data-select-step="${b.dataset.selectStep}"][data-direction="${b.dataset.direction}"]:not(:disabled)`)?.focus({preventScroll:true});}return;}
   if(b.dataset.opSwitch){const name=b.dataset.opSwitch;
    if(name==='health'){
     // HEALTH is a pure visual switch: the key's and the surfaces' attributes change; the tape and its marks stay,
     // and the CSS transition grows the bars back (only on this user action).
     state.health=!state.health;state.opFeedback=state.health?'HEALTH · колір і шкала на CUT показують найменший доступний ліміт. ? — немає свіжого виміру.':'HEALTH вимкнено · показано чисту плівку.';
     regions.reopen('p/deck',deckOpen());regions.reopen('drawer/tray',trayOpen());paintRegions([dockSwitches(),leaf('feedback',operatorFeedback())]);
-   }else{if(name==='cuts'){toggleDrawer(!state.cuts);win.querySelector('[data-op-switch="cuts"]')?.focus({preventScroll:true});return;}if(name==='free')state.freeCuts=!state.freeCuts;render();}
+   }else{if(name==='cuts'){toggleDrawer(!drawerShown());win.querySelector('[data-op-switch="cuts"]')?.focus({preventScroll:true});return;}if(name==='free')state.freeCuts=!state.freeCuts;render();}
    storeOperator();win.querySelector(`[data-op-switch="${name}"]`)?.focus({preventScroll:true});return;}
-  if(b.dataset.action==='cuts-toggle'){toggleDrawer(!state.cuts);win.querySelector('.tray__title')?.focus({preventScroll:true});return;}
+  if(b.dataset.action==='cuts-toggle'){toggleDrawer(!drawerShown());win.querySelector('.tray__title')?.focus({preventScroll:true});return;}
   if(b.dataset.foldToggle!==undefined){const k=b.dataset.foldToggle;if(openFolds.has(k))openFolds.delete(k);else openFolds.add(k);storeFolds();render();win.querySelector(`[data-fold-toggle="${CSS.escape(k)}"]`)?.focus({preventScroll:true});return;}
   if(b.hasAttribute('data-sync-vibe')){state.syncVibe=!state.syncVibe;store();render();win.querySelector('[data-sync-vibe]')?.focus({preventScroll:true});return;}
+  if(b.dataset.cut&&editorKind()&&b.closest('.tray__source')){appendToEditor(b.dataset.cut,b);return;}
   if(b.dataset.cut){if(b.closest('.ghost'))return;if(state.cutTarget)placeCut(b.dataset.cut,state.cutTarget);else if(state.armedCut===b.dataset.cut){state.armedCut=null;render();}else{state.armedCut=b.dataset.cut;state.opFeedback='CUT обрано. Торкнись CUT для заміни або гнізда «+», щоб вставити.';if(state.view!=='profiles')state.view='profiles';if(narrowSurface())state.cuts=false;render();if(narrowSurface())win.querySelector('.tray__armed [data-action=cancel-cut]')?.focus({preventScroll:true});}return;}
   if(b.dataset.action==='cancel-cut'){state.armedCut=null;state.cutTarget=null;render();win.querySelector('[data-op-switch=cuts]')?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-clear'){state.cutQuery='';render();win.querySelector('#cut-query')?.focus({preventScroll:true});return;}
-  if(b.dataset.analyze){state.analyze=b.dataset.analyze;state.allEditions=false;render();win.querySelector(`.ledger-cut[data-analyze="${CSS.escape(b.dataset.analyze)}"]`)?.focus({preventScroll:true});return;}if(b.dataset.action==='all-editions'){state.allEditions=!state.allEditions;render();return;}
-  if(b.hasAttribute('data-history-bin')){state.historyAt=historyBins(source.insights?.stats?.timeSeries||[])[Number(b.dataset.historyBin)]?.timestamp;render();return;}
+  if(b.dataset.analyze){selectCatalogRow(b.dataset.analyze,!b.closest('.coll__row'));return;}
+  if(b.dataset.providerToggle){const id=b.dataset.providerToggle;p().disabledProviders=(p().disabledProviders||[]).filter(x=>x!==id);if(b.getAttribute('aria-pressed')==='true')p().disabledProviders.push(id);render();win.querySelector(`[data-provider-toggle="${CSS.escape(id)}"]`)?.focus({preventScroll:true});return;}
+  if(b.dataset.action==='coll-details'){const panel=win.querySelector('#coll-inspector');panel?.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});panel?.focus({preventScroll:true});return;}
+  if(b.dataset.action==='coll-back'){const row=win.querySelector('.coll__row[aria-selected=true]');row?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});row?.focus({preventScroll:true});return;}
+  if(b.dataset.action==='catalog-clear'){state.catalogQuery='';state.page=0;state.analyze=null;render();win.querySelector('#catalog-query')?.focus({preventScroll:true});return;}if(b.dataset.action==='all-editions'){state.allEditions=!state.allEditions;render();return;}
+  if(b.hasAttribute('data-history-bin')){const i=Number(b.dataset.historyBin);scrubHistory(i,true);win.querySelector(`[data-history-bin="${i}"]`)?.focus({preventScroll:true});return;}
+  if(b.dataset.radio){const field={'history-metric':'historyMetric','history-sort':'historySort'}[b.dataset.radio];if(field){state[field]=b.dataset.value;store();render();win.querySelector(`[data-radio="${b.dataset.radio}"][data-value="${CSS.escape(b.dataset.value)}"]`)?.focus({preventScroll:true});}return;}
   if(b.dataset.action==='meters-mobile'){state.mobileMeters=!state.mobileMeters;render();win.querySelector('[data-action=meters-mobile]')?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-more'){state.cutLimit=(state.cutLimit||60)+60;render();}
  });
  // Click-to-place provides the same operation without dragging (phone / keyboard).
  root.addEventListener('click',e=>{if(!state.armedCut||e.target.closest('[data-cut],[data-slot-actions],select,.cut__think'))return;const target=e.target.closest('[data-edit]');if(!target||target.disabled)return;e.preventDefault();e.stopImmediatePropagation();const d=target.dataset;placeCut(state.armedCut,{role:d.edit,index:Number(d.index),group:d.group||'role'});},true);
- root.addEventListener('change',e=>{const id=e.target.id,value=e.target.value;if(id==='history-position'){state.historyAt=historyBins(source.insights?.stats?.timeSeries||[])[Number(value)]?.timestamp;render();win.querySelector('#history-position')?.focus({preventScroll:true});return;}const map={'cut-provider':'cutProvider','cut-health':'cutHealth','op-role':'role','op-sort':'catalogSort','op-scope':'catalogMode','op-source':'benchSource','op-release':'benchRelease','op-evidence':'catalogEvidence','history-metric':'historyMetric','history-sort':'historySort'};if(map[id]){state[map[id]]=value;state.page=0;if(id==='op-scope')state.catalogProvider='all';if(id==='op-source')state.benchRelease=[...new Set(source.insights.benchmarks.records.filter(b=>b.source===value).map(b=>b.release))].sort().at(-1)||'';state.analyze=null;store();render();win.querySelector('#'+id)?.focus({preventScroll:true});}});
- root.addEventListener('input',e=>{if(e.target.id==='history-position'){const bins=historyBins(source.insights?.stats?.timeSeries||[]),at=bins[Number(e.target.value)];e.target.closest('.history-fader').querySelector('output').textContent=at?dateFormat({hour:'2-digit',minute:'2-digit'}).format(at.timestamp):'—';}});
- function storeOperator(){try{localStorage.setItem('mana-operator',JSON.stringify({health:state.health,...(Number.isFinite(state.drawerHeight)?{drawerHeight:state.drawerHeight,drawerResized:true}:{})}));}catch{}}
+ root.addEventListener('change',e=>{const id=e.target.id,value=e.target.value;if(id==='history-position'){scrubHistory(Number(value),true);return;}const map={'cut-provider':'cutProvider','cut-health':'cutHealth','op-role':'role','op-sort':'catalogSort','op-scope':'catalogMode','op-source':'benchSource','op-release':'benchRelease','op-evidence':'catalogEvidence'};if(map[id]){state[map[id]]=value;state.page=0;if(id==='op-scope')state.catalogProvider='all';if(id==='op-source')state.benchRelease=[...new Set(source.insights.benchmarks.records.filter(b=>b.source===value).map(b=>b.release))].sort().at(-1)||'';state.analyze=null;store();render();win.querySelector('#'+id)?.focus({preventScroll:true});}});
+ root.addEventListener('input',e=>{if(e.target.id==='history-position')scrubHistory(Number(e.target.value));});
+ // Selecting a CUT in Колекція: the row lights (LED + pressed strip), the inspector follows; focus stays where the
+ // selection was made (the row, a plot point, an EDITION on the inspector).
+ function selectCatalogRow(route,keepFocus=false){
+  state.analyze=route;state.allEditions=false;const rows=analyticalModels(),at=rows.findIndex(m=>m.provider+'/'+m.id===route);if(at>=0)state.page=Math.floor(at/12);render();
+  if(!keepFocus)win.querySelector(`.coll__row[data-analyze="${CSS.escape(route)}"]`)?.focus({preventScroll:true});
+ }
+ function storeOperator(){try{localStorage.setItem('mana-operator',JSON.stringify({health:state.health,...(Number.isFinite(state.drawerHeight)?{drawerHeight:state.drawerHeight,drawerResized:true}:{}),...(Number.isFinite(state.editorHeight)?{editorHeight:state.editorHeight}:{})}));}catch{}}
  // The picker's target CUT carries .editing; a kept row loses it when the picker closes or moves on.
  // The picker's target CUT carries .is-selected (and its ⋯ key aria-expanded); a kept row loses them when the
  // picker closes or moves on. Decorations outside the region strings, re-applied after every patch.
@@ -1479,11 +1704,10 @@
  function windowRegions(dirty){
   return [
    box('device','<div class="device">',[leaf('device/screws',SCREWS),topbar(),leaf('seam:strip','<div class="seam"></div>'),operatorDock(dirty),leaf('seam:dock','<div class="seam"></div>'),...screensBank(),
-    box('main',`<main class="workarea${state.view==='profiles'?'':' operator-surface'}" data-surface="${state.view}">`,state.view==='dashboard'?[historySurface()]:state.view==='profiles'?profileView():[operatorCatalog()])]),
+    box('main',`<main class="workarea" data-surface="${state.view}">`,state.view==='dashboard'?[historySurface()]:state.view==='profiles'?profileView():[operatorCatalog()])]),
    leaf('spacer','<div class="tray-spacer" aria-hidden="true"></div>'),
    cutsTray(),
    pickerMarkup(),
-   leaf('modal',modalMarkup()),
    leaf('toast',toastMarkup())
   ];
  }
@@ -1495,36 +1719,36 @@
   // The DeepSeek switch flips its value; a chosen provider card disappears into the provider selector.
   if(el.hasAttribute('data-profile-mode'))return '[data-profile-mode]';
   if(el.hasAttribute('data-catalog-provider'))return '#catalog-provider';
-  const prefix=el.closest('.picker')?'.picker ':el.closest('.modal')?'.modal ':'';
+  const prefix=el.closest('[data-picker]')?'[data-picker] ':el.closest('.tray__form')?'.tray__form ':'';
   if(el.name)return prefix+'[name="'+CSS.escape(el.name)+'"]';
-  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-knob','data-fold-toggle','data-sync-vibe','data-adopt','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-select-step'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
-  return attr?prefix+'['+attr+'="'+CSS.escape(el.getAttribute(attr))+'"]'+['data-index','data-group','data-direction','data-screen-hue'].filter(key=>el.hasAttribute(key)).map(key=>'['+key+'="'+CSS.escape(el.getAttribute(key))+'"]').join(''):'';
+  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-knob','data-fold-toggle','data-sync-vibe','data-adopt','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-radio','data-edit-provider','data-confirm'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
+  return attr?prefix+'['+attr+'="'+CSS.escape(el.getAttribute(attr))+'"]'+['data-index','data-group','data-direction','data-screen-hue','data-value'].filter(key=>el.hasAttribute(key)).map(key=>'['+key+'="'+CSS.escape(el.getAttribute(key))+'"]').join(''):'';
  }
  // One entry point for every state change. Builds the region tree and lets the region engine replace only
  // what changed; then restores what a replaced region took with it (focus, selection, scroll, menu, modal).
  function render(){
   roleKeys.splice(0,roleKeys.length,...knownRoleKeys(p()));if(!roleKeys.includes(state.role))state.role=roleKeys[0]||'';
-  if(composing||drag?.active||cutGesture?.active||drawerGesture||document.documentElement.dataset.displayTuning){pendingRender=true;scheduleBackgroundWork();return;}
+  if(composing||drag?.active||drawerGesture||document.documentElement.dataset.displayTuning){pendingRender=true;scheduleBackgroundWork();return;}
   pendingRender=false;renderCache={diffs:new Map(),keys:new Map()};
   try{
   opReportCache=usageReports();if(win.dataset.opView!==state.view)win.dataset.opView=state.view;
   const title=source.demo?'Mana Tape · DEMO':'Mana Tape · OMP';if(document.title!==title)document.title=title;
   // The only geometry read before writing: a clean layout here costs nothing.
   surfaceWidth=win.clientWidth;
-  const view=captureView(),wasModal=document.body.classList.contains('modal-open'),layerScroll=win.querySelector('.modal-layer')?.scrollTop||0;
-  const oldForm=win.querySelector('.modal form'),formValues=oldForm?[...oldForm.elements].filter(el=>el.name).map(el=>({name:el.name,value:el.value,checked:el.checked})):[];
-  const modalFocus=view.focused?.closest('.modal')?view.selector:'';
+  const view=captureView(),wasModal=modalShown,layerScroll=win.querySelector('.tray__body--form')?.scrollTop||0;
+  const oldForm=win.querySelector('.tray__form form'),formValues=oldForm?[...oldForm.elements].filter(el=>el.name).map(el=>({name:el.name,value:el.value,checked:el.checked})):[];
+  const modalFocus=view.focused?.closest('.tray--form')?view.selector:'';
   ensureModePreview();rebuild();state.changes=diff(state.profile).length;
   const context=state.view+'|'+state.profile;
   const frame={profile:state.profile,view:state.view,draft:JSON.stringify(p()),projection:JSON.stringify([roleKeys.map(r=>chain(r)),workers().map(r=>chain(r,'vibe')),poolDraft]),dirty:!!state.changes,saving:state.saving,error:state.error,context};
   // Clip geometry is read only when this render can move CUTS (an edit or a new projection).
   const motion=ForgeTape.before(win,frame);
+  // A form in the drawer: the page stays where it is (no scroll lock, no scrim); focus returns to its opener.
   if(state.modal&&!wasModal){
-   modalPageY=window.scrollY;
-   const attribute=['data-model-detail','data-edit-provider','data-action'].find(a=>view.focused?.hasAttribute(a));
+   const attribute=['data-model-detail','data-edit-provider','data-adopt','data-action'].find(a=>view.focused?.hasAttribute(a));
    modalReturnFocus=view.focused?.closest('.dock__menu')?'.dock__menu summary':attribute?`[${attribute}="${CSS.escape(view.focused.getAttribute(attribute))}"]`:'[data-view][aria-current=page]';
-   document.body.style.top=-modalPageY+'px';document.body.classList.add('modal-open');
-  }else if(!state.modal&&wasModal){document.body.classList.remove('modal-open');document.body.style.top='';window.scrollTo({top:modalPageY,behavior:'instant'});}
+  }
+  modalShown=!!state.modal;
   editHistory.observe(state.profile,p(),!!diff(state.profile).length,original[state.profile]);editHistory.observe('@free-pools',poolDraft,poolsDirty(),poolOriginal);
   const dirty=profileKeys.filter(k=>diff(k).length);
   const out=regions.render(windowRegions(dirty));
@@ -1535,13 +1759,21 @@
   // The drawer is placed when it or the body above it was rebuilt; window resizes re-measure it too.
   settleDrawer(out);
   if(state.modal)win.querySelector('.dock__menu[open]')?.removeAttribute('open');else if(view.menuOpen)win.querySelector('.dock__menu')?.setAttribute('open','');
-  for(const child of win.children){const inert=!!state.modal&&!child.classList.contains('modal-layer')&&!child.classList.contains('toast');if(child.inert!==inert)child.inert=inert;}
+  for(const child of win.children){const inert=!!state.modal&&!child.matches('.tray-port,.toast');if(child.inert!==inert)child.inert=inert;}
   restoreScroll(view,out,motion.context===context);
-  if(state.modal&&touched(out,'modal')){const layer=win.querySelector('.modal-layer'),form=layer.querySelector('form');layer.scrollTop=layerScroll;if(form&&form.id===oldForm?.id)for(const saved of formValues){const el=form.elements.namedItem(saved.name);if(el){el.value=saved.value;if(typeof saved.checked==='boolean')el.checked=saved.checked;}}const target=modalFocus?layer.querySelector(modalFocus):!wasModal?layer.querySelector('input,button'):null;target?.focus({preventScroll:true});if(target&&view.selection&&typeof target.setSelectionRange==='function')target.setSelectionRange(...view.selection);}
+  if(state.modal&&touched(out,'drawer')){
+   const layer=win.querySelector('.tray--form'),scroller=layer?.querySelector('.tray__body'),form=layer?.querySelector('.tray__form form');
+   if(layer){
+    if(form!==oldForm){scroller.scrollTop=layerScroll;if(form&&form.getAttribute('id')===oldForm?.getAttribute('id'))for(const saved of formValues){const el=form.elements.namedItem(saved.name);if(el){el.value=saved.value;if(typeof saved.checked==='boolean')el.checked=saved.checked;}}}
+    const target=modalFocus&&!view.focused?.isConnected?layer.querySelector(modalFocus):!wasModal?layer.querySelector(formSpecFocus()||'input,button'):null;
+    target?.focus({preventScroll:true});if(target&&view.selection&&typeof target.setSelectionRange==='function')target.setSelectionRange(...view.selection);
+    fitForm(layer);
+   }
+  }
   if(state.picker&&(touched(out,'picker')))fitPicker();
   if(!state.modal)restoreFocus(view);
   ForgeTape.after(win,motion,frame);
-  if(!state.modal&&view.focused?.matches('.cut-tools'))focusPickerMove(state.picker?.focusDirection||1);
+  if(!state.modal&&view.focused?.matches('.menu--tools [data-action=move-node]')&&!view.focused.isConnected)focusPickerMove(state.picker?.focusDirection||1);
   if(!state.modal&&wasModal)[...win.querySelectorAll(modalReturnFocus||'[data-view][aria-current=page]')].find(el=>el.getClientRects().length)?.focus({preventScroll:true});
   storeDrafts(dirty);
   renderedAt=Date.now();
@@ -1551,7 +1783,7 @@
  // What a replaced region takes with it: read before the patch (one layout at most), restored after it.
  function captureView(){
   const focused=document.activeElement,selector=win.contains(focused)?focusSelector(focused):'';
-  const scrollers=['.picker-results','.tray__grid','.ledger-scroll'].map(selector=>{const el=win.querySelector(selector);return el?{selector,el,left:el.scrollLeft,top:el.scrollTop,key:el.dataset.filterKey}:null;}).filter(Boolean);
+  const scrollers=['#picker-results','.tray__source .tray__grid,.tray__body>.tray__grid','.tray__editor .tray__grid'].map(selector=>{const el=win.querySelector(selector);return el?{selector,el,left:el.scrollLeft,top:el.scrollTop,key:el.dataset.filterKey}:null;}).filter(Boolean);
   // Long lanes scroll on their own; a rebuilt lane keeps its horizontal position within the same profile.
   const grooves=[...win.querySelectorAll('.lane__groove')].filter(el=>el.scrollLeft).map(el=>({el,lane:el.parentElement.dataset.role+'|'+el.parentElement.dataset.laneGroup,left:el.scrollLeft}));
   return {focused,selector,selection:focused?.selectionStart!=null?[focused.selectionStart,focused.selectionEnd,focused.selectionDirection]:null,scrollers,grooves,menuOpen:!!win.querySelector('.dock__menu[open]')};
@@ -1575,7 +1807,7 @@
  // DOM that is not part of the region strings: the picker's target, screen palettes and knob angles, the times
  // (age, reset countdowns) that the 30-s tick keeps current, and the toast's entry.
  function settleRegions(out){
-  markEditing();
+  markEditing();if(state.view==='dashboard')markHistoryBin();
   const fresh=out.all?[win]:out.inserted;
   for(const top of fresh)paintTimes(top);
   if(out.all||out.inserted.some(el=>el.matches(SCREEN_PARTS)||el.querySelector(SCREEN_PARTS)))ManaScreen.sync();
@@ -1607,24 +1839,30 @@
    if(drafts!==storedDrafts.drafts){sessionStorage.setItem(storageKey('forge-drafts'),drafts);storedDrafts.drafts=drafts;}
   }catch{}
  }
+ // Opening a form in the drawer: a fresh form with no errors left from the previous one.
+ function openForm(kind,extra={}){Object.assign(state,{modal:kind,modalError:'',modalCode:'',formErrors:{}},extra);modalFit='';render();}
+ function closeForm(){state.modal=null;state.modalError='';state.modalCode='';state.formErrors={};state.confirm=null;render();}
  root.addEventListener('click',async e=>{
   const b=e.target.closest('button,a.brand');if(!b)return;
   if(b.matches('a.brand')){e.preventDefault();state.view='profiles';render();store();ForgeTape.logo(win.querySelector('.brand'),true);return;}
-  if(b.dataset.modelDetail){state.detail=b.dataset.modelDetail;state.modal='details';state.modalError='';render();win.querySelector('.modal [data-action=modal-close]')?.focus();return;}
-  if(b.dataset.editProvider){state.editProvider=b.dataset.editProvider;state.modal='provider';state.modalError='';render();return;}
+  if(b.dataset.modelDetail){openForm('details',{detail:b.dataset.modelDetail});return;}
+  if(b.dataset.editProvider){openForm('provider',{editProvider:b.dataset.editProvider});return;}
   if(b.hasAttribute('data-show-changes')){state.view='models';state.catalogMode='changes';state.catalogProvider='all';state.page=0;render();return;}
   const action=b.dataset.action;
   try{
    if(action==='refresh'){await api('/api/refresh',{});await reload();notify('Оновлюю каталог і показники…');}
-   if(action==='clone-profile'){state.cloneName='';state.modalError='';state.modal='clone';render();win.querySelector('#clone-form input')?.focus();}
-   if(action==='clone-create'){const f=win.querySelector('#clone-form');if(state.profileBusy)return;const q=checkProfileName(f);if(!f.reportValidity())return;let name=q.name;state.cloneName=f.elements.name.value;state.profileBusy=true;f.querySelector('button').disabled=true;regions.invalidate('modal');try{const result=await api('/api/profile-action',{action:'clone',profile:state.profile,name});name=result.name||name;state.modal=null;state.modalError='';await reload();state.profile=name;editHistory.profiles.delete(name);render();store();}finally{state.profileBusy=false;}}
-   if(action==='history'){state.modalError='';state.modal='history';render();}
-   if(action==='rename-profile'&&state.profile!=='standard'){state.renameName=state.profile;state.modalError='';state.modal='rename';render();win.querySelector('#rename-form input')?.select();}
-   if(action==='delete-profile'&&state.profile!=='standard'){state.modalError='';state.modal='delete-profile';render();}
+   if(action==='modal-close'){const back=state.modal==='confirm'&&state.confirm?.back;if(back){openForm(back);return;}closeForm();return;}
+   if(action==='confirm-cancel'){const back=state.confirm?.back;if(back)openForm(back);else closeForm();return;}
+   if(action==='confirm-run'){const c=state.confirm;if(!c||state.profileBusy)return;state.profileBusy=true;render();try{await CONFIRM_ACTIONS[c.action]?.(c);}finally{state.profileBusy=false;if(state.modal==='confirm')render();}return;}
+   if(action==='clone-profile')openForm('clone',{cloneName:''});
+   if(action==='clone-create'){const f=win.querySelector('#clone-form');if(state.profileBusy||!f)return;const q=checkProfileName(f,true);if(q.error){f.elements.name.focus();return;}let name=q.name;state.cloneName=f.elements.name.value;state.profileBusy=true;regions.invalidate('drawer/form');render();try{const result=await api('/api/profile-action',{action:'clone',profile:state.profile,name});name=result.name||name;state.modal=null;state.modalError='';await reload();state.profile=name;editHistory.profiles.delete(name);render();store();notify('Копію створено · '+prettyProfile(name));}finally{state.profileBusy=false;if(state.modal)render();}}
+   if(action==='history')openForm('history');
+   if(action==='rename-profile'&&state.profile!=='standard'){openForm('rename',{renameName:state.profile});win.querySelector('#rename-form input')?.select();}
+   if(action==='delete-profile'&&state.profile!=='standard')openForm('delete-profile');
    if(action==='rename-confirm'||action==='delete-confirm'){
     if(state.profileBusy)return;
     const old=state.profile,f=win.querySelector('#rename-form');
-    const q=f?checkProfileName(f):null;if(f&&!f.reportValidity())return;
+    const q=f?checkProfileName(f,true):null;if(q?.error){f.elements.name.focus();return;}
     let name=q?.name||null;
     state.renameName=f?.elements.name.value;state.profileBusy=true;render();
     try{
@@ -1635,28 +1873,46 @@
      state.profile=name||'standard';state.modal=null;state.modalError='';state.profileBusy=false;store();render();await reload();notify(name?'Профіль перейменовано':'Профіль видалено');
     }finally{state.profileBusy=false;}
    }
-   if(action==='restore-profile'){if(!confirm('Відновити попередню версію профілю?'))return;await api('/api/profile-action',{action:'restore',profile:state.profile,revision:source.revisions[state.profile]});profiles[state.profile]=copy(original[state.profile]);editHistory.profiles.delete(state.profile);state.poolPanel=false;state.modal=null;await reload();notify('Попередню версію відновлено');}
-   if(action==='delete-provider'){if(!confirm('Видалити підключення? Якщо воно використовується у профілях, видалення буде заблоковано.'))return;await api('/api/provider',{id:state.editProvider,action:'delete',revision:source.providerRevision});state.modal=null;await reload();notify('Підключення видалено');}
+   // The history drawer is the confirmation itself: its key restores at once.
+   if(action==='restore-profile'){if(state.profileBusy)return;state.profileBusy=true;render();try{await api('/api/profile-action',{action:'restore',profile:state.profile,revision:source.revisions[state.profile]});profiles[state.profile]=copy(original[state.profile]);editHistory.profiles.delete(state.profile);state.poolPanel=false;state.modal=null;await reload();notify('Попередню версію відновлено');}finally{state.profileBusy=false;if(state.modal)render();}}
+   if(action==='delete-provider'){const v=source.providers.find(x=>x.id===state.editProvider);askConfirm({action:'delete-provider',back:'provider',danger:true,title:'Видалити підключення',sub:providerName(state.editProvider),label:'Видалити підключення',text:`Підключення <b>${esc(v?.name||state.editProvider)}</b> зникне з каталогу. Якщо його моделі є в профілях, видалення буде заблоковано, а профілі не зміняться.`});}
 
-   if(action==='all-stats'){state.statsLimit=10000;render();}
    if(action==='clear-error'){state.error='';render();}
    // «Прийняти файл»: accept a profile file as it is now after an outside edit (or forget a removed one). The file
    // is never rewritten; its former version stays restorable.
-   if(action==='adopt-profile'){const name=b.dataset.adopt;if(!confirm(source.modeOrphans?.includes(name)?`Забути запис режиму профілю «${prettyProfile(name)}»? Файл уже видалено; копія запису лишиться в резервних.`:`Прийняти файл профілю «${prettyProfile(name)}» як є? Режим DeepSeek стане ON, збережені заміни лишаться. Попередня версія доступна через «Попереднє збереження».`))return;await api('/api/profile-action',{action:'adopt',profile:name,revision:source.revisions?.[name]});await reload();state.opFeedback='Файл профілю '+prettyProfile(name)+' прийнято.';render();return;}
-   if(action==='discard-reload'){if(!confirm('Скинути всі незбережені чернетки й завантажити поточні файли?'))return;state.modal=null;state.error='';editHistory.profiles.clear();await reload(true);}
+   if(action==='adopt-profile'){const name=b.dataset.adopt,orphan=source.modeOrphans?.includes(name);askConfirm({action:'adopt-profile',profile:name,title:orphan?'Прийняти видалення':'Прийняти файл',sub:prettyProfile(name),label:orphan?'Забути запис режиму':'Прийняти файл як є',text:orphan?`Файл профілю <b>${esc(prettyProfile(name))}</b> уже видалено поза Mana Tape. Mana Tape забуде запис його режиму; копія запису лишиться в резервних.`:`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape. Прийняти його як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».`});return;}
+   if(action==='discard-reload')askConfirm({action:'discard-reload',back:'conflict',danger:true,title:'Скинути чернетки',label:'Скинути й оновити',text:'Усі незбережені чернетки профілів і пулів у цьому вікні буде скинуто, а поточні файли — завантажено заново. Експорт чернеток доступний до цього кроку.'});
    if(action==='export-draft'){const drafts=Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:source.revisions[k],changes:diff(k)}]));if(poolsDirty())drafts['@free-pools']={revision:poolRevision,pools:poolDraft};const blob=new Blob([JSON.stringify(drafts,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  }catch(err){if(state.modal){state.modalError=err.message;}else state.error=err.message;render();}
+  }catch(err){if(state.modal){state.modalError=err.message;state.modalCode=errorCode(err);regions.invalidate('drawer/form');}else state.error=err.message;render();}
  });
- root.addEventListener('input',e=>{if(!e.target.matches('#clone-form input,#rename-form input'))return;if(e.target.form.id==='clone-form')state.cloneName=e.target.value;else state.renameName=e.target.value;checkProfileName(e.target.form);state.modalError='';win.querySelector('.modal > .error-banner')?.remove();regions.invalidate('modal');});
- root.addEventListener('submit',e=>{if(e.target.id==='clone-form'){e.preventDefault();win.querySelector('[data-action=clone-create]')?.click();}if(e.target.id==='rename-form'){e.preventDefault();win.querySelector('[data-action=rename-confirm]')?.click();}});
- root.addEventListener('change',e=>{if(e.target.id==='sync-vibe'||e.target.hasAttribute('data-sync-vibe')){state.syncVibe=e.target.checked;for(const input of win.querySelectorAll('[data-sync-vibe]'))input.checked=state.syncVibe;store();}});
- root.addEventListener('keydown',e=>{if(e.key==='Tab'&&(state.modal||state.picker)){const layer=win.querySelector(state.modal?'.modal':'.picker'),nodes=[...layer.querySelectorAll('button:not(:disabled),input,select,textarea,a[href]')].filter(x=>x.getClientRects().length),first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
- window.addEventListener('resize',()=>{finishDrawerResize(true);fitPicker(true);resizeDrawer(state.drawerHeight);});
+ // What a confirmation drawer runs; each closes the drawer when it is done (errors stay on the drawer's line).
+ const CONFIRM_ACTIONS={
+  'delete-provider':async()=>{await api('/api/provider',{id:state.editProvider,action:'delete',revision:source.providerRevision});state.modal=null;state.confirm=null;await reload();notify('Підключення видалено');},
+  'adopt-profile':async c=>{await api('/api/profile-action',{action:'adopt',profile:c.profile,revision:source.revisions?.[c.profile]});state.modal=null;state.confirm=null;await reload();state.opFeedback='Файл профілю '+prettyProfile(c.profile)+' прийнято.';render();},
+  'discard-reload':async()=>{state.modal=null;state.confirm=null;state.error='';editHistory.profiles.clear();await reload(true);}
+ };
+ root.addEventListener('input',e=>{
+  // A field that is corrected loses its error at once; the form is not rebuilt under the typing hand.
+  if(e.target.form?.getAttribute('id')==='new-provider')clearFixedFields(e.target.form,e.target.name);
+  if(!e.target.matches('#clone-form input,#rename-form input'))return;if(e.target.form.id==='clone-form')state.cloneName=e.target.value;else state.renameName=e.target.value;checkProfileName(e.target.form);state.modalError='';win.querySelector('.tray__form > .msg[data-s=bad]')?.remove();regions.invalidate('drawer/form');
+ });
+ // An error on the provider form disappears as soon as its field (or the field it depends on) is edited and passes
+ // the client check; an untouched field keeps the server's word.
+ const FIELD_DEPENDS={auth:['key'],url:['key'],discovery:['models'],models:['models']};
+ function clearFixedFields(form,name){
+  const problems=providerProblems(form);let changed=false;
+  for(const n of new Set([name,...(FIELD_DEPENDS[name]||[])])){const field=form.querySelector(`.field.is-bad[data-field="${n}"]`);if(!field||problems[n])continue;field.classList.remove('is-bad');field.querySelector('[aria-invalid]')?.removeAttribute('aria-invalid');if(state.formErrors)delete state.formErrors[n];const note=field.querySelector('.field__note');if(note)note.textContent='';changed=true;}
+  if(changed)regions.invalidate('drawer/form');
+ }
+ root.addEventListener('change',e=>{if(e.target.form?.getAttribute('id')==='new-provider')clearFixedFields(e.target.form,e.target.name);});
+ root.addEventListener('submit',e=>{if(e.target.id==='clone-form'){e.preventDefault();win.querySelector('[data-action=clone-create]')?.click();}if(e.target.id==='rename-form'){e.preventDefault();win.querySelector('[data-action=rename-confirm]')?.click();}if(e.target.id==='new-provider'){e.preventDefault();saveProvider();}});
+ root.addEventListener('keydown',e=>{if(e.key==='Tab'&&(state.modal||state.picker)){const layer=win.querySelector(state.modal?'.tray--form':'[data-picker]');if(!layer)return;const nodes=[...layer.querySelectorAll('button:not(:disabled),input,select,textarea,a[href],summary')].filter(x=>!x.closest('[inert]')).filter(x=>x.getClientRects().length),first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
+ window.addEventListener('resize',()=>{finishDrawerResize(true);fitPicker();resizeDrawer(preferredHeight());});
  window.addEventListener('beforeunload',e=>{if(!state.switchingProject&&(poolsDirty()||profileKeys.some(k=>diff(k).length))){e.preventDefault();e.returnValue='';}});
  root.addEventListener('change',e=>{if(e.target.id==='project-choice'&&!state.saving){store();state.switchingProject=true;const url=new URL(location.href);url.searchParams.set('project',e.target.value);location.assign(url);}});
  window.addEventListener('offline',()=>{state.offline=true;state.error='Немає мережі. Чернетки залишаються у цьому вікні; збереження потребує сервера.';render();});
  window.addEventListener('online',()=>{state.error='';pollState();});
- Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(saved?.drawerResized===true&&Number.isFinite(saved.drawerHeight))state.drawerHeight=saved.drawerHeight;}catch{}
+ Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(saved?.drawerResized===true&&Number.isFinite(saved.drawerHeight))state.drawerHeight=saved.drawerHeight;if(Number.isFinite(saved?.editorHeight))state.editorHeight=saved.editorHeight;}catch{}
  state.syncVibe=true;state.statsLimit=8;state.favs=source.favs||[];favSaved=state.favs;state.error='';state.modalError='';
  try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(profiles[v.profile])state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;source.revisions[k]=v.revision;}}}catch{}
  try{const draft=JSON.parse(sessionStorage.getItem(storageKey('forge-pool-draft'))||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
