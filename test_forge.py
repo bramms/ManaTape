@@ -575,6 +575,17 @@ unrelated: {keep: true}
         report = commandcode_report([{'provider': 'commandcode', 'usage': {'primary': {'usedPercent': 10, 'resetsAt': 1760000000}, 'updatedAt': '2026-10-12T00:00:00Z'}}])
         self.assertIsNone(report['limits'][0]['resets'])
 
+    def test_shared_pool_reported_per_family_is_one_window(self):
+        from insights import usage_report
+        week = {'label': 'Weekly', 'resetsAt': 1760600000000}
+        report = usage_report({'provider': 'google-antigravity', 'fetchedAt': 1760000000000, 'limits': [
+            {'id': 'g', 'label': 'Gemini', 'window': week, 'amount': {'remainingFraction': 0.9}},
+            {'id': 'a', 'label': 'Claude & GPT (shared)', 'window': week, 'amount': {'remainingFraction': 1}, 'scope': {'modelIds': ['claude']}},
+            {'id': 'o', 'label': 'Claude & GPT (shared)', 'window': week, 'amount': {'remainingFraction': 1}, 'scope': {'modelIds': ['gpt']}},
+            {'id': 'x', 'label': 'Claude & GPT (shared)', 'window': week, 'amount': {'remainingFraction': 0.5}}]}, 1)
+        self.assertEqual([(l['id'], l['remaining']) for l in report['limits']], [('g', 90.0), ('a', 100.0), ('x', 50.0)])
+        self.assertEqual(report['limits'][1]['models'], ['claude', 'gpt'])
+
     def test_failure_log_names_type_and_place_but_no_message(self):
         try:
             raise OSError(errno.ENOSPC, 'SECRET /private/path')

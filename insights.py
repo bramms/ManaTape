@@ -157,6 +157,17 @@ def usage_report(report, account):
             'resets': window.get('resetsAt'), 'starts': window.get('startsAt'),
             'durationMs': window.get('durationMs'), 'window': window.get('label', ''), 'status': raw.get('status'),
             'models': scope.get('modelIds', []), 'tier': scope.get('tier', '')})
+    # One shared pool can arrive once per model family (Antigravity reports «Claude & GPT (shared)»
+    # under both anthropic and openai ids); identical readings are the same window.
+    merged = {}
+    for limit in limits:
+        same = tuple(limit[k] for k in ('label', 'window', 'remaining', 'resets', 'starts', 'durationMs', 'status', 'tier'))
+        if same in merged:
+            first = merged[same]
+            first['models'] = first['models'] + [m for m in limit['models'] if m not in first['models']]
+        else:
+            merged[same] = limit
+    limits = list(merged.values())
     fetched = report.get('fetchedAt', 0)
     if not finite_number(fetched):
         raise ValueError('fetchedAt')
