@@ -25,12 +25,12 @@ import tempfile
 import threading
 import time
 import traceback
-from profile_modes import (EFFORT, POOL_NAMES, POOL_PREFIX, chain_entries, collapse_pools, compile_profile, default_settings, is_free_model, pool_name, raw_route,
+from profile_modes import (EFFORT, POOL_NAMES, POOL_PREFIX, chain_entries, collapse_pools, compile_profile, default_settings, is_deepseek, is_free_model, pool_name, raw_route,
     route_statuses, route_text, tariff_status, thinking_efforts, validate_pools, validate_settings)
 from omp_roles import BUILTIN_ROLES, agent_catalog, accepts_model, fallback_chain
-from scopes import (PRESET_NAME, PRESET_PREFIX, THINKING_LEVELS, active_preset, discover, effective as layered_config,
-    layer_presets, legacy_project, model_chain_keys, omp_merge, parse_preset, preset_view, project_config, project_layer,
-    scope_id, short_diff, sources as value_sources, visible_presets)
+from scopes import (PRESET_NAME, PRESET_PREFIX, THINKING_LEVELS, active_preset, changed_keys, discover, effective as layered_config,
+    layer_presets, legacy_project, managed_part, model_chain_keys, omp_merge, parse_preset, preset_view, project_config, project_layer,
+    onto, role_selector, scope_id, short_diff, sources as value_sources, visible_presets, with_unmanaged)
 from insights import Insights
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs, quote
@@ -220,6 +220,29 @@ def merge(a, b):
     return out
 
 
+def compile_input(data):
+    """A layer as Mana Tape compiles it. Values OMP does not read as model selectors (a null or list role, a chain
+    that is not a list of selectors, a null agent) take no part; the file keeps them exactly as they are."""
+    if not isinstance(data, dict):
+        return {}
+    out = dict(data)
+    def selectors(value):
+        return isinstance(value, list) and all(isinstance(v, str) for v in value)
+    if 'modelRoles' in out:
+        roles = out['modelRoles']
+        out['modelRoles'] = {k: v for k, v in roles.items() if isinstance(v, str) and v} if isinstance(roles, dict) else {}
+    for group, key, ok in (('retry', 'fallbackChains', selectors), ('task', 'agentModelOverrides', lambda v: isinstance(v, str) or selectors(v))):
+        node = out.get(group)
+        if group in out and not isinstance(node, dict):
+            del out[group]  # OMP ignores a scalar in place of a settings group.
+        elif isinstance(node, dict) and key in node:
+            values = node[key]
+            out[group] = {**node, key: {k: v for k, v in values.items() if ok(v)} if isinstance(values, dict) else {}}
+    if 'disabledProviders' in out and not selectors(out['disabledProviders']):
+        del out['disabledProviders']
+    return out
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -355,12 +378,30 @@ class Forge:
         self.recovery = None
         self.profile_warnings = []
         self._model_cache = None
+        self._diff_cache = {}
+        # The scope whose catalogue, refresh loop and telemetry this one shares (one per OMP agent directory).
+        self.catalog_owner = None
         try:
             self.recover_modes()
         except Exception as error:
             # Start read-only instead of crash-looping under systemd/launchd; the journal stays.
             self.recovery_failed(error)
+        if machine is None and self.recovery is None:
+            try:
+                self.backfill_written()
+            except Exception as error:
+                log_failure('record backfill', error)
         self.insights = Insights(self, atomic)
+
+    @property
+    def cat(self):
+        """Catalogue state (catalog, available, known, changes, refresh times and error): the lead scope's for every
+        scope of one agent directory, so one refresh loop serves them all."""
+        return (self.catalog_owner or self).state
+
+    @property
+    def lead(self):
+        return self.catalog_owner or self
 
     @property
     def managed(self):
@@ -377,6 +418,12 @@ class Forge:
             atomic(self.provider_store['path'], json.dumps(self.managed, ensure_ascii=False).encode())
             self.state['managed'] = copy.deepcopy(self.managed)
         atomic(self.state_file, json.dumps(self.state, ensure_ascii=False).encode())
+        owner = self.catalog_owner
+        if owner is not None:
+            # The shared catalogue lives in the lead scope's state.json.
+            if owner.provider_store is not None:
+                owner.state['managed'] = copy.deepcopy(owner.managed)
+            atomic(owner.state_file, json.dumps(owner.state, ensure_ascii=False).encode())
 
     def backup_dir(self):
         backup_dir = self.state_dir / 'backups'
@@ -384,8 +431,12 @@ class Forge:
         backup_dir.chmod(0o700)
         return backup_dir
 
-    def path(self, profile):
-        """The native file of a profile. A native preset (`preset:<name>`) lives inside the scope's config file."""
+    def path(self, profile, read=False):
+        """The native file of a profile. A native preset (`preset:<name>`) lives inside the scope's config file.
+
+        A scope file that is a symbolic link (dotfiles) is read through the link (`read`) but never written: every
+        write refuses it with code `symlink`. That scope is read-only; every other scope keeps working.
+        """
         if isinstance(profile, str) and profile.startswith(PRESET_PREFIX):
             if not PRESET_NAME.fullmatch(profile[len(PRESET_PREFIX):]):
                 raise Problem('Некоректна назва котушки OMP')
@@ -393,9 +444,31 @@ class Forge:
         if not isinstance(profile, str) or not ID.fullmatch(profile):
             raise Problem('Некоректна назва профілю')
         p = self.omp_dir / ('config.yml' if profile == 'standard' else f'presets/{profile}.yml')
-        if p.is_symlink() or not p.resolve().is_relative_to(self.omp_dir.resolve()):
+        if p.is_symlink():
+            if read and profile == 'standard':
+                return p
+            raise Problem(self.symlink_text(p), 409, 'symlink', scope=self.project_id, file=self.file_label(p))
+        if not p.resolve().is_relative_to(self.omp_dir.resolve()):
             raise Problem('Посилання замість конфігурації не підтримується')
         return p
+
+    def file_label(self, path):
+        """A file as the panel names it: `.omp/config.yml`, `.omp/presets/gpu.yml`, Global `agent/config.yml`."""
+        path = Path(path)
+        return str(path.relative_to(self.omp_dir.parent)) if path.is_relative_to(self.omp_dir.parent) else path.name
+
+    def scope_title(self, lower=False):
+        title = ('глобальна область' if self.kind == 'global' else 'проєкт ' + self.scope_name()) if self.installation is not None else 'проєкт'
+        return title if lower else title[0].upper() + title[1:]
+
+    def symlink_text(self, path):
+        return (f'{self.scope_title()}: {self.file_label(path)} — символьне посилання (наприклад, dotfiles). Mana Tape читає '
+            'цей файл, але не записує через посилання: зміни вноси в ціль посилання вручну або заміни посилання звичайним файлом.')
+
+    def read_only(self):
+        """Why this scope's file cannot be written (a symbolic link), or None."""
+        p = self.omp_dir / 'config.yml'
+        return {'code': 'symlink', 'error': self.symlink_text(p), 'file': self.file_label(p)} if p.is_symlink() else None
 
     def read(self, p, shared=False):
         """Round-trip YAML for writes, or cached read-only plain data with `shared`."""
@@ -411,16 +484,34 @@ class Forge:
         return data
 
     def standard_bytes(self):
-        return read_or_none(self.path('standard')) or b''
+        return read_or_none(self.path('standard', read=True)) or b''
 
-    def parent_data(self):
-        """The Global config file as OMP reads it (compiled routes), or None for the Global scope itself."""
+    def parent_data(self, strict=False):
+        """The Global config file as OMP reads it (compiled routes), or None for the Global scope itself.
+
+        An unreadable Global file reads as empty for display; `strict` (every write) refuses instead, because a
+        project compiled against nothing would drop the overrides it needs.
+        """
         if self.parent is None:
             return None
         try:
-            return self.parent.read(self.parent.path('standard'), shared=True)
-        except Problem:
+            return self.parent.read(self.parent.path('standard', read=True), shared=True)
+        except Problem as error:
+            if strict:
+                raise Problem('Глобальний файл ' + self.parent.file_label(self.parent.omp_dir / 'config.yml') + ' не читається як '
+                    'YAML-об’єкт. Запис у проєкт зупинено, доки його не виправлено.', 409, 'parent') from error
             return {}
+
+    def parent_tag(self):
+        """What a project's revision follows of its Global file: only the keys its compile and apply read."""
+        raw = self.parent.standard_bytes()
+        try:
+            data = yaml_shared(raw) if raw else {}
+            if not isinstance(data, dict):
+                raise ValueError('not a mapping')
+        except Exception:
+            return digest(raw)
+        return fingerprint({'managed': managed_part(data), 'storage': data.get('modelRoleStorage')})
 
     def layered(self, data, parent=None):
         """This layer as OMP sees it: Global config, then this project's config (OMP merge rules)."""
@@ -439,8 +530,9 @@ class Forge:
             meta['selected'] = {'settings': self.mode_state['presets'][profile[len(PRESET_PREFIX):]].get('settings')}
         suffix = json.dumps(meta, sort_keys=True).encode() if meta else b''
         pool_suffix = self.pools_revision().encode() if any(self.pools().values()) or self.mode_state.get('pools') else b''
-        # A project revision also follows the Global file it inherits from.
-        parent = b'\0\0' + self.parent.standard_bytes() if self.parent is not None else b''
+        # A project revision also follows the Global file it inherits from, but only the keys a project compiles
+        # against: OMP rewriting the Global theme or thinking level does not invalidate project drafts.
+        parent = b'\0\0' + self.parent_tag().encode() if self.parent is not None else b''
         own = self.path(profile).read_bytes() if profile != 'standard' and not native else b''
         return digest(base + b'\0' + own + suffix + pool_suffix + parent)
 
@@ -469,7 +561,7 @@ class Forge:
 
     def native_profiles(self, shared=False):
         """Standard plus every readable legacy preset file. A broken or linked preset is reported, never fatal."""
-        base = self.read(self.path('standard'), shared)
+        base = self.read(self.path('standard', read=True), shared)
         profiles, warnings = {'standard': base}, []
         for p in sorted((self.omp_dir / 'presets').glob('*.yml')):
             if ID.fullmatch(p.stem):
@@ -481,13 +573,45 @@ class Forge:
         return base, profiles
 
     def profiles(self, shared=False):
+        """Logical profiles: the recorded version of each file Mana Tape wrote, the file itself otherwise.
+
+        A file OMP or the owner changed only outside the keys Mana Tape manages (theme, thinking level, ...) is no
+        conflict: its logical version takes those keys from the file, so the next write keeps them.
+        """
         _, ps = self.native_profiles(shared)
         load = yaml_shared if shared else yaml_load
         for name in ps:
             record = self.mode_state['profiles'].get(name)
             if record:
-                ps[name] = load(record['normal'])
+                logical = load(record['normal'])
+                if self.drift(name) == 'soft':
+                    logical = with_unmanaged(logical, ps[name])
+                    logical = freeze(plain(logical)) if shared else logical
+                ps[name] = logical
         return ps['standard'], ps
+
+    def drift(self, name):
+        """How a recorded profile's file stands against what Mana Tape last wrote: 'clean'; 'soft' when only keys Mana
+        Tape does not manage changed; 'conflict'; 'missing' (removed outside)."""
+        record = self.mode_state['profiles'].get(name) or {}
+        try:
+            raw = read_or_none(self.path(name, read=True))
+        except Problem:
+            return 'conflict'
+        if raw is None:
+            return 'missing'
+        if digest(raw) == record.get('hash'):
+            return 'clean'
+        written = record.get('written')
+        if written is None:
+            return 'conflict'
+        try:
+            now, then = yaml_shared(raw), yaml_shared(written)
+        except Exception:
+            return 'conflict'
+        if not isinstance(now, dict) or not isinstance(then, dict):
+            return 'conflict'
+        return 'soft' if managed_part(now) == managed_part(then) else 'conflict'
 
     def native_presets(self, base=None):
         """This scope's own OMP model presets (`modelPresets` in its config file), logical form: {name: entry}."""
@@ -504,62 +628,102 @@ class Forge:
         return copy.deepcopy(record['settings']) if record and record.get('settings') else default_settings()
 
     def mode_conflicts(self):
-        """Recorded profiles whose file no longer holds the bytes Mana Tape wrote."""
-        conflicts = []
-        for name, record in self.mode_state['profiles'].items():
-            try:
-                raw = read_or_none(self.path(name))
-            except Problem:
-                conflicts.append(name)
-                continue
-            if raw is not None and digest(raw) != record.get('hash'):
-                conflicts.append(name)
-        return conflicts
+        """Recorded profiles whose file changed outside Mana Tape in the keys Mana Tape manages."""
+        return [name for name in self.mode_state['profiles'] if self.drift(name) == 'conflict']
 
     def mode_orphans(self):
         """Mode records whose native file was removed outside Mana Tape."""
         orphans = []
         for name in self.mode_state['profiles']:
             try:
-                if not self.path(name).exists():
+                if not self.path(name, read=True).exists():
                     orphans.append(name)
             except Problem:
                 pass
         return orphans
 
     def outside_edits(self, name):
-        """Conflicting profiles a write must leave untouched. The target and Standard must be clean."""
+        """Conflicting profiles a write must leave untouched. The target and Standard must be clean.
+
+        The refusal names the scope and the file: a project action that also writes the Global file (promote,
+        apply) can be blocked by the Global scope, and the owner accepts the file there.
+        """
         conflicts = self.mode_conflicts()
         blocking = [n for n in conflicts if n in ('standard', name)]
         if blocking:
-            raise Problem('Файл змінено поза Mana Tape: ' + ', '.join(blocking)
-                + '. Збереження зупинене, щоб не затерти ці зміни. Прийми поточний файл або віднови його.',
-                409, 'mode-conflict', profiles=conflicts, diffs=self.conflict_diffs(blocking))
+            diffs = self.conflict_diffs(blocking)
+            files = ', '.join(diffs[n]['file'] for n in blocking)
+            raise Problem(f'{self.scope_title()}: файл {files} змінено поза Mana Tape у значеннях, якими керує панель. '
+                'Запис зупинено, щоб не затерти ці зміни. Прийми поточний файл у цій області («Прийняти файл») або віднови його.',
+                409, 'mode-conflict', profiles=conflicts, diffs=diffs, scope=self.project_id, scopes={self.project_id: sorted(conflicts)})
         return set(conflicts)
 
     def conflict_diffs(self, names=None):
         """What changed outside Mana Tape, per conflicting file: at most six human lines (`+`, `−`, `~`).
 
-        Compared with the exact text Mana Tape wrote; records saved before that text was kept compare with the
-        logical version and say so (`approximate`).
+        Compared with the exact text Mana Tape wrote. A record saved before that text was kept compares with what
+        its logical version compiles to now (`approximate`): pool blocks and DeepSeek replacements are no noise.
         """
         out = {}
         for name in self.mode_conflicts() if names is None else names:
             record = self.mode_state['profiles'].get(name) or {}
             try:
-                path = self.path(name)
+                path = self.path(name, read=True)
+                raw = read_or_none(path)
                 now = plain(self.read(path, shared=True))
             except Problem:
                 out[name] = {'file': f'{name}', 'lines': ['файл не читається як YAML-об’єкт'], 'approximate': False}
                 continue
             written = record.get('written')
+            key = (name, digest(raw or b''), record.get('hash'), written is None)
+            if key in self._diff_cache:
+                out[name] = self._diff_cache[key]
+                continue
             try:
-                old = plain(yaml_load(written if written is not None else record.get('normal') or '') or {})
+                old = plain(yaml_shared(written)) if written is not None else self.compiled_estimate(name, record)
             except Exception:
                 old = {}
-            out[name] = {'file': str(path.relative_to(self.omp_dir.parent)) if path.is_relative_to(self.omp_dir.parent) else path.name,
-                'lines': short_diff(old, now), 'approximate': written is None}
+            out[name] = self._diff_cache[key] = {'file': self.file_label(path), 'lines': short_diff(old, now), 'approximate': written is None}
+            if len(self._diff_cache) > 64:
+                self._diff_cache.pop(next(iter(self._diff_cache)))
         return out
+
+    def compiled_estimate(self, name, record):
+        """What Mana Tape most likely wrote for a record that predates `written`: its logical version compiled with
+        the settings and catalogue it was saved with. Falls back to the logical version itself."""
+        logical = yaml_load(record.get('normal') or '')
+        try:
+            conflicts = set(self.mode_conflicts()) - {name}
+            plan = self.plan_commit({'name': name, 'normal': logical, 'settings': record.get('settings') or default_settings(),
+                'statuses': record.get('statuses', {}), 'catalog': record.get('catalog', {}), 'frozen': conflicts}, check=False)
+            return plain(yaml_shared(plan['outputs'][name]))
+        except Exception:
+            return plain(logical)
+
+    def backfill_written(self):
+        """Records saved before `written` existed get the exact text of their file when it is still in sync (a
+        state-only write, once): later outside edits then show exact diffs, and edits outside the keys Mana Tape
+        manages are recognised as no conflict."""
+        if self.mode_journal.exists() or (self.machine is not None and self.machine.journal.exists()):
+            return False
+        records, changed = copy.deepcopy(self.mode_state['profiles']), False
+        for name, record in records.items():
+            if record.get('written') is not None:
+                continue
+            try:
+                raw = read_or_none(self.path(name, read=True))
+            except Problem:
+                continue
+            if raw is not None and digest(raw) == record.get('hash'):
+                try:
+                    record['written'] = raw.decode('utf-8')
+                    changed = True
+                except UnicodeDecodeError:
+                    continue
+        if changed:
+            self.mode_state = {**self.mode_state, 'profiles': records}
+            atomic(self.mode_file, json.dumps(self.mode_state, ensure_ascii=False).encode())
+        return changed
 
     def recovery_failed(self, error):
         log_failure('mode recovery', error)
@@ -672,7 +836,7 @@ class Forge:
 
     def mode_catalog(self):
         cached, _ = self.cached()
-        return self.verified_free_models({**cached, **self.state['catalog']})
+        return self.verified_free_models({**cached, **self.cat['catalog']})
 
     def mode_settings(self, name):
         record = self.mode_state['profiles'].get(name)
@@ -691,7 +855,8 @@ class Forge:
         """
         name = body.get('profile')
         native = isinstance(name, str) and name.startswith(PRESET_PREFIX)
-        path = self.path(name)
+        # A preview reads a linked scope file; the write itself refuses it (plan_commit).
+        path = self.path(name, read=True)
         if not path.is_file() and not (self.optional_standard and path == self.omp_dir / 'config.yml'):
             raise Problem('Профіль не знайдено', 404)
         if body.get('revision') != self.revision(name):
@@ -708,7 +873,7 @@ class Forge:
             entries = data.get('modelPresets') if isinstance(data.get('modelPresets'), dict) else {}
             if pname not in entries or isinstance(parse_preset(plain(entries[pname])), str):
                 raise Problem('Котушку OMP не знайдено або її запис некоректний', 404)
-            scope_full = self.layered(data)
+            scope_full = compile_input(self.layered(data))
             roles = set(BUILTIN_ROLES) | set(scope_full.get('modelRoles', {})) | set(plain(entries[pname]).get('modelRoles', {}))
             self.patch_preset(entries[pname], changes, roles, models)
             entry = parse_preset(plain(entries[pname]))
@@ -720,9 +885,9 @@ class Forge:
             if name not in ps:
                 self.read(path)  # Raises the precise YAML problem of this preset.
             data = copy.deepcopy(ps[name])
-            roles = set(BUILTIN_ROLES) | set((self.layered(data) if name == 'standard' else merge(self.layered(base), data)).get('modelRoles', {}))
+            roles = set(BUILTIN_ROLES) | set(compile_input(self.layered(data) if name == 'standard' else merge(self.layered(base), data)).get('modelRoles', {}))
             self.patch_profile(data, changes, roles, name, base, models)
-            full = self.layered(data) if name == 'standard' else merge(self.layered(base), data)
+            full = compile_input(self.layered(data) if name == 'standard' else merge(self.layered(base), data))
             requested = body['modeSettings'] if 'modeSettings' in body else self.mode_settings(name)
         try:
             settings = validate_settings(requested, roles, models, full.get('task', {}).get('agentModelOverrides', {}))
@@ -733,7 +898,8 @@ class Forge:
         if native:
             # A preset carries primaries only: problems of chains and agents belong to the scope file.
             plan['issues'] = [i for i in plan['issues'] if i['key'].startswith('role:') and i['key'][5:] in entry['modelRoles']]
-        token = fingerprint({'revision': self.revision(name), 'normal': data, 'settings': settings, 'effective': plan['effective']})
+        # Only what Mana Tape compiles: an OMP edit of the Global theme between preview and save changes no plan.
+        token = fingerprint({'revision': self.revision(name), 'normal': data, 'settings': settings, 'effective': managed_part(plain(plan['effective']))})
         public = {k: plain(v) for k, v in plan.items() if k != 'effective'}
         public.update({'token': token, 'settings': settings, 'statuses': {r: statuses.get(r, {'status': 'unknown', 'reason': 'Немає даних'}) for r in {raw_route(v) for v in settings['alternatives'] + [x for a in settings['overrides'].values() for x in a]}}, 'tariff': tariff_status()})
         if native:
@@ -772,15 +938,29 @@ class Forge:
                 raise Problem('Додай доступні альтернативи: '+', '.join(i['key'] for i in prepared['plan']['issues']), 422)
             if body.get('previewToken') != prepared['public']['token']:
                 raise Problem('План змінився. Онови заміни, переглянь карту та збережи ще раз.', 409)
-            return self.commit_mode(prepared)
+            return self.commit_mode(prepared, body=body)
 
-    def commit_mode(self, prepared, dry=False):
-        """Write one profile's logical version and every native file it changes; `dry` only returns those files."""
+    def commit_mode(self, prepared, dry=False, body=None):
+        """Write one profile's logical version and every native file it changes; `dry` only returns those files.
+
+        With `body` (an owner's action in an installation) a change the action did not ask for — what any write of
+        this scope would carry now, see `extra_changes` — is written only with the `confirm` token of its preview.
+        """
         plan = self.plan_commit(prepared)
         if dry:
             return plan['files']
+        if body is not None and self.machine is not None and plan['files']:
+            confirm_extra(body, extra_changes([(self, plan, self.drift_plan())]))
         self.apply_plan(plan)
         return {'ok': True, 'revision': self.revision(prepared.get('profile', prepared['name']))}
+
+    def drift_plan(self):
+        """What any write of this scope would carry whatever the action: its logical Standard recompiled unchanged
+        against the current Global file, catalogue and pools. Never written; None when it cannot be compiled."""
+        try:
+            return self.plan_commit(self.server_prepared(self.logical_standard()), check=False)
+        except Exception:
+            return None
 
     def frozen_catalog(self, models, references):
         return {r: {k: copy.deepcopy(models[r].get(k)) for k in ('id', 'name', 'kind', 'webSearch', 'cost', 'input', 'thinking', 'freeEvidence')} if r in models else None for r in references}
@@ -792,17 +972,18 @@ class Forge:
             + [r for values in full.get('task', {}).get('agentModelOverrides', {}).values() for r in ([values] if isinstance(values, str) else values) if not r.startswith('@')])
         return {raw_route(member) for ref in refs for member in (pools.get(pool_name(ref), []) if pool_name(ref) is not None else [ref])}
 
-    def plan_commit(self, prepared, parent=None):
+    def plan_commit(self, prepared, parent=None, check=True):
         """Native files, logical metadata and backups of one change, without writing anything.
 
         `parent` replaces the Global file a project inherits, when one cross-scope transaction writes both.
         """
         name = prepared['name']
-        parent = self.parent_data() if parent is None else parent
+        parent = self.parent_data(strict=True) if parent is None else parent
         def layered(data):
             return data if parent is None else layered_config(parent, data)
         # Profiles changed outside Mana Tape stay byte-for-byte untouched until adopted.
         frozen = set(prepared.get('frozen', ())) - {name}
+        soft = {n for n in self.mode_state['profiles'] if self.drift(n) == 'soft'}
         _, normals = self.profiles()
         before_bytes = {n: read_or_none(self.path(n)) for n in normals}
         if prepared.get('new'):
@@ -825,7 +1006,7 @@ class Forge:
         models = self.mode_catalog()
         pools = prepared.get('pools', self.pools())
         settings = prepared['settings'] if 'settings' in prepared else self.mode_settings(name)
-        full = layered(normals['standard']) if name == 'standard' else merge(layered(normals['standard']), normals[name])
+        full = compile_input(layered(normals['standard']) if name == 'standard' else merge(layered(normals['standard']), normals[name]))
         references = self.references(full, settings, pools)
         frozen_catalog = prepared.get('catalog', self.frozen_catalog(models, references))
         if prepared.get('preset') or prepared.get('keepStandardMode'):
@@ -867,7 +1048,7 @@ class Forge:
         for n, overlay in normals.items():
             if n in frozen:
                 continue
-            full = layered(overlay) if n == 'standard' else merge(layered(normals['standard']), overlay)
+            full = compile_input(layered(overlay) if n == 'standard' else merge(layered(normals['standard']), overlay))
             record = records.get(n)
             projection = compile_profile(full, record['settings'] if record else default_settings(),
                 catalog_for(record), (record or {}).get('statuses', {}), pools, vision)
@@ -881,7 +1062,7 @@ class Forge:
                 continue
             desired = projections[n]['effective']
             output = copy.deepcopy(overlay)
-            inherited = layered(output) if n == 'standard' else merge(compiled_base, output)
+            inherited = compile_input(layered(output) if n == 'standard' else merge(compiled_base, output))
             wanted_default = desired.get('retry', {}).get('fallbackChains', {}).get('default', [])
             if wanted_default != inherited.get('retry', {}).get('fallbackChains', {}).get('default', []):
                 output.setdefault('retry', {}).setdefault('fallbackChains', {})['default'] = copy.deepcopy(wanted_default)
@@ -896,12 +1077,22 @@ class Forge:
                 if values != inherited.get('task', {}).get('agentModelOverrides', {}).get(worker):
                     output.setdefault('task', {}).setdefault('agentModelOverrides', {})[worker] = copy.deepcopy(values)
             if n == 'standard':
-                self.compile_presets(output, layered(overlay), presets, catalog_for, pools, vision)
+                self.compile_presets(output, compile_input(layered(overlay)), presets, catalog_for, pools, vision)
             normal_text = records[n]['normal'] if n in records else (before_bytes[n].decode('utf-8') if before_bytes[n] is not None else '')
+            if n in soft and n != name:
+                normal_text = yaml_dump(overlay)  # Its logical version took the file's own edits (theme, ...) along.
             rendered = normal_text if plain(output) == plain(overlay) else yaml_dump(output)
             # An adopted file stays byte for byte when its logical profile writes the same data (F5).
             if n == name and prepared.get('text') is not None and plain(output) == plain(yaml_load(prepared['text'])):
                 rendered = prepared['text']
+            if n in soft and before_bytes[n] is not None:
+                # A file edited outside the keys Mana Tape manages is written over its current text: the owner's
+                # comments stay wherever their values do.
+                try:
+                    rendered = yaml_dump(onto(yaml_load(before_bytes[n].decode('utf-8')), output))
+                except Exception:
+                    pass
+            rendered = self.kept_text(rendered, before_bytes[n], output)
             if plain(yaml_load(rendered) or {}) != plain(output):
                 raise Problem('Перевірка YAML не пройдена', 422)
             if n in records or rendered != normal_text:
@@ -911,22 +1102,43 @@ class Forge:
         for n, text in outputs.items():
             if text.encode('utf-8') == before_bytes[n]:
                 continue
-            if before_bytes[n] is None and n != name:
-                continue  # Never create a file this change did not target (an absent Global config stays absent).
+            if before_bytes[n] is None and (n != name or not plain(yaml_load(text) or {})):
+                # Never create a file this change did not target, nor an empty one (an absent Global stays absent).
+                continue
             files[n] = {'before': before_bytes[n].decode('utf-8') if before_bytes[n] is not None else None, 'after': text}
             if before_bytes[n] is not None:
                 files[n]['mode'] = self.path(n).stat().st_mode & 0o777
         if removed is not None:
             files[removed] = {'before': before_bytes[removed].decode('utf-8'), 'after': None, 'mode': self.path(removed).stat().st_mode & 0o777}
         for n, raw in before_bytes.items():
-            if n not in frozen and read_or_none(self.path(n)) != raw:
+            if check and n not in frozen and read_or_none(self.path(n)) != raw:
                 raise Problem('Файл змінився під час підготовки. Збереження скасовано.', 409)
         after = {**self.mode_state, 'profiles': records}
         if presets or 'presets' in self.mode_state:
             after['presets'] = presets
         if 'pools' in prepared and self.machine is None:
             after['pools'] = pools
-        return {'files': files, 'after': after, 'pools': pools if 'pools' in prepared else None}
+        return {'files': files, 'after': after, 'pools': pools if 'pools' in prepared else None, 'outputs': outputs}
+
+    @staticmethod
+    def kept_text(rendered, before, output):
+        """What to write for one file: its own bytes when its data does not change (formatting, comments and a
+        missing final newline stay), else the rendered text, without a final newline the file did not have."""
+        if before is None:
+            return rendered
+        try:
+            old = before.decode('utf-8')
+            if yaml_shared(before) == plain(output):
+                return old
+        except Exception:
+            return rendered
+        if old and not old.endswith('\n') and rendered.endswith('\n'):
+            try:
+                if plain(yaml_load(rendered[:-1]) or {}) == plain(output):
+                    return rendered[:-1]
+            except Exception:
+                pass
+        return rendered
 
     def compile_presets(self, output, scope_full, presets, catalog_for, pools, vision):
         """Native presets in the scope file get OMP routes: a FREE pool or a paused DeepSeek becomes its first usable
@@ -1047,7 +1259,7 @@ class Forge:
             data = self.logical_standard()
             for keys in self.scope_paths(body):
                 self.drop_path(data, keys)
-            return self.commit_mode(self.server_prepared(data))
+            return self.commit_mode(self.server_prepared(data), body=body)
 
     def promote_to_global(self, body):
         """Move project values into the Global config (one journal for both files)."""
@@ -1096,7 +1308,7 @@ class Forge:
                 data['modelPresets'] = entries = {}
             entries[new] = {'modelRoles': roles, **({'defaultThinkingLevel': thinking} if thinking else {})}
             records[new] = {'settings': settings}
-            self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records))
+            self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records), body=body)
             return {'ok': True, 'name': PRESET_PREFIX + new}
         if pname is None or entries is None or pname not in entries:
             raise Problem('Котушку OMP не знайдено', 404)
@@ -1113,7 +1325,7 @@ class Forge:
                 entries[new if key == pname else key] = value
             if pname in records:
                 records[new] = records.pop(pname)
-            self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records))
+            self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records), body=body)
             return {'ok': True, 'name': PRESET_PREFIX + new}
         if action == 'delete':
             atomic(self.backup_dir() / f'{time.time_ns()}-deleted-preset-{pname}.json',
@@ -1122,17 +1334,21 @@ class Forge:
             records.pop(pname, None)
             if not entries:
                 del data['modelPresets']
-            self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records))
+            self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records), body=body)
             return {'ok': True}
         if action == 'restore':
             previous = (records.get(pname) or {}).get('previous')
             if not previous or not isinstance(previous.get('entry'), dict):
                 raise Problem('Ще немає попередньої версії котушки')
+            # The version being replaced becomes the next Restore point (a second Restore returns to it).
+            current = records.get(pname) or {}
+            replaced = {'entry': plain(entries[pname]), 'settings': self.preset_settings(pname),
+                'statuses': current.get('statuses', {}), 'catalog': current.get('catalog', {})}
             entries[pname] = copy.deepcopy(previous['entry'])
             prepared = self.server_prepared(data, preset=pname, presetSettings=previous.get('settings') or default_settings(),
-                presetCatalog=previous.get('catalog', {}), presetPrevious={'entry': plain(entries[pname]), 'settings': self.preset_settings(pname)})
+                presetCatalog=previous.get('catalog', {}), presetPrevious=replaced)
             prepared['statuses'] = {**route_statuses(self.mode_catalog(), self.managed), **previous.get('statuses', {})}
-            self.commit_mode(prepared)
+            self.commit_mode(prepared, body=body)
             return {'ok': True}
         raise Problem('Дія не підтримується')
 
@@ -1153,10 +1369,12 @@ class Forge:
         """
         if name == 'standard' or name.startswith(PRESET_PREFIX):
             raise Problem('Переносяться лише котушки з .omp/presets', 409)
+        if not self.path(name).is_file():
+            raise Problem('Старої котушки ' + name + ' уже немає (перенесено чи архівовано). Онови дані.', 404)
         base, ps = self.profiles(shared=True)
         files_base, files = self.native_profiles(shared=True)
         if name not in ps:
-            self.read(self.path(name))
+            self.read(self.path(name))  # Raises the precise YAML problem of this file.
             raise Problem('Профіль не знайдено', 404)
         scope_full, full = self.layered(base), merge(self.layered(base), ps[name])
         roles = {r: v for r, v in plain(full.get('modelRoles') or {}).items() if isinstance(v, str) and v}
@@ -1183,11 +1401,28 @@ class Forge:
         plan = {'profile': name, 'preset': target, 'roles': roles, 'thinking': thinking,
             'carried': [f'modelRoles: {len(roles)} ролей'] + ([f'defaultThinkingLevel: {thinking}'] if thinking else []),
             'lost': lost, 'modelChains': chains,
+            # What the котушка changes against Standard in roles and thinking: archiving drops that too.
+            'roleChanges': short_diff({k: v for k, v in plain(written_scope).items() if k in ('modelRoles', 'defaultThinkingLevel')},
+                {k: v for k, v in plain(written_full).items() if k in ('modelRoles', 'defaultThinkingLevel')}, limit=12),
             # As a native preset it would hold the very roles the scope already runs with: OMP would call it active.
             'sameAsStandard': plain(written_full.get('modelRoles') or {}) == plain(written_scope.get('modelRoles') or {}) and not thinking,
-            'collision': target in self.native_presets(base), 'settings': self.mode_settings(name)}
+            'collision': target in self.native_presets(base), 'settings': self.mode_settings(name),
+            # A project котушка of this name hides the Global one in this project (OMP: project shadows Global).
+            'shadowsGlobal': self.parent is not None and target in self.parent.native_presets()}
         plan['token'] = fingerprint({**plan, 'revision': self.revision(name)})
         return plan
+
+    def migration_extra(self, name):
+        """What moving a legacy котушка also writes into the scope file beyond the котушка itself (see
+        `extra_changes`): the plan shows it, and `migrate` needs its token as `confirm`."""
+        if self.machine is None:
+            return {'derived': {}, 'derivedToken': ''}
+        try:
+            prepared = self.server_prepared(self.logical_standard(), keepStandardMode=True, remove=name, frozen=self.outside_edits(name))
+            extra = extra_changes([(self, self.plan_commit(prepared, check=False), self.drift_plan())])
+        except Problem:
+            extra = {}
+        return {'derived': extra, 'derivedToken': fingerprint(extra) if extra else ''}
 
     def migrate_legacy(self, name, body):
         """Turn a legacy котушка into a native preset (or archive it). The file and its record go to backups first,
@@ -1213,15 +1448,18 @@ class Forge:
                 **({'defaultThinkingLevel': plan['thinking']} if plan['thinking'] else {})}
             records[plan['preset']] = {'settings': plan['settings']}
             if mode == 'model-chains':
+                pools = self.pools()
                 for chain in plan['modelChains']:
                     if chain['exact']:
-                        data.setdefault('retry', {}).setdefault('fallbackChains', {})[chain['selector']] = copy.deepcopy(chain['chain'])
+                        # A model-keyed chain is no role: nothing compiles it later, so it holds CUTS, never a pool block.
+                        routes = [m for r in chain['chain'] for m in (pools.get(pool_name(r), []) if pool_name(r) is not None else [r])]
+                        data.setdefault('retry', {}).setdefault('fallbackChains', {})[chain['selector']] = routes
         stamp = time.time_ns()
         atomic(self.backup_dir() / f'{stamp}-migrated-{name}.yml', self.path(name).read_bytes())
         record = self.mode_state['profiles'].get(name)
         if record is not None:
             atomic(self.backup_dir() / f'{stamp}-migrated-{name}-mode.json', json.dumps(record, ensure_ascii=False).encode())
-        self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records, remove=name, frozen=frozen))
+        self.commit_mode(self.server_prepared(data, keepStandardMode=True, presetRecords=records, remove=name, frozen=frozen), body=body)
         return {'ok': True, 'name': PRESET_PREFIX + plan['preset'] if mode != 'archive' else 'standard', 'mode': mode}
 
     def adopt(self, name, body):
@@ -1339,23 +1577,36 @@ class Forge:
         return {'kept': kept, 'lost': lost}
 
     def refs(self, base=None, ps=None):
+        """Routes this scope uses: {raw route: {profile}}. Native котушки count as `preset:<name>` with their logical
+        roles (FREE pool blocks expand), the routes their file entry holds and their DeepSeek replacements: expiry
+        and provider deletion must never take away a provider only a котушка uses."""
         if ps is None:
             base, ps = self.profiles(shared=True)
         pools = self.pools()
         out = {}
+        def add(name, entries):
+            for r in (member for r in entries for member in (pools.get(pool_name(r), []) if pool_name(r) is not None else [r])):
+                if isinstance(r, str) and '/' in r:
+                    out.setdefault(raw_route(r), set()).add(name)
+        def replacements(settings):
+            return list(settings.get('alternatives', [])) + [v for values in (settings.get('overrides') or {}).values() for v in values]
         for name, overlay in ps.items():
-            p = merge(base, overlay)
+            p = compile_input(merge(base, overlay))
             entries = list(p.get('modelRoles', {}).values())
             for a in p.get('retry', {}).get('fallbackChains', {}).values():
                 entries += a
             for a in p.get('task', {}).get('agentModelOverrides', {}).values():
                 entries += a if isinstance(a, list) else [a]
-            settings = self.mode_state['profiles'].get(name, {}).get('settings', {})
-            entries += settings.get('alternatives', []) + [v for values in settings.get('overrides', {}).values() for v in values]
-            entries = [member for r in entries for member in (pools.get(pool_name(r), []) if pool_name(r) is not None else [r])]
-            for r in entries:
-                if isinstance(r, str) and '/' in r:
-                    out.setdefault(raw_route(r), set()).add(name)
+            add(name, entries + replacements(self.mode_state['profiles'].get(name, {}).get('settings', {})))
+        try:
+            written = layer_presets(plain(self.read(self.path('standard', read=True), shared=True)))
+        except Problem:
+            written = {}
+        logical, records = layer_presets(plain(base)), self.mode_state.get('presets', {})
+        for pname in set(written) | set(logical) | set(records):
+            entries = [v for entry in (written.get(pname), logical.get(pname)) if entry and 'invalid' not in entry
+                for v in entry['modelRoles'].values()]
+            add(PRESET_PREFIX + pname, entries + replacements((records.get(pname) or {}).get('settings') or {}))
         return out
 
     def replace_yaml(self, path, data, expected=None):
@@ -1502,7 +1753,7 @@ class Forge:
             if action == 'adopt-plan':
                 return self.adopt_plan(name)
             if action == 'migrate-plan':
-                return self.legacy_plan(name, body.get('name') or None)
+                return {**self.legacy_plan(name, body.get('name') or None), **self.migration_extra(name)}
             self.writable({name} if action == 'adopt' else ())
             if action == 'adopt':
                 return self.adopt(name, body)
@@ -1564,7 +1815,7 @@ class Forge:
                     if not previous:
                         raise Problem('Ще немає попередньої версії налаштувань режиму')
                     frozen = self.outside_edits(name)
-                    return self.commit_mode({'name': name, 'normal': yaml_load(previous['normal']), 'settings': previous['settings'], 'statuses': previous.get('statuses', {}), 'catalog': previous.get('catalog', {}), 'frozen': frozen})
+                    return self.commit_mode({'name': name, 'normal': yaml_load(previous['normal']), 'settings': previous['settings'], 'statuses': previous.get('statuses', {}), 'catalog': previous.get('catalog', {}), 'frozen': frozen}, body=body)
                 backup = self.state['backups'].get(str(path))
                 if not backup:
                     raise Problem('Ще немає резервної копії')
@@ -1632,12 +1883,12 @@ class Forge:
             base, ps = self.profiles(shared=True)
             cached, stamps = self.cached()
             # Per-request copies: decorating them must never leak UI fields into state.json.
-            models = {r: dict(m) for r, m in self.verified_free_models({**cached, **self.state['catalog']}).items()}
+            models = {r: dict(m) for r, m in self.verified_free_models({**cached, **self.cat['catalog']}).items()}
             refs = self.refs(base, ps)
             for r in refs:
                 provider, mid = r.split('/', 1)
                 models.setdefault(r, {'provider': provider, 'id': mid, 'name': mid, 'source': 'reference'})
-            available = set(self.state['available'])
+            available = set(self.cat['available'])
             registry = self.registry(shared=True).get('providers') or {}
             provider_ids = sorted({m['provider'] for m in models.values()} | set(registry) | set(self.managed))
             providers = []
@@ -1677,7 +1928,7 @@ class Forge:
                 'profileWarnings': self.profile_warnings,
                 'revisions': {**{k: self.revision(k) for k in ps}, **{k: self.revision(k) for k in native}},
                 'freePools': self.pools(), 'poolsRevision': self.pools_revision(),
-                'restorable': [k for k in ps if records.get(k, {}).get('previous') or k not in records and str(self.path(k)) in self.state['backups']]
+                'restorable': [k for k in ps if records.get(k, {}).get('previous') or k not in records and str(self.path(k, read=True)) in self.state['backups']]
                     + [k for k in native if (preset_records.get(k[len(PRESET_PREFIX):]) or {}).get('previous')],
                 'profileModes': {**{k: {'settings': self.mode_settings(k), 'views': records.get(k, {}).get('views'), 'at': records.get(k, {}).get('at')} for k in ps},
                     **{k: {'settings': self.preset_settings(k[len(PRESET_PREFIX):]), 'views': (preset_records.get(k[len(PRESET_PREFIX):]) or {}).get('views'),
@@ -1687,14 +1938,16 @@ class Forge:
                 'modeRecovery': self.recovery_status(), 'tariff': tariff_status(),
                 'models': list(models.values()), 'providers': providers,
                 'providerRevision': digest(models_yml if models_yml is not None else b''),
-                'favs': self.state['favs'], 'changes': self.state['changes'][-100:],
-                'refresh': {'busy': self.busy, 'at': self.state['refreshed'], 'error': self.state['error']},
-                'insights': self.insights.snapshot(), 'csrf': self.csrf}
+                'favs': self.state['favs'], 'changes': self.cat['changes'][-100:],
+                'refresh': {'busy': self.lead.busy, 'at': self.cat['refreshed'], 'error': self.cat['error']},
+                'insights': self.insights.snapshot(self), 'csrf': self.csrf}
 
     def layer_snapshot(self, base):
         """Scope, inheritance and native-preset fields of /api/state (see review/layers-spec.md)."""
+        def relevant(data):
+            return plain({k: data[k] for k in ('modelRoles', 'retry', 'task', 'disabledProviders') if k in data})
         parent = self.parent_data()
-        own_file = plain(self.read(self.path('standard'), shared=True))
+        own_file = plain(self.read(self.path('standard', read=True), shared=True))
         effective_file = layered_config(parent, own_file) if parent is not None else own_file
         visible = visible_presets(parent, own_file) if parent is not None else visible_presets(own_file)
         logical = self.native_presets(base)
@@ -1711,8 +1964,12 @@ class Forge:
             'scope': {'id': self.project_id, 'kind': self.kind, 'name': self.scope_name(), 'path': str(self.project),
                 'parent': self.parent.project_id if self.parent is not None else None,
                 'origin': self.origin_kind, 'storage': effective_file.get('modelRoleStorage', 'global'),
-                'configExists': self.path('standard').is_file()},
-            'inherited': plain({k: parent[k] for k in ('modelRoles', 'retry', 'task', 'disabledProviders') if k in parent}) if parent is not None else None,
+                'configExists': self.path('standard', read=True).is_file(), 'readOnly': self.read_only(),
+                'globalReadOnly': self.parent.read_only() if self.parent is not None else None},
+            # What OMP reads from the Global file (compiled routes) and what the Global scope holds logically (FREE
+            # pool blocks, DeepSeek before its OFF replacement): «Перевизначити в проєкті» copies the logical value.
+            'inherited': relevant(parent) if parent is not None else None,
+            'inheritedLogical': relevant(self.parent.profiles(shared=True)[0]) if parent is not None else None,
             'sources': value_sources(parent, plain(base)) if parent is not None else value_sources(plain(base)),
             'nativePresets': presets, 'activePreset': active_preset(effective_file, visible),
             'legacyPresets': nonnative, 'modelChains': model_chain_keys(effective_file),
@@ -1801,7 +2058,7 @@ class Forge:
                 self.replace_yaml(path, data, current_hash)
                 self.remove_key_files([old_key], data)
                 self.managed.pop(pid, None)
-                self.state['available'] = [r for r in self.state['available'] if not r.startswith(pid + '/')]
+                self.cat['available'] = [r for r in self.cat['available'] if not r.startswith(pid + '/')]
                 self.persist()
                 return {'ok': True}
             url = body.get('url', '')
@@ -1883,6 +2140,8 @@ class Forge:
             return {'ok': True}
 
     def expire(self):
+        if self.catalog_owner is not None:
+            return self.catalog_owner.expire()  # Providers are per agent directory: the lead scope checks them.
         with self.lock:
             previous_meta = copy.deepcopy(self.managed)
             previous_available = self.state['available'][:]
@@ -1979,6 +2238,8 @@ class Forge:
         return result
 
     def refresh(self):
+        if self.catalog_owner is not None:
+            return self.catalog_owner.refresh()  # One catalogue per agent directory, refreshed by the lead scope.
         if not self.refresh_lock.acquire(blocking=False):
             return
         start = time.time()
@@ -2066,6 +2327,8 @@ class Forge:
         threading.Thread(target=self.refresh, daemon=True).start()
 
     def maintain_once(self):
+        if self.catalog_owner is not None:
+            return self.catalog_owner.maintain_once()
         # Expiry and refresh fail separately: one bad file must not stop catalog updates.
         try:
             self.expire()
@@ -2082,6 +2345,66 @@ class Forge:
         while True:
             self.maintain_once()
             time.sleep(30)
+
+
+def extra_changes(steps, own=None):
+    """What a write changes beyond what the owner asked for, per file: {label: {scope, file, lines}}.
+
+    `steps` are (scope, plan, drift); `drift` is that scope's unchanged recompile (`Forge.drift_plan`). A key the
+    write changes exactly as the unchanged recompile would is not the action's doing: an override for a Global role
+    that DeepSeek OFF reaches now, a FREE pool or catalogue change since the last save (M1). `own(scope, profile,
+    key)` names the keys an action targets; every other key it changes is extra too (apply: only role models and
+    the thinking level are OMP's /modelpreset switch).
+    """
+    out = {}
+    for scope, plan, drift in steps:
+        for name, row in plan['files'].items():
+            if row['after'] is None:
+                continue  # A migrated legacy file leaves: that is the action itself.
+            try:
+                before, after = yaml_shared(row['before'] or ''), yaml_shared(row['after'])
+            except Exception:
+                continue
+            changed = changed_keys(before, after)
+            extra = {k for k in changed if not own(scope, name, k)} if own is not None else set()
+            drifted = (drift or {}).get('files', {}).get(name)
+            if drifted and drifted['after'] is not None:
+                try:
+                    baseline = changed_keys(before, yaml_shared(drifted['after']))
+                except Exception:
+                    baseline = {}
+                extra |= {k for k, v in baseline.items() if k in changed and changed[k] == v}
+            if extra:
+                out[scope.project_id + '/' + name] = {'scope': scope.project_id, 'file': scope.file_label(scope.path(name, read=True)),
+                    'lines': short_diff(before, after, limit=8, keys=extra)}
+    return out
+
+
+def file_preview(steps):
+    """Every file a write changes, at most eight human lines each: what a confirmation drawer shows."""
+    out = {}
+    for scope, plan, *_ in steps:
+        for name, row in plan['files'].items():
+            label = scope.file_label(scope.path(name, read=True))
+            if row['after'] is None:
+                out[scope.project_id + '/' + name] = {'scope': scope.project_id, 'file': label, 'lines': ['− файл (у резервних копіях)']}
+                continue
+            try:
+                lines = short_diff(yaml_shared(row['before'] or ''), yaml_shared(row['after']), limit=8)
+            except Exception:
+                lines = ['файл зміниться']
+            out[scope.project_id + '/' + name] = {'scope': scope.project_id, 'file': label, 'lines': lines or ['лише форматування']}
+    return out
+
+
+def confirm_extra(body, extra):
+    """Refuse a write with unrequested changes unless the owner confirmed exactly these (409 `derived`)."""
+    token = fingerprint(extra) if extra else ''
+    if extra and body.get('confirm') != token:
+        where = '; '.join(f"{row['file']}: " + ', '.join(row['lines'][:3]) + (' …' if len(row['lines']) > 3 else '') for row in extra.values())
+        raise Problem('Окрім цієї дії запис змінить ще й це (перекомпіляція проти поточного глобального файлу, каталогу чи '
+            'пулів): ' + where + '. Переглянь і підтверди, щоб записати й це.', 409, 'derived', derived=extra, token=token)
+    return token
 
 
 class Machine:
@@ -2102,6 +2425,8 @@ class Machine:
         self.recovery = None
         self.pool_conflict = []
         self.provider_store = None
+        # The scope that runs the catalogue refresh, provider expiry and telemetry for the whole agent directory.
+        self.lead = None
         self.pool_data = json.loads(self.pools_file.read_text(encoding='utf-8')) if self.pools_file.exists() else None
 
     def pools(self):
@@ -2208,7 +2533,7 @@ class Machine:
         fsync_dir(self.dir)
         self.recovery = None
 
-    def transact(self, steps, pools=None):
+    def transact(self, steps, pools=None, sources=None):
         """Journal, backups, native files of every scope, their metadata, the pools; then drop the journal."""
         if self.journal.exists():
             raise Problem(RECOVERY + '.', 409, 'mode-recovery')
@@ -2221,7 +2546,7 @@ class Machine:
         if pools is not None:
             raw = read_or_none(self.pools_file)
             states[str(self.pools_file)] = {'before': raw.decode('utf-8') if raw is not None else None,
-                'after': json.dumps(self.pool_record(pools), ensure_ascii=False)}
+                'after': json.dumps(self.pool_record(pools, sources), ensure_ascii=False)}
         for scope, plan in steps:
             backup_dir = scope.backup_dir()
             atomic(backup_dir/(str(time.time_ns())+'-profile-modes.json'), json.dumps(scope.mode_state, ensure_ascii=False).encode())
@@ -2268,26 +2593,27 @@ class Machine:
         """One pools editor for every scope: each scope and profile using a pool is recompiled in one journal.
 
         A scope whose file was changed outside Mana Tape blocks the save when its Standard is affected; other
-        changed profiles stay byte for byte as they are (frozen), as in a single scope.
+        changed profiles stay byte for byte as they are (frozen), as in a single scope. Adopting one of several
+        legacy pool sets is the same save: every scope compiled from another set is rewritten with the chosen one.
         """
         with self.lock:
             for scope in self.ordered():
                 scope.writable()
-            if body.get('action') == 'adopt-legacy':
+            adopting = body.get('action') == 'adopt-legacy'
+            if adopting:
                 choice = next((row for row in self.pool_conflict if body.get('source') in row['sources']), None)
                 if choice is None:
                     raise Problem('Немає такого джерела старих пулів', 404)
-                self.store_pools(choice['pools'], choice['sources'])
-                self.pool_conflict = []
-                return {'ok': True, 'revision': origin.pools_revision()}
-            if self.pool_conflict:
-                raise Problem('Старі пули проєктів різняться. Спершу обери, які пули стануть спільними.', 409, 'pools-conflict')
-            if body.get('revision') != origin.pools_revision():
-                raise Problem('Спільні пули вже змінилися. Чернетка пулів лишилась у вікні; «Скинути» завантажить збережені.', 409, 'revision')
-            try:
-                pools = validate_pools(body.get('pools'), origin.mode_catalog())
-            except ValueError as e:
-                raise Problem(str(e), 422) from e
+                pools = copy.deepcopy(choice['pools'])
+            else:
+                if self.pool_conflict:
+                    raise Problem('Старі пули проєктів різняться. Спершу обери, які пули стануть спільними.', 409, 'pools-conflict')
+                if body.get('revision') != origin.pools_revision():
+                    raise Problem('Спільні пули вже змінилися. Чернетка пулів лишилась у вікні; «Скинути» завантажить збережені.', 409, 'revision')
+                try:
+                    pools = validate_pools(body.get('pools'), origin.mode_catalog())
+                except ValueError as e:
+                    raise Problem(str(e), 422) from e
             steps, blocked, diffs, parent_after = [], {}, {}, None
             for scope in self.ordered():
                 if not scope.uses_pools():
@@ -2300,18 +2626,25 @@ class Machine:
                 base, _ = scope.profiles()
                 parent = parent_after if scope.parent is not None and scope.parent is self.global_scope else None
                 plan = scope.plan_commit({'name': 'standard', 'normal': base, 'pools': pools, 'poolsOnly': True, 'frozen': conflicts}, parent=parent)
-                steps.append((scope, plan))
+                # While legacy sets conflict nothing compiles against the empty shared pools: no baseline then.
+                steps.append((scope, plan, None if adopting else scope.drift_plan()))
                 if scope is self.global_scope and 'standard' in plan['files']:
                     parent_after = plain(yaml_load(plan['files']['standard']['after']) or {})
             if blocked:
-                raise Problem('Файл змінено поза Mana Tape: ' + ', '.join(f'{k}/standard' for k in blocked)
-                    + '. Пули не збережено, щоб не затерти ці зміни. Прийми файл у цій області.', 409, 'mode-conflict',
+                names = ', '.join(f"{self.scopes[k].scope_title()} ({diffs[k]['standard']['file']})" for k in blocked)
+                raise Problem('Файл змінено поза Mana Tape: ' + names + '. Пули не збережено, щоб не затерти ці зміни. '
+                    'Прийми файл у цій області.', 409, 'mode-conflict',
                     profiles=sorted(f'{k}/{n}' for k, names in blocked.items() for n in names), scopes=blocked, diffs=diffs)
-            self.transact(steps, pools)
-            return {'ok': True, 'revision': origin.pools_revision(), 'scopes': [scope.project_id for scope, plan in steps if plan['files']]}
+            if not adopting:
+                confirm_extra(body, extra_changes(steps))
+            self.transact([(scope, plan) for scope, plan, _ in steps], pools, choice['sources'] if adopting else None)
+            if adopting:
+                self.pool_conflict = []
+            return {'ok': True, 'revision': origin.pools_revision(), 'scopes': [scope.project_id for scope, plan, _ in steps if plan['files']]}
 
     def promote(self, project, body):
-        """Move project values into Global: set them in the Global file, remove them from the project, one journal."""
+        """Move project values into Global: set them in the Global file, remove them from the project, one journal.
+        `dry` previews every file it would change."""
         with self.lock:
             glob = project.parent
             project.writable()
@@ -2335,54 +2668,96 @@ class Machine:
             after = global_plan['files'].get('standard', {}).get('after')
             parent = plain(yaml_load(after) or {}) if after is not None else None
             project_plan = project.plan_commit(project.server_prepared(project_data), parent=parent)
+            steps = [(glob, global_plan, glob.drift_plan()), (project, project_plan, project.drift_plan())]
+            extra = extra_changes(steps)
+            if body.get('dry'):
+                return {'ok': True, 'dry': True, 'files': file_preview(steps), 'derived': extra, 'token': fingerprint(extra) if extra else ''}
+            confirm_extra(body, extra)
             self.transact([(glob, global_plan), (project, project_plan)])
             return {'ok': True, 'revision': project.revision('standard')}
 
     def apply_preset(self, scope, body):
+        """OMP `/modelpreset switch <name>`, nothing more (config/model-presets.ts).
+
+        The котушка's role models as its file entry holds them (what OMP reads: a FREE pool already its first CUT, a
+        DeepSeek OFF котушка already its replacement) replace the role map of the layer `modelRoleStorage` names:
+        the project file (project storage, in a project) or the Global file. Its thinking level goes to the Global
+        file. Chains, agents and providers are not the котушка's: anything else a write would change needs the
+        owner's confirmation (`derived`). A target scope in DeepSeek OFF would replace a paid DeepSeek role of the
+        котушка at once, so that is refused (`deepseek-mode`) instead of writing something else. `dry` previews.
+        """
         with self.lock:
             scope.writable()
-            if scope.parent is not None:
-                scope.parent.writable()
+            glob = scope if scope.parent is None else scope.parent
+            if glob is not scope:
+                glob.writable()
             if body.get('revision') != scope.revision('standard'):
                 raise Problem('Область змінилась; онови дані', 409, 'revision')
             pname = body.get('preset')
             if not isinstance(pname, str) or not PRESET_NAME.fullmatch(pname):
                 raise Problem('Некоректна назва котушки OMP')
-            owner, entry = scope.preset_entry(pname)
-            # OMP writes the preset's own routes. A FREE pool block stays a block (it compiles to the same first CUT
-            # and keeps its fallbacks); every other role takes the route the preset file holds, its DeepSeek mode
-            # included.
-            compiled = (layer_presets(plain(owner.read(owner.path('standard'), shared=True))).get(pname) or {}).get('modelRoles') or {}
-            entry = {**entry, 'modelRoles': {r: v if pool_name(v) is not None else compiled.get(r, v) for r, v in entry['modelRoles'].items()}}
-            own_file = plain(scope.read(scope.path('standard'), shared=True))
+            owner, _ = scope.preset_entry(pname)
+            written = layer_presets(plain(owner.read(owner.path('standard', read=True), shared=True))).get(pname)
+            if not written or 'invalid' in written:
+                raise Problem('Запис котушки OMP ' + pname + ' у файлі некоректний; OMP її не застосує.', 422)
+            roles, thinking = dict(written['modelRoles']), written.get('defaultThinkingLevel')
+            own_file = plain(scope.read(scope.path('standard', read=True), shared=True))
             storage = scope.layered(own_file).get('modelRoleStorage', 'global')
-            glob = scope if scope.parent is None else scope.parent
             target = scope if scope.parent is not None and storage == 'project' else glob
+            if target.mode_settings('standard')['mode'] == 'no-deepseek':
+                models = target.mode_catalog()
+                paid = sorted(r for r, v in roles.items() if is_deepseek(v, models))
+                if paid:
+                    raise Problem(f'Котушка {pname} запускає платний DeepSeek ({", ".join(paid)}), а {target.scope_title(lower=True)} '
+                        'у режимі DeepSeek OFF: її Standard одразу замінив би ці ролі, і OMP не отримав би котушку. Перемкни котушку '
+                        'в OFF (тоді вона запише свої заміни) або область — в ON, і застосуй ще раз.', 409, 'deepseek-mode',
+                        roles=paid, scope=target.project_id)
             data = target.logical_standard()
-            roles = data.get('modelRoles') if isinstance(data.get('modelRoles'), dict) else None
-            if roles is None:
-                data['modelRoles'] = roles = {}
-            for role in [r for r in roles if r not in entry['modelRoles']]:
-                del roles[role]
-            for role, value in entry['modelRoles'].items():
-                roles[role] = value
-            steps, parent = [], None
-            if entry.get('defaultThinkingLevel') and target is glob:
-                data['defaultThinkingLevel'] = entry['defaultThinkingLevel']
-            elif entry.get('defaultThinkingLevel'):
-                global_data = glob.logical_standard()
-                global_data['defaultThinkingLevel'] = entry['defaultThinkingLevel']
-                plan = glob.plan_commit(glob.server_prepared(global_data))
-                steps.append((glob, plan))
-                after = plan['files'].get('standard', {}).get('after')
-                parent = plain(yaml_load(after) or {}) if after is not None else None
-            steps.append((target, target.plan_commit(target.server_prepared(data), parent=parent if target is not glob else None)))
-            self.transact(steps)
-            # OMP reports roles a higher layer still sets ("still set elsewhere").
-            written = layer_presets(plain(owner.read(owner.path('standard'), shared=True))).get(pname) or {}
-            now = scope.layered(plain(scope.read(scope.path('standard'), shared=True)))
-            shadowed = sorted(r for r, v in (written.get('modelRoles') or {}).items() if (now.get('modelRoles') or {}).get(r) != v)
-            return {'ok': True, 'target': target.project_id, 'shadowed': shadowed, 'revision': scope.revision('standard')}
+            current = data.get('modelRoles')
+            if not isinstance(current, dict):
+                data['modelRoles'] = current = {}
+            for role in [r for r in current if r not in roles]:
+                del current[role]
+            for role, value in roles.items():
+                current[role] = value
+            steps, parent_after = [], None
+            if thinking:
+                global_data = data if target is glob else glob.logical_standard()
+                global_data['defaultThinkingLevel'] = thinking
+                if target is not glob:
+                    plan = glob.plan_commit(glob.server_prepared(global_data))
+                    steps.append((glob, plan, glob.drift_plan()))
+                    after = plan['files'].get('standard', {}).get('after')
+                    parent_after = plain(yaml_load(after) or {}) if after is not None else None
+            plan = target.plan_commit(target.server_prepared(data), parent=parent_after if target is not glob else None)
+            steps.append((target, plan, target.drift_plan()))
+            # The file OMP will read must hold exactly the котушка's roles (and thinking): never «ok» without them. The
+            # one addition: a project in DeepSeek OFF keeps replacing a paid DeepSeek role it inherits from Global and
+            # the котушка does not name (OMP would show that Global role through; OFF replaces it, as on every save).
+            result = yaml_shared(plan['outputs']['standard'])
+            got = {r: role_selector(v) for r, v in ((result.get('modelRoles') or {}) if isinstance(result, dict) else {}).items() if role_selector(v)}
+            inherited = ((target.parent_data() or {}).get('modelRoles') or {}) if target is not glob else {}
+            wrong = sorted(r for r in set(got) | set(roles) if got.get(r) != roles.get(r) and not (r not in roles and r in inherited))
+            if wrong:
+                raise Problem('Застосування не дало б ролей котушки ' + pname + ': ' + ', '.join(wrong) + '. Нічого не записано.', 409, 'apply-mismatch')
+            def own(where, name, key):
+                return name == 'standard' and ((where is target and (key == 'modelRoles' or key.startswith('modelRoles.')))
+                    or (where is glob and key == 'defaultThinkingLevel'))
+            extra = extra_changes(steps, own)
+            # OMP reports roles a higher layer still sets ("still set elsewhere"); with project storage the Global
+            # roles the котушка does not name keep showing through.
+            layer = project_layer(own_file).get('modelRoles') or {} if scope is not glob else {}
+            shadowed = sorted(r for r, v in layer.items() if target is glob and role_selector(v) != roles.get(r))
+            parent_roles = (scope.parent_data() or {}).get('modelRoles') or {} if target is scope and scope is not glob else {}
+            from_global = sorted(r for r, v in parent_roles.items() if role_selector(v) and r not in roles)
+            result = {'ok': True, 'target': target.project_id, 'shadowed': shadowed, 'fromGlobal': from_global}
+            if body.get('dry'):
+                return {**result, 'dry': True, 'files': file_preview(steps), 'derived': extra, 'token': fingerprint(extra) if extra else ''}
+            confirm_extra(body, extra)
+            writes = [(where, plan) for where, plan, _ in steps if plan['files']]
+            if writes:
+                self.transact(writes)
+            return {**result, 'unchanged': not writes, 'revision': scope.revision('standard')}
 
 
 _GZIP, _GZIP_LOCK = OrderedDict(), threading.Lock()
@@ -2619,7 +2994,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = app.provider_save(body)
                 app.refresh_async()
             elif path == '/api/refresh':
-                if time.time() - app.state['attempted'] < 20:
+                if time.time() - app.cat['attempted'] < 20:
                     raise Problem('Оновлення вже виконано. Зачекай кілька секунд.', 429)
                 app.refresh_async()
                 threading.Thread(target=app.insights.update, daemon=True).start()
@@ -2744,12 +3119,21 @@ class Registry:
         if machine.provider_store is not None:
             forge.provider_store = machine.provider_store
         machine.scopes[forge.project_id] = forge
+        self.share(forge)
         self.apps[forge.project_id] = forge
         self.rows[forge.project_id] = {'id': forge.project_id, 'name': name, 'kind': forge.kind, 'path': str(forge.project),
             'parent': forge.parent.project_id if forge.parent is not None else None, 'origin': origin}
         if self.on_add is not None:
             self.on_add(forge)
         return forge
+
+    @staticmethod
+    def share(forge):
+        """A scope added to an agent directory that already has a lead uses the lead's catalogue and telemetry: one
+        `omp models refresh`, one `omp usage` and one expiry check per agent directory, however many projects."""
+        lead = forge.machine.lead
+        if lead is not None and lead is not forge:
+            forge.catalog_owner, forge.insights = lead, lead.insights
 
     def make_global(self, agent, entry=None):
         machine = self.machine(agent)
@@ -2786,13 +3170,15 @@ class Registry:
         return self.add(forge, str((entry or {}).get('name') or path.name or path), origin)
 
     def menu(self):
-        explicit = [r for r in self.rows.values() if r['origin'] == 'explicit']
-        rest = sorted((r for r in self.rows.values() if r['origin'] != 'explicit'), key=lambda r: (r['kind'] != 'global', r['name'].lower()))
+        # Copies first: a rescan or configure may add scopes while another thread builds a snapshot.
+        rows = list(self.rows.values())
+        explicit = [r for r in rows if r['origin'] == 'explicit']
+        rest = sorted((r for r in rows if r['origin'] != 'explicit'), key=lambda r: (r['kind'] != 'global', r['name'].lower()))
         return [dict(r) for r in explicit + rest]
 
     def candidate_list(self):
-        return sorted(({k: v for k, v in row.items() if k != 'agent'} for row in self.candidates.values()),
-            key=lambda r: -r['lastSeen'])
+        return sorted(({k: v for k, v in row.items() if k != 'agent'} for row in list(self.candidates.values())),
+            key=lambda r: (-r['lastSeen'], r['path']))
 
     def default(self):
         return self.apps[self.menu()[0]['id']]
@@ -2807,6 +3193,9 @@ class Registry:
         with self.lock:
             self.scanned = time.time()
             known = {str(app.project.resolve()) for app in self.apps.values()}
+            # A candidate keeps its id for as long as it is a candidate: the id the panel got from the last snapshot
+            # must still configure it. Only ids of other paths are taken.
+            previous = {row['path']: pid for pid, row in list(self.candidates.items())}
             candidates = {}
             for agent in list(self.machines):
                 try:
@@ -2824,7 +3213,11 @@ class Registry:
                         except Exception as error:
                             log_failure('discovered project', error)
                         continue
-                    pid = (self.index['scopes'].get(str(real)) or {}).get('id') or scope_id(real, self.taken() | set(candidates))
+                    others = (set(self.apps) | set(candidates)
+                        | {r['id'] for path, r in self.index['scopes'].items() if path != str(real)})
+                    kept = previous.get(row['path'])
+                    pid = ((self.index['scopes'].get(str(real)) or {}).get('id')
+                        or (kept if kept and kept not in others else scope_id(real, others)))
                     # Minute resolution: an active session elsewhere must not change every /api/state ETag.
                     candidates[pid] = {'id': pid, 'name': row['name'], 'path': row['path'], 'status': row['status'],
                         'lastSeen': int(row['lastSeen']) // 60 * 60, 'sessions': row['sessions'], 'agent': agent}
@@ -2852,9 +3245,13 @@ class Registry:
                     raise Problem('Проєкт уже має .omp/config.yml. Онови список проєктів.', 409)
                 if not path.is_dir():
                     raise Problem('Каталогу проєкту більше немає', 404)
-                config.parent.mkdir(exist_ok=True)
+                created = not config.parent.exists()
+                config.parent.mkdir(mode=0o755, exist_ok=True)
                 if config.parent.is_symlink():
                     raise Problem('.omp — символьне посилання', 409, 'symlink')
+                if created:
+                    # Like the file (0644): readable by the project's group whatever the server's umask (077).
+                    config.parent.chmod(0o755)
                 try:
                     create_new(config, PROJECT_CONFIG_HEADER.encode(), 0o644)
                 except FileExistsError:
@@ -2972,6 +3369,17 @@ def load_installation(config_path=None, cfg=None):
             # Start read-only instead of crash-looping; every write reports mode-recovery until it is resolved.
             machine.recovery_failed(error)
     registry.migrate_pools()
+    for machine in registry.machines.values():
+        # The lead keeps the state an older installation already has (catalogue, telemetry, the CodexBar file the
+        # Mac launcher pushes): the first explicit entry, else the Global scope.
+        machine.lead = next((s for s in machine.scopes.values() if s.origin_kind == 'explicit'), machine.global_scope)
+        for scope in machine.scopes.values():
+            registry.share(scope)
+            if machine.recovery is None and scope.recovery is None:
+                try:
+                    scope.backfill_written()
+                except Exception as error:
+                    log_failure('record backfill', error)
     for app in registry.apps.values():
         app.projects = registry.menu()
     registry.save_index()
@@ -3020,6 +3428,9 @@ def main():
     server.daemon_threads = True
     if not a.no_refresh and not cfg.get('noRefresh', False):
         def start(app):
+            # One catalogue refresh, expiry check and telemetry loop per OMP agent directory (its lead scope).
+            if app.catalog_owner is not None:
+                return
             threading.Thread(target=app.maintain, daemon=True).start()
             threading.Thread(target=app.insights.loop, daemon=True).start()
         for app in list(apps.values()):

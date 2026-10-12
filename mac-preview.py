@@ -79,6 +79,37 @@ class Upstream:
             connection.close()
 
 
+class Token:
+    """The server's local token, read through SSH. A server restart writes a new one; a 403 reads it again (at most
+    every two seconds), so a restarted server never needs a restarted launcher."""
+
+    def __init__(self, read, value=None):
+        self.read, self.lock, self.at = read, threading.Lock(), 0.0
+        self.value = value if value is not None else self.fetch()
+
+    def fetch(self):
+        value = self.read()
+        if len(value) < 32:
+            raise RuntimeError('Missing private server access token')
+        return value
+
+    def renew(self, used):
+        """True when a different token is now in use (read now or by another request meanwhile)."""
+        with self.lock:
+            if self.value != used:
+                return True
+            if time.monotonic() - self.at < 2:
+                return False
+            self.at = time.monotonic()
+            try:
+                value = self.fetch()
+            except Exception as error:
+                print(f'Mana Tape: token: {type(error).__name__}', file=sys.stderr, flush=True)
+                return False
+            changed, self.value = value != used, value
+            return changed
+
+
 class Proxy(BaseHTTPRequestHandler):
     # Browser keep-alive; every response carries Content-Length or is a bodiless 304.
     protocol_version = 'HTTP/1.1'
@@ -108,10 +139,21 @@ class Proxy(BaseHTTPRequestHandler):
                 return
             body = self.rfile.read(size) if size else None
             headers = {name: self.headers[name] for name in FORWARD if self.headers.get(name)}
-            headers.update({'Host': f'127.0.0.1:{self.server.remote_port}', 'X-Forge-Local': self.server.token})
+            token = self.server.token
+            headers.update({'Host': f'127.0.0.1:{self.server.remote_port}', 'X-Forge-Local': token.value})
             if self.headers.get('Origin'):
                 headers['Origin'] = f'http://127.0.0.1:{self.server.remote_port}'
             connection, response = self.forward(body, headers)
+            if response.status == 403 and token.renew(headers['X-Forge-Local']):
+                # The server restarted with a new token. A 403 is a refusal before anything ran, so the request,
+                # a POST included, is sent once more with the new token.
+                response.read()
+                if response.will_close:
+                    connection.close()
+                else:
+                    self.server.upstream.put(connection)
+                headers['X-Forge-Local'] = token.value
+                connection, response = self.forward(body, headers)
         except (OSError, ValueError, http.client.HTTPException):
             self.send_error(502, 'Server unavailable. Restart this launcher.')
             return
@@ -185,9 +227,9 @@ def main():
     if not args.host or not args.state or args.host.startswith('-') or not args.state.startswith('/'):
         parser.error('Потрібні SSH host і абсолютний state через аргументи або ssh.json')
     # The token remains in this process, never in HTML, URLs, cookies or browser storage.
-    token = subprocess.check_output([*SSH, args.host, 'cat -- ' + shlex.quote(args.state.rstrip('/') + '/local-token')], timeout=15).decode().strip()
-    if len(token) < 32:
-        raise RuntimeError('Missing private server access token')
+    def read_token():
+        return subprocess.check_output([*SSH, args.host, 'cat -- ' + shlex.quote(args.state.rstrip('/') + '/local-token')], timeout=15).decode().strip()
+    token = Token(read_token)
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         tunnel_port = probe.getsockname()[1]

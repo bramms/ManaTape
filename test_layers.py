@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import server
-from server import Handler, Problem, ThreadingHTTPServer, digest, load_installation, yaml_dump, yaml_load
+from server import Forge, Handler, Problem, ThreadingHTTPServer, digest, load_installation, yaml_dump, yaml_load
 from scopes import active_preset, discover, effective, omp_merge, project_layer, short_diff, sources, visible_presets
 
 DS = {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}
@@ -66,11 +66,21 @@ class Layers(unittest.TestCase):
     def app(self, path):
         return next(a for a in self.apps.values() if a.project == path.resolve())
 
-    def save(self, app, profile='standard', changes=(), settings=None):
+    def save(self, app, profile='standard', changes=(), settings=None, confirm=False):
         body = {'profile': profile, 'revision': app.revision(profile), 'changes': list(changes),
                 'modeSettings': settings or (app.preset_settings(profile[7:]) if profile.startswith('preset:') else app.mode_settings(profile))}
         body['previewToken'] = app.preview_profile(body)['token']
-        return app.save_profile(body)
+        return self.act(app.save_profile, body) if confirm else app.save_profile(body)
+
+    @staticmethod
+    def act(call, body):
+        """An owner action that accepts what its preview shows (409 `derived` → the same body with that token)."""
+        try:
+            return call(body)
+        except Problem as error:
+            if error.code != 'derived':
+                raise
+            return call({**body, 'confirm': error.details['token']})
 
     def read(self, path):
         return yaml_load(Path(path).read_text())
@@ -135,15 +145,28 @@ class Layers(unittest.TestCase):
         self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/small'}])
         one.scope_action({'action': 'reset', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']]})
         self.assertNotIn('plan', self.read(self.one / '.omp/config.yml').get('modelRoles', {}))
-        # An outside edit of the Global file blocks the move and names what changed.
+        # OMP rewriting a Global key Mana Tape does not manage (theme) is no conflict: promote goes on and keeps it.
         self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/small'}])
         self.save(glob, changes=[{'path': ['modelRoles', 'vision'], 'value': 'paid/big'}])
         text = (self.agent / 'config.yml').read_text()
+        revision = one.revision('standard')
         (self.agent / 'config.yml').write_text(text.replace('dark: titanium', 'dark: night'))
+        self.assertEqual(one.revision('standard'), revision, 'a Global theme edit does not invalidate project drafts')
+        self.assertEqual(glob.mode_conflicts(), [])
+        one.scope_action({'action': 'promote', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']]})
+        self.assertEqual(self.read(self.agent / 'config.yml')['theme']['dark'], 'night')
+        self.assertEqual(self.read(self.agent / 'config.yml')['modelRoles']['plan'], 'paid/small')
+        # An outside edit of a value Mana Tape manages blocks the move, names the scope and file, and what changed.
+        self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        text = (self.agent / 'config.yml').read_text()
+        (self.agent / 'config.yml').write_text(text.replace('vision: paid/big', 'vision: paid/q3'))
         with self.assertRaises(Problem) as error:
             one.scope_action({'action': 'promote', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']]})
         self.assertEqual(error.exception.code, 'mode-conflict')
-        self.assertEqual(error.exception.details['diffs']['standard']['lines'], ['~ theme.dark: titanium → night'])
+        self.assertEqual(error.exception.details['scope'], 'global')
+        self.assertIn('Глобальна область', str(error.exception))
+        self.assertIn('agent/config.yml', str(error.exception))
+        self.assertEqual(error.exception.details['diffs']['standard']['lines'], ['~ modelRoles.vision: paid/big → paid/q3'])
         self.assertIn('plan', self.read(self.one / '.omp/config.yml')['modelRoles'])
         with self.assertRaises(Problem):
             glob.scope_action({'action': 'reset', 'revision': glob.revision('standard'), 'paths': [['modelRoles', 'default']]})
@@ -490,6 +513,379 @@ class Layers(unittest.TestCase):
         status, state = request('GET', '/api/state?project=' + result['id'])
         self.assertEqual((status, state['scope']['origin']), (200, 'configured'))
         self.assertEqual(request('POST', '/api/scope-action?project=one', {'action': 'configure', 'candidate': '/etc'})[0], 404)
+
+
+    # ---- review fixes (layers-review.md) -------------------------------------------------------------------------
+
+    OFF = {'mode': 'no-deepseek', 'alternatives': ['paid/small'], 'overrides': {}}
+
+    def test_symlinked_global_is_read_only_and_projects_keep_working(self):
+        """H1: a Global config managed through dotfiles is read through the link; only writes to it are refused."""
+        dotfiles = self.root / 'dotfiles'
+        dotfiles.mkdir()
+        target = dotfiles / 'omp-config.yml'
+        target.write_bytes((self.agent / 'config.yml').read_bytes())
+        (self.agent / 'config.yml').unlink()
+        (self.agent / 'config.yml').symlink_to(target)
+        _, apps = load_installation(self.config)
+        one, glob = apps['one'], apps['global']
+        state = one.snapshot()
+        self.assertEqual(state['inherited']['modelRoles']['default'], 'paid/big', 'the project still inherits through the link')
+        self.assertEqual(state['scope']['globalReadOnly']['code'], 'symlink')
+        self.assertIsNone(state['scope']['readOnly'])
+        gstate = glob.snapshot()
+        self.assertEqual(gstate['scope']['readOnly']['code'], 'symlink')
+        self.assertIn('agent/config.yml', gstate['scope']['readOnly']['error'])
+        before = target.read_bytes()
+        self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        self.assertEqual(self.read(self.one / '.omp/config.yml')['modelRoles']['plan'], 'paid/big', 'project writes go on')
+        with self.assertRaises(Problem) as error:
+            self.save(glob, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        self.assertEqual((error.exception.status, error.exception.code), (409, 'symlink'))
+        self.assertIn('Глобальна область', str(error.exception))
+        with self.assertRaises(Problem) as error:
+            one.scope_action({'action': 'promote', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']]})
+        self.assertEqual(error.exception.code, 'symlink')
+        self.assertTrue((self.agent / 'config.yml').is_symlink())
+        self.assertEqual(target.read_bytes(), before, 'nothing is written through the link')
+
+    def test_native_presets_keep_the_providers_they_use(self):
+        """H2: a provider only a котушка uses (project or Global) is never expired or deleted."""
+        one, glob = self.apps['one'], self.apps['global']
+        models = self.agent / 'models.yml'
+        data = yaml_load(models.read_text())
+        for pid in ('temp', 'gtemp'):
+            data['providers'][pid] = {'api': 'openai-completions', 'baseUrl': 'https://example.invalid/v1', 'auth': 'none',
+                                      'models': [{'id': 'x', 'name': 'X', 'input': ['text'], 'cost': {'input': 1, 'output': 1}}]}
+        models.write_text(yaml_dump(data))
+        one.profile_action({'action': 'clone', 'profile': 'standard', 'name': 'tp'})
+        self.save(one, 'preset:tp', [{'path': ['modelRoles', 'smol'], 'value': 'temp/x'}])
+        glob.profile_action({'action': 'clone', 'profile': 'standard', 'name': 'gp'})
+        self.save(glob, 'preset:gp', [{'path': ['modelRoles', 'plan'], 'value': 'gtemp/x'}])
+        refs = one.registry_refs()
+        self.assertIn('one/preset:tp', refs['temp/x'])
+        self.assertIn('global/preset:gp', refs['gtemp/x'])
+        current = yaml_load(models.read_text())['providers']
+        for pid in ('temp', 'gtemp'):
+            one.managed[pid] = {'expires': 1, 'expired': False, 'fingerprint': server.fingerprint(current[pid])}
+        one.expire()
+        providers = yaml_load(models.read_text())['providers']
+        self.assertIn('temp', providers)
+        self.assertIn('gtemp', providers)
+        self.assertEqual(one.managed['temp']['expiryReason'], 'used')
+        with self.assertRaises(Problem) as error:
+            one.provider_save({'id': 'gtemp', 'action': 'delete', 'revision': digest(models.read_bytes())})
+        self.assertIn('global/preset:gp', str(error.exception))
+        self.assertIn('preset:tp', next(m for m in one.snapshot()['models'] if m['provider'] == 'temp')['usedBy'])
+
+    def test_candidate_ids_and_state_etag_stay_stable_across_rescans(self):
+        """H3: the id the panel got still configures the candidate after any number of rescans; no ETag churn."""
+        srv = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        srv.app, srv.apps, srv.registry = self.registry.default(), self.apps, self.registry
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        def state():
+            c = http.client.HTTPConnection('127.0.0.1', srv.server_port)
+            c.request('GET', '/api/state', headers={'Content-Type': 'application/json'})
+            r = c.getresponse(); body = json.loads(r.read()); tag = r.getheader('ETag'); c.close()
+            return body, tag
+        first, tag = state()
+        ids = []
+        for _ in range(4):
+            self.registry.rescan(force=True)
+            body, again = state()
+            ids.append([c['id'] for c in body['candidates']])
+            self.assertEqual(again, tag, 'nothing changed: the same ETag')
+        self.assertEqual(ids, [[c['id'] for c in first['candidates']]] * 4)
+        result = self.apps['one'].scope_action({'action': 'configure', 'candidate': first['candidates'][0]['id']})
+        self.assertEqual(result['id'], first['candidates'][0]['id'])
+
+    def test_apply_preset_writes_exactly_what_modelpreset_switch_writes(self):
+        """H4: role models (and thinking) where modelRoleStorage says; no chains; DeepSeek modes well defined."""
+        one, two, glob = self.apps['one'], self.app(self.two), self.apps['global']
+        one.save_pools({'revision': one.pools_revision(), 'pools': {'free-good': ['gratis/a-free', 'gratis/b-free'], 'free-fast': []}})
+        # (a) A pool role in the котушка: Global (storage global) takes its first CUT, and no chain appears anywhere.
+        two.profile_action({'action': 'clone', 'profile': 'standard', 'name': 'calm'})
+        self.save(two, 'preset:calm', [{'path': ['modelRoles', 'smol'], 'value': 'mana-pool/free-good'}])
+        written = self.read(self.two / '.omp/config.yml')['modelPresets']['calm']['modelRoles']
+        chains = self.read(self.agent / 'config.yml')['retry']['fallbackChains']
+        preview = two.profile_action({'action': 'apply-preset', 'preset': 'calm', 'revision': two.revision('standard'), 'dry': True})
+        self.assertEqual((preview['dry'], preview['target'], preview['derived']), (True, 'global', {}))
+        self.assertEqual(preview['files']['global/standard']['file'], 'agent/config.yml')
+        result = two.profile_action({'action': 'apply-preset', 'preset': 'calm', 'revision': two.revision('standard')})
+        self.assertEqual((result['target'], result['shadowed'], result['unchanged']), ('global', [], False))
+        g = self.read(self.agent / 'config.yml')
+        self.assertEqual(g['modelRoles'], written, 'Global roles are exactly the котушка as written (the pool as its first CUT)')
+        self.assertEqual(g['retry']['fallbackChains'], chains, 'switch never adds or changes chains')
+        self.assertEqual(two.snapshot()['activePreset'], 'calm')
+        again = two.profile_action({'action': 'apply-preset', 'preset': 'calm', 'revision': two.revision('standard')})
+        self.assertTrue(again['unchanged'], 'an active котушка needs no write')
+        # (b) Project storage, project in DeepSeek OFF: a котушка running paid DeepSeek is refused, nothing written.
+        self.save(one, settings=self.OFF)
+        one.profile_action({'action': 'clone', 'profile': 'standard', 'name': 'ds'})
+        self.save(one, 'preset:ds', [{'path': ['modelRoles', 'smol'], 'value': 'paid/deepseek-v4'}],
+                  {'mode': 'deepseek', 'alternatives': [], 'overrides': {}})
+        before = (self.one / '.omp/config.yml').read_bytes()
+        with self.assertRaises(Problem) as error:
+            one.profile_action({'action': 'apply-preset', 'preset': 'ds', 'revision': one.revision('standard')})
+        self.assertEqual((error.exception.code, error.exception.details['roles']), ('deepseek-mode', ['smol']))
+        self.assertEqual((self.one / '.omp/config.yml').read_bytes(), before)
+        # (c) The same котушка in OFF writes its replacement; OMP then calls it active, and nothing drifts afterwards.
+        self.save(one, 'preset:ds', [], self.OFF)
+        roles = self.read(self.one / '.omp/config.yml')['modelPresets']['ds']['modelRoles']
+        self.assertEqual(roles['smol'], 'paid/small')
+        body = {'action': 'apply-preset', 'preset': 'ds', 'revision': one.revision('standard')}
+        dry = one.profile_action({**body, 'dry': True})
+        # OFF dedups the new smol primary from its inherited reserve: a chain change beyond switch, so it is confirmed.
+        self.assertEqual(dry['derived']['one/standard']['lines'], ['+ retry.fallbackChains.smol: []'])
+        result = one.profile_action({**body, 'confirm': dry['token']})
+        self.assertEqual((result['target'], result['fromGlobal']), ('one', []))
+        self.assertEqual(self.read(self.one / '.omp/config.yml')['modelRoles'], roles)
+        self.assertEqual(one.snapshot()['activePreset'], 'ds')
+        settled = (self.one / '.omp/config.yml').read_bytes()
+        self.save(one, changes=[])
+        self.assertEqual((self.one / '.omp/config.yml').read_bytes(), settled, 'a save with nothing changed writes nothing')
+        # (d) A Global role the котушка does not name, reached by OFF: shown and confirmed, never silent.
+        self.save(glob, changes=[{'path': ['modelRoles', 'commit'], 'value': 'paid/deepseek-v4'}])
+        self.save(one, changes=[{'path': ['modelRoles', 'smol'], 'value': 'paid/big'}], confirm=True)
+        body = {'action': 'apply-preset', 'preset': 'ds', 'revision': one.revision('standard')}
+        dry = one.profile_action({**body, 'dry': True})
+        self.assertEqual(dry['fromGlobal'], ['commit'])
+        self.assertEqual(dry['derived']['one/standard']['lines'], ['+ retry.fallbackChains.smol: []'])
+        with self.assertRaises(Problem) as error:
+            one.profile_action(body)
+        self.assertEqual(error.exception.code, 'derived')
+        one.profile_action({**body, 'confirm': dry['token']})
+        self.assertEqual(self.read(self.one / '.omp/config.yml')['modelRoles']['smol'], 'paid/small')
+        self.assertEqual(self.read(self.one / '.omp/config.yml')['modelRoles']['commit'], 'paid/small', 'OFF still replaces Global commit')
+        self.assertIsNone(one.snapshot()['activePreset'], 'Global commit still shows through: OMP would not call it active either')
+
+    def test_first_write_shows_what_it_also_changes(self):
+        """M1: a write that would also add overrides nobody asked for (OFF reaching a Global role) needs a confirmation."""
+        one, glob = self.apps['one'], self.apps['global']
+        self.save(one, settings=self.OFF)
+        self.save(glob, changes=[{'path': ['modelRoles', 'commit'], 'value': 'paid/deepseek-v4'}])
+        before = (self.one / '.omp/config.yml').read_bytes()
+        body = {'profile': 'standard', 'revision': one.revision('standard'), 'changes': [{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}],
+                'modeSettings': one.mode_settings('standard')}
+        body['previewToken'] = one.preview_profile(body)['token']
+        with self.assertRaises(Problem) as error:
+            one.save_profile(body)
+        self.assertEqual((error.exception.status, error.exception.code), (409, 'derived'))
+        derived = error.exception.details['derived']['one/standard']
+        self.assertEqual(derived['file'], '.omp/config.yml')
+        self.assertIn('+ modelRoles.commit: paid/small', derived['lines'])
+        self.assertFalse(any('plan' in line for line in derived['lines']), 'the owner\'s own change is not listed')
+        self.assertEqual((self.one / '.omp/config.yml').read_bytes(), before)
+        with self.assertRaises(Problem):
+            one.save_profile({**body, 'confirm': 'stale'})
+        one.save_profile({**body, 'confirm': error.exception.details['token']})
+        written = self.read(self.one / '.omp/config.yml')
+        self.assertEqual((written['modelRoles']['plan'], written['modelRoles']['commit']), ('paid/big', 'paid/small'))
+        # Server actions preview the same way: reset, then promote (dry run lists both files).
+        self.save(glob, changes=[{'path': ['modelRoles', 'slow'], 'value': 'paid/deepseek-v4'}])
+        with self.assertRaises(Problem) as error:
+            one.scope_action({'action': 'reset', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']]})
+        self.assertEqual(error.exception.code, 'derived')
+        self.assertIn('+ modelRoles.slow: paid/small', error.exception.details['derived']['one/standard']['lines'])
+        self.act(one.scope_action, {'action': 'reset', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']]})
+        self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/q3'}])
+        dry = one.scope_action({'action': 'promote', 'revision': one.revision('standard'), 'paths': [['modelRoles', 'plan']], 'dry': True})
+        self.assertEqual(sorted(dry['files']), ['global/standard', 'one/standard'])
+        self.assertIn('+ modelRoles.plan: paid/q3', dry['files']['global/standard']['lines'])
+        self.assertEqual(dry['derived'], {})
+        self.assertNotIn('plan', self.read(self.agent / 'config.yml')['modelRoles'], 'a dry run writes nothing')
+
+    def test_migration_plan_names_derived_changes(self):
+        """M1 on silent: archiving a legacy котушка previews what the scope file also gains, and needs it confirmed."""
+        one, glob = self.apps['one'], self.apps['global']
+        self.save(one, settings=self.OFF)
+        self.save(glob, changes=[{'path': ['modelRoles', 'commit'], 'value': 'paid/deepseek-v4'}])
+        (self.one / '.omp/presets').mkdir()
+        (self.one / '.omp/presets/gpu.yml').write_text(yaml_dump({'modelRoles': {'task': 'paid/small'}}))
+        before = (self.one / '.omp/config.yml').read_bytes()
+        plan = one.profile_action({'action': 'migrate-plan', 'profile': 'gpu'})
+        self.assertIn('+ modelRoles.commit: paid/small', plan['derived']['one/standard']['lines'])
+        with self.assertRaises(Problem) as error:
+            one.profile_action({'action': 'migrate', 'profile': 'gpu', 'mode': 'archive', 'token': plan['token']})
+        self.assertEqual(error.exception.code, 'derived')
+        self.assertTrue((self.one / '.omp/presets/gpu.yml').exists())
+        self.assertEqual((self.one / '.omp/config.yml').read_bytes(), before)
+        one.profile_action({'action': 'migrate', 'profile': 'gpu', 'mode': 'archive', 'token': plan['token'], 'confirm': plan['derivedToken']})
+        self.assertFalse((self.one / '.omp/presets/gpu.yml').exists())
+        # F1: asking again is a clear 404, not a YAML error.
+        for action in ({'action': 'migrate-plan', 'profile': 'gpu'}, {'action': 'migrate', 'profile': 'gpu', 'mode': 'archive', 'token': plan['token']}):
+            with self.assertRaises(Problem) as error:
+                one.profile_action(action)
+            self.assertEqual(error.exception.status, 404)
+
+    def test_outside_edits_outside_managed_keys_are_no_conflict(self):
+        """M2: OMP rewriting theme, thinking level or comments never blocks; the next write keeps those edits."""
+        one, glob = self.apps['one'], self.apps['global']
+        self.save(glob, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        path = self.agent / 'config.yml'
+        data = self.read(path)
+        data['defaultThinkingLevel'] = 'low'
+        data['theme'] = {'dark': 'night'}
+        path.write_text('# owner note\n' + yaml_dump(data))
+        self.assertEqual(glob.mode_conflicts(), [])
+        self.assertEqual(glob.snapshot()['modeConflictDiffs'], {})
+        one_revision = one.revision('standard')
+        self.save(glob, changes=[{'path': ['modelRoles', 'vision'], 'value': 'paid/big'}])
+        self.assertEqual(one.revision('standard') != one_revision, True, 'a managed Global change does move project revisions')
+        text = path.read_text()
+        self.assertIn('# owner note', text)
+        written = self.read(path)
+        self.assertEqual((written['defaultThinkingLevel'], written['theme'], written['modelRoles']['vision']), ('low', {'dark': 'night'}, 'paid/big'))
+        self.assertEqual(glob.mode_conflicts(), [])
+
+    def test_older_records_get_exact_diffs(self):
+        """M3: a record without `written` is backfilled at start; one already out of sync compares with its compile."""
+        one = self.apps['one']
+        one.save_pools({'revision': one.pools_revision(), 'pools': {'free-good': ['gratis/a-free', 'gratis/b-free'], 'free-fast': []}})
+        self.save(one, changes=[{'path': ['retry', 'fallbackChains', 'task'], 'value': ['mana-pool/free-good']}])
+        records = json.loads(one.mode_file.read_text())
+        records['profiles']['standard'].pop('written')
+        one.mode_file.write_text(json.dumps(records))
+        _, apps = load_installation(self.config)
+        self.assertIn('written', apps['one'].mode_state['profiles']['standard'], 'in sync: backfilled at start')
+        _, again = load_installation(self.config)
+        self.assertEqual(again['one'].mode_file.read_text(), apps['one'].mode_file.read_text(), 'once')
+        records = json.loads(one.mode_file.read_text())
+        records['profiles']['standard'].pop('written')
+        one.mode_file.write_text(json.dumps(records))
+        path = self.one / '.omp/config.yml'
+        path.write_text(path.read_text().replace('task: paid/small', 'task: paid/q3'))
+        _, apps = load_installation(self.config)
+        diff = apps['one'].snapshot()['modeConflictDiffs']['standard']
+        self.assertTrue(diff['approximate'])
+        self.assertEqual(diff['lines'], ['~ modelRoles.task: paid/small → paid/q3'], 'no pool-expansion noise')
+
+    def test_one_catalogue_and_telemetry_loop_per_agent_directory(self):
+        """M4: every scope of an agent directory shares the lead's catalogue, refresh and insights."""
+        one, glob, two = self.apps['one'], self.apps['global'], self.app(self.two)
+        self.assertIs(one.machine.lead, one, 'the first explicit entry leads (it has the older state)')
+        self.assertIs(glob.catalog_owner, one)
+        self.assertIs(two.insights, one.insights)
+        one.cat['catalog']['paid/new'] = {'provider': 'paid', 'id': 'new', 'name': 'New'}
+        self.assertIn('paid/new', glob.mode_catalog())
+        with patch.object(Forge, 'refresh', autospec=True) as refresh:
+            glob.maintain_once()
+        self.assertEqual([call.args[0] for call in refresh.call_args_list], [one] * len(refresh.call_args_list))
+        result = self.apps['one'].scope_action({'action': 'configure', 'candidate': self.registry.candidate_list()[0]['id']})
+        self.assertIs(self.apps[result['id']].catalog_owner, one, 'a scope found later joins the same loop')
+        # main() starts the refresh and telemetry loops only for scopes without a catalogue owner.
+        self.assertEqual([a for a in self.apps.values() if a.catalog_owner is None], [one])
+
+    def test_adopting_legacy_pools_recompiles_every_scope(self):
+        """M9: choosing one of two legacy pool sets rewrites the scopes compiled from the other one, in one journal."""
+        one, two = self.apps['one'], self.app(self.two)
+        first = {'free-good': ['gratis/a-free', 'gratis/b-free'], 'free-fast': []}
+        one.save_pools({'revision': one.pools_revision(), 'pools': first})
+        self.save(one, changes=[{'path': ['modelRoles', 'task'], 'value': 'mana-pool/free-good'}])
+        self.save(two, changes=[{'path': ['modelRoles', 'plan'], 'value': 'mana-pool/free-good'}])
+        # As if `two` had been compiled by an older installation with its own pools.
+        second = {'free-good': ['gratis/b-free', 'gratis/a-free'], 'free-fast': []}
+        two.mode_state['pools'] = second
+        one.mode_state['pools'] = first
+        for app in (one, two):
+            app.mode_file.write_text(json.dumps(app.mode_state))
+        machine = one.machine
+        machine.pools_file.unlink()
+        _, apps = load_installation(self.config)
+        one, two = apps['one'], next(a for a in apps.values() if a.project == self.two.resolve())
+        self.assertEqual(len(one.machine.pool_conflict), 2)
+        result = one.save_pools({'action': 'adopt-legacy', 'source': two.project_id})
+        self.assertEqual(one.pools(), second)
+        self.assertEqual(self.read(self.one / '.omp/config.yml')['modelRoles']['task'], 'gratis/b-free', 'recompiled with the chosen set')
+        self.assertIn('one', result['scopes'])
+        self.assertEqual(json.loads(one.machine.pools_file.read_text())['migratedFrom'], [two.project_id])
+        self.assertFalse(one.machine.journal.exists())
+
+    def test_low_findings(self):
+        one, glob = self.apps['one'], self.apps['global']
+        path = self.agent / 'config.yml'
+        # L1: legal but unusual Global shapes compile.
+        data = self.read(path)
+        data['modelRoles']['odd'] = None
+        data['modelRoles']['multi'] = ['paid/small', 'paid/q3']
+        data['retry']['fallbackChains']['plan'] = None
+        path.write_text(yaml_dump(data))
+        self.save(glob, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        written = self.read(path)
+        self.assertEqual((written['modelRoles']['odd'], written['retry']['fallbackChains']['plan']), (None, None), 'kept as written')
+        # L2: an unreadable Global file stops project writes instead of compiling against nothing.
+        good = path.read_text()
+        path.write_text('modelRoles: [unclosed\n')
+        with self.assertRaises(Problem) as error:
+            self.save(one, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/q3'}])
+        self.assertEqual(error.exception.code, 'parent')
+        path.write_text(good)
+        # L3: Restore of a котушка toggles between the two last versions.
+        one.profile_action({'action': 'clone', 'profile': 'standard', 'name': 'r1'})
+        self.save(one, 'preset:r1', [{'path': ['modelRoles', 'smol'], 'value': 'paid/q2'}])
+        def smol():
+            return self.read(self.one / '.omp/config.yml')['modelPresets']['r1']['modelRoles']['smol']
+        one.profile_action({'action': 'restore', 'profile': 'preset:r1', 'revision': one.revision('preset:r1')})
+        self.assertEqual(smol(), 'paid/deepseek-v4')
+        one.profile_action({'action': 'restore', 'profile': 'preset:r1', 'revision': one.revision('preset:r1')})
+        self.assertEqual(smol(), 'paid/q2')
+        # L4/L6: a NUL in a recorded cwd and system directories are no candidates; the rest are still found.
+        folder = self.agent / 'sessions' / 'odd'
+        session(folder, 'nul.jsonl', '/tmp/x\x00y')
+        session(folder, 'tmp.jsonl', '/tmp')
+        session(folder, 'root.jsonl', '/')
+        rows = discover(self.agent, home=self.root / 'h')
+        self.assertIn(self.cand.resolve(), rows)
+        self.assertFalse({Path('/'), Path('/tmp').resolve()} & set(rows))
+        # L5: a session header rewritten in place (a moved session) is read again.
+        moved = self.agent / 'sessions' / '--misleading-name--' / 'b.jsonl'
+        other = self.root / 'moved'
+        other.mkdir()
+        session(moved.parent, moved.name, other)
+        self.assertIn(other.resolve(), discover(self.agent, home=self.root / 'h'))
+        # L8: a configured project's .omp is group-readable like its file, whatever the umask.
+        old = __import__('os').umask(0o077)
+        try:
+            _, apps = load_installation(self.config)
+            [candidate] = [c for c in apps['one'].installation.candidate_list() if c['path'] == str(other.resolve())]
+            apps['one'].scope_action({'action': 'configure', 'candidate': candidate['id']})
+        finally:
+            __import__('os').umask(old)
+        self.assertEqual((other / '.omp').stat().st_mode & 0o777, 0o755)
+        # L9: a project котушка named like a Global one says that it will hide it.
+        apps['global'].profile_action({'action': 'clone', 'profile': 'standard', 'name': 'gpu'})
+        (self.one / '.omp/presets').mkdir()
+        (self.one / '.omp/presets/gpu.yml').write_text(yaml_dump({'modelRoles': {'task': 'paid/big'}}))
+        _, apps = load_installation(self.config)
+        self.assertTrue(apps['one'].profile_action({'action': 'migrate-plan', 'profile': 'gpu'})['shadowsGlobal'])
+        # L11: OMP's order of котушки (localeCompare): case ignored first, lowercase first on a tie.
+        names = list(visible_presets({'modelPresets': {n: {'modelRoles': {'default': 'p/m'}} for n in ('b', 'B', 'a_x', 'a-x', 'a1', 'A')}}))
+        self.assertEqual(names, ['A', 'a_x', 'a-x', 'a1', 'b', 'B'])
+
+    def test_missing_global_file_is_never_created_empty(self):
+        """L7: a write with nothing for the Global file leaves an absent Global file absent."""
+        path = self.agent / 'config.yml'
+        path.unlink()
+        _, apps = load_installation(self.config)
+        glob = apps['global']
+        self.save(glob)
+        self.assertEqual(glob.plan_commit(glob.server_prepared(glob.logical_standard()))['files'], {})
+        self.assertFalse(path.exists(), 'nothing to write: nothing created')
+        glob.profile_action({'action': 'clone', 'profile': 'standard', 'name': 'x'})
+        self.assertIn('x', self.read(path)['modelPresets'], 'a change with content creates it')
+
+    def test_trailing_newline_and_unchanged_files_keep_their_bytes(self):
+        """F3: a save changes the edited value only; a file without a final newline keeps that."""
+        glob = self.apps['global']
+        path = self.agent / 'config.yml'
+        path.write_text(path.read_text().rstrip('\n'))
+        self.save(glob, changes=[{'path': ['modelRoles', 'plan'], 'value': 'paid/big'}])
+        text = path.read_text()
+        self.assertFalse(text.endswith('\n'))
+        self.assertEqual(self.read(path)['modelRoles']['plan'], 'paid/big')
 
 
 if __name__ == '__main__':

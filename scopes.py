@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 import threading
 
 # OMP isValidModelPresetName: /^[a-zA-Z][\w-]*$/ (JS \w is ASCII).
@@ -21,6 +22,10 @@ GROUPS = ('retry', 'task')
 SCOPE_ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 # Keys of one layer the panel tracks per value (override / reset / promote).
 TRACKED = ('modelRoles', 'retry.fallbackChains', 'task.agentModelOverrides', 'disabledProviders')
+# What Mana Tape compiles and writes in a config file. Everything else (theme, defaultThinkingLevel, modelRoleStorage,
+# retry.maxRetries, ...) belongs to OMP and the owner: an outside edit there is no conflict, the next write keeps it.
+MANAGED = ('modelRoles', 'disabledProviders', 'modelPresets')
+MANAGED_GROUPS = {'retry': 'fallbackChains', 'task': 'agentModelOverrides'}
 
 
 def omp_merge(base, over):
@@ -88,7 +93,8 @@ def sources(global_data, project_data=None):
 
 def model_chain_keys(data):
     """Fallback chains keyed by a model selector (provider/model or provider/*). OMP picks them before role chains."""
-    chains = ((data or {}).get('retry') or {}).get('fallbackChains') or {}
+    retry = (data or {}).get('retry')
+    chains = retry.get('fallbackChains') if isinstance(retry, dict) else None
     return sorted(k for k in chains if isinstance(k, str) and '/' in k) if isinstance(chains, dict) else []
 
 
@@ -129,6 +135,14 @@ def layer_presets(data):
     return out
 
 
+def preset_order(name):
+    """OMP lists presets with `a.localeCompare(b)` (ICU root collation). For preset names (ASCII letters, digits, `_`,
+    `-`): case is ignored first, `_` < `-` < digits < letters, and on a tie a lowercase letter comes first."""
+    def rank(ch):
+        return (0, 0) if ch == '_' else (0, 1) if ch == '-' else (1, ch) if ch.isdigit() else (2, ch.lower())
+    return [rank(ch) for ch in name], [not ch.islower() for ch in name]
+
+
 def visible_presets(global_data, project_data=None):
     """Presets OMP offers in this scope. A project preset shadows a global one of the same name; null in the
     project layer is not a tombstone (getOwnedModelPreset)."""
@@ -136,7 +150,7 @@ def visible_presets(global_data, project_data=None):
     if project_data is not None:
         for name, p in layer_presets(project_data).items():
             out[name] = {**p, 'source': 'project', **({'shadows': True} if name in out else {})}
-    return dict(sorted(out.items(), key=lambda kv: kv[0].lower()))
+    return dict(sorted(out.items(), key=lambda kv: preset_order(kv[0])))
 
 
 def active_preset(effective_data, presets):
@@ -151,6 +165,70 @@ def active_preset(effective_data, presets):
         if preset['modelRoles'] == roles:
             return name
     return None
+
+
+def managed_part(data):
+    """The part of one config file Mana Tape compiles and writes (MANAGED), as {dotted key: value}."""
+    data = data if isinstance(data, dict) else {}
+    out = {k: data[k] for k in MANAGED if k in data}
+    for group, key in MANAGED_GROUPS.items():
+        node = data.get(group)
+        if isinstance(node, dict):
+            if key in node:
+                out[group + '.' + key] = node[key]
+        elif group in data:
+            out[group] = node  # A scalar where OMP expects a group: never merged silently.
+    return out
+
+
+def with_unmanaged(logical, current):
+    """The logical layer rebased on the current file: Mana Tape's own keys from `logical`, every other key as the
+    file holds it now (an OMP or owner edit of theme, thinking level, ... survives the next write).
+
+    Works on plain dicts and on round-trip YAML maps (the file's comments and order are kept); returns a new map.
+    """
+    out = copy.deepcopy(current) if isinstance(current, dict) else {}
+    logical = logical if isinstance(logical, dict) else {}
+    for key in MANAGED:
+        if key in logical:
+            _assign(out, key, logical[key])
+        elif key in out:
+            del out[key]
+    for group, key in MANAGED_GROUPS.items():
+        mine, theirs = logical.get(group), out.get(group)
+        if isinstance(mine, dict) and key in mine:
+            if not isinstance(theirs, dict):
+                out[group] = theirs = type(out)()
+            _assign(theirs, key, mine[key])
+        elif isinstance(theirs, dict) and key in theirs:
+            del theirs[key]
+            if not theirs and group not in logical:
+                del out[group]
+    return out
+
+
+def _assign(container, key, value):
+    """container[key] = value, updating the node that is already there in place: a round-trip map keeps the comments
+    of every key whose value stays the same."""
+    old = container[key] if key in container else _ABSENT
+    if isinstance(old, dict) and isinstance(value, dict):
+        for k in [k for k in old if k not in value]:
+            del old[k]
+        for k, v in value.items():
+            _assign(old, k, v)
+    elif old is _ABSENT or old != value:
+        container[key] = copy.deepcopy(value)
+
+
+def onto(base, data):
+    """`data` laid over a copy of `base` in place: every node of `base` whose value stays keeps its comments (a
+    round-trip YAML map of the file as it is now)."""
+    out = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for key in [k for k in out if k not in data]:
+        del out[key]
+    for key, value in data.items():
+        _assign(out, key, value)
+    return out
 
 
 def preset_view(full, entry):
@@ -168,27 +246,37 @@ _SESSION_HEADERS, _SESSION_LOCK = {}, threading.Lock()
 def session_cwd(path, limit=65536):
     """The cwd recorded in an OMP session file header ({"type": "session", "cwd": ...}), or None.
 
-    The first line is usually a padded title record; the header follows it. Never decodes directory names.
+    The first line is usually a padded title record; the header follows it. Never decodes directory names. Reading
+    stops at the header (at most 8 lines, 64 KB); the cache follows the file's size and mtime, so a moved session
+    that rewrote its header is read again.
     """
     try:
         st = path.stat()
-        key = (str(path), st.st_ino, st.st_dev)
+        key = (str(path), st.st_ino, st.st_dev, st.st_size, st.st_mtime_ns)
         with _SESSION_LOCK:
             if key in _SESSION_HEADERS:
                 return _SESSION_HEADERS[key]
+        lines, size = [], 0
         with path.open('rb') as handle:
-            head = handle.read(limit)
+            while len(lines) < 8 and size < limit:
+                line = handle.readline(limit - size)
+                if not line:
+                    break
+                size += len(line)
+                lines.append(line)
+                if b'"session"' in line:
+                    break
     except OSError:
         return None
     cwd = None
-    for line in head.split(b'\n')[:8]:
+    for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             continue
         if isinstance(record, dict) and record.get('type') == 'session':
             value = record.get('cwd')
-            cwd = value if isinstance(value, str) and os.path.isabs(value) else None
+            cwd = value if isinstance(value, str) and os.path.isabs(value) and '\0' not in value else None
             break
     with _SESSION_LOCK:
         if len(_SESSION_HEADERS) > 20000:
@@ -238,14 +326,21 @@ def discover(agent_dir, roots=(), home=None, exclude=()):
     """
     home = Path(home or Path.home()).resolve()
     skip = {Path(p).resolve() for p in exclude} | {home}
+    # System places are never projects: the root, the home directory's ancestors and the temporary directories.
+    system = {Path('/').resolve(), *home.parents}
+    for temp in (tempfile.gettempdir(), '/tmp', '/var/tmp', '/private/tmp', '/private/var/tmp'):
+        try:
+            system.add(Path(temp).resolve())
+        except (OSError, RuntimeError):
+            pass
     out = {}
 
     def add(raw, origin, last=0, count=0):
         try:
             real = Path(raw).resolve(strict=True)
-        except (OSError, RuntimeError):
-            return
-        if real in skip or not real.is_dir():
+        except (OSError, RuntimeError, ValueError):
+            return  # Gone, a link loop, or not a path at all (a NUL byte).
+        if real in skip or real in system or not real.is_dir():
             return
         _, status = project_config(real)
         row = out.setdefault(real, {'path': str(real), 'name': real.name or str(real), 'status': status,
@@ -338,11 +433,23 @@ def _list_change(old, new):
     return ' '.join(parts)
 
 
-def short_diff(old, new, limit=6):
-    """At most `limit` human lines: `+ key: value`, `− key`, `~ key: old → new` (lists: the CUT that changed)."""
+def changed_keys(old, new):
+    """Dotted keys whose value differs between two documents (lists compare whole), with their new values."""
+    a, b = _flat(old or {}), _flat(new or {})
+    return {key: b.get(key, _ABSENT) for key in set(a) | set(b) if a.get(key, _ABSENT) != b.get(key, _ABSENT)}
+
+
+_ABSENT = object()
+
+
+def short_diff(old, new, limit=6, keys=None):
+    """At most `limit` human lines: `+ key: value`, `− key`, `~ key: old → new` (lists: the CUT that changed).
+    `keys` limits the lines to these dotted keys."""
     a, b = _flat(old or {}), _flat(new or {})
     lines = []
     for key in sorted(set(a) | set(b)):
+        if keys is not None and key not in keys:
+            continue
         if key in a and key in b:
             if a[key] == b[key]:
                 continue

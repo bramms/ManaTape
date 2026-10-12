@@ -413,7 +413,7 @@ class Projects(unittest.TestCase):
         self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
         front = ThreadingHTTPServer(('127.0.0.1', 0), proxy.Proxy)
         front.daemon_threads = True
-        front.token, front.tunnel_port, front.remote_port = 'x' * 32, server.server_port, server.server_port
+        front.token, front.tunnel_port, front.remote_port = proxy.Token(lambda: 'x' * 32), server.server_port, server.server_port
         front.upstream = proxy.Upstream(server.server_port)
         self.addCleanup(front.upstream.close)
         reused, get = [], front.upstream.get
@@ -443,6 +443,39 @@ class Projects(unittest.TestCase):
         self.assertEqual((response.status, json.loads(raw)), (200, {'ok': True}))
         self.assertEqual(self.apps['two'].state['favs'], ['custom/model-a'])
         self.assertEqual(reused, [False, True, True, True], 'one tunnel connection for the whole burst')
+
+    def test_ssh_proxy_reads_a_new_token_after_a_server_restart(self):
+        proxy = self.load_proxy()
+        app = self.apps['one']
+        app.origin, app.local_token = 'https://mana.example.ts.net', 'n' * 32  # A restarted server: a new token.
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server.app, server.apps, server.daemon_threads = app, self.apps, True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        reads = iter(['o' * 32, 'n' * 32])
+        front = ThreadingHTTPServer(('127.0.0.1', 0), proxy.Proxy)
+        front.daemon_threads = True
+        front.token, front.tunnel_port, front.remote_port = proxy.Token(lambda: next(reads)), server.server_port, server.server_port
+        front.upstream = proxy.Upstream(server.server_port)
+        self.addCleanup(front.upstream.close)
+        threading.Thread(target=front.serve_forever, daemon=True).start()
+        self.addCleanup(front.server_close); self.addCleanup(front.shutdown)
+        c = http.client.HTTPConnection('127.0.0.1', front.server_port, timeout=30)
+        self.addCleanup(c.close)
+        c.request('GET', '/api/state')
+        response = c.getresponse(); state = json.loads(response.read())
+        self.assertEqual(response.status, 200, 'the launcher read the new token and repeated the request once')
+        self.assertEqual(front.token.value, 'n' * 32)
+        c.request('POST', '/api/favorites', json.dumps({'values': ['custom/model-a']}), {'Content-Type': 'application/json', 'X-Forge-CSRF': state['csrf']})
+        response = c.getresponse(); response.read()
+        self.assertEqual(response.status, 200)
+        # A token that is still wrong after reading it again: the 403 reaches the browser, no loop.
+        app.local_token = 'z' * 32
+        front.token.at = 0
+        front.token.read = lambda: 'n' * 32
+        c.request('GET', '/api/state')
+        response = c.getresponse(); response.read()
+        self.assertEqual(response.status, 403)
 
     def test_shared_provider_renewal_survives_old_expiry_and_restart(self):
         from server import digest

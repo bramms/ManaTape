@@ -217,11 +217,21 @@ def seed_layers(root, project, agent):
             if show.insights.path.exists() and not app.insights.path.exists():
                 app.insights.path.write_bytes(show.insights.path.read_bytes())
 
+    def confirmed(call, body):
+        # The demo's Global file is seeded after the project: its first write also brings what DeepSeek OFF and
+        # the FREE pools now reach there. The panel would show that and ask; the seeding accepts it.
+        try:
+            return call(body)
+        except Problem as error:
+            if error.code != 'derived':
+                raise
+            return call({**body, 'confirm': error.details['token']})
+
     def save(app, profile, changes):
         body = {'profile': profile, 'revision': app.revision(profile), 'changes': changes,
                 'modeSettings': app.preset_settings(profile[7:]) if profile.startswith('preset:') else app.mode_settings(profile)}
         body['previewToken'] = app.preview_profile(body)['token']
-        app.save_profile(body)
+        confirmed(app.save_profile, body)
     # An older showcase with its own saved edits may refuse a write (an outside edit to accept first): the demo then
     # simply lacks that part, and says so.
     def attempt(what, step):
@@ -233,7 +243,7 @@ def seed_layers(root, project, agent):
         # `studio` = /modelpreset save of what runs now (OMP calls it active); `night` differs in two roles + thinking.
         def presets():
             for name in ('studio', 'night'):
-                show.profile_action({'action': 'clone', 'profile': 'standard', 'name': name})
+                confirmed(show.profile_action, {'action': 'clone', 'profile': 'standard', 'name': name})
             save(show, 'preset:night', [{'path': ['modelRoles', 'composer'], 'value': 'demo-cloud/research-lab:medium'},
                                         {'path': ['modelRoles', 'investigator'], 'value': 'mana-pool/free-good'},
                                         {'path': ['defaultThinkingLevel'], 'value': 'low'}])

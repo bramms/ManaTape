@@ -62,16 +62,18 @@
  // native котушка's role map is complete (OMP replaces the role map when it is applied); its reserves, agents and
  // providers are the scope's.
  // Per-render memo (diffs, mode keys, layered views); null outside render().
- let renderCache=null,globalLayer=normalizeLayer(source.inherited);
+ let renderCache=null,globalLayer=normalizeLayer(source.inherited),globalLogical=normalizeLayer(source.inheritedLogical||source.inherited);
  function normalizeLayer(raw){return raw?{modelRoles:{...raw.modelRoles},retry:{...raw.retry,fallbackChains:{...raw.retry?.fallbackChains}},task:{...raw.task,agentModelOverrides:{...raw.task?.agentModelOverrides}},...(raw.disabledProviders?{disabledProviders:raw.disabledProviders}:{})}:null;}
- function mergeMap(a,b){const out={...a};for(const [k,v] of Object.entries(b||{}))if(v!=null)out[k]=v;return out;}
+ // OMP merges a project over Global per key; a project null role is no tombstone (Global shows through), but a null
+ // chain or agent list replaces the Global one like any other value (nothing of it is used).
+ function mergeMap(a,b,nullReplaces=false){const out={...a};for(const [k,v] of Object.entries(b||{})){if(v!=null)out[k]=v;else if(nullReplaces)delete out[k];}return out;}
  function eff(profile=p()){
   if(!profile||!globalLayer)return profile;
   const memo=renderCache&&(renderCache.layers??=new Map()),hit=memo?.get(profile);if(hit)return hit;
   const g=globalLayer,out={...profile,modelRoles:profile.forgePreset?profile.modelRoles:mergeMap(g.modelRoles,profile.modelRoles),
-   retry:{...g.retry,...profile.retry,fallbackChains:mergeMap(g.retry.fallbackChains,profile.retry?.fallbackChains)},
-   task:{...g.task,...profile.task,agentModelOverrides:mergeMap(g.task.agentModelOverrides,profile.task?.agentModelOverrides)},
-   disabledProviders:profile.disabledProviders??g.disabledProviders??[]};
+   retry:{...g.retry,...profile.retry,fallbackChains:mergeMap(g.retry.fallbackChains,profile.retry?.fallbackChains,true)},
+   task:{...g.task,...profile.task,agentModelOverrides:mergeMap(g.task.agentModelOverrides,profile.task?.agentModelOverrides,true)},
+   disabledProviders:(profile.disabledProviders!==undefined?profile.disabledProviders:g.disabledProviders)||[]};
   memo?.set(profile,out);return out;
  }
  // The Global config holds a value for this lane (its primary or own reserves; an agent's list).
@@ -272,7 +274,7 @@
   state.poolDiffs=null;
   try{const r=await api('/api/free-pools',{revision:poolRevision,pools:poolDraft});poolOriginal=copy(poolDraft);editHistory.reset('@free-pools',poolDraft);await reload(false,true);const n=r.scopes?.length;notify('Спільні пули збережено'+(n?' · оновлено '+n+' '+plural(n,'область','області','областей')+': '+r.scopes.map(scopeName).join(', '):' · файли не змінились'));}
   // A scope whose file changed outside Mana Tape blocks the machine-wide save: each one is named with its diff.
-  catch(e){state.poolError=e.message;state.poolDiffs=e.diffs&&e.scopes?e.diffs:null;}
+  catch(e){state.poolError=e.message;state.poolDerived=!!e.derived;state.poolDiffs=e.diffs&&e.scopes?e.diffs:e.derived?Object.fromEntries(Object.entries(e.derived).map(([label,d])=>[d.scope,{[label]:d}])):null;}
   finally{state.saving=false;render();}
  }
  // Pool keys on the deck: a stack of tapes with the pool's name and size; dragging or arming moves the whole pool.
@@ -300,7 +302,7 @@
  function poolEditor(){
   const selected=state.poolTab||'free-good',list=poolDraft[selected],label=poolNames[selected],dirty=poolsDirty();
   const line=state.poolError?editorLine('bad',state.poolError):state.editorMsg?editorLine('ok',state.editorMsg):editorLine('',dirty?'Чернетка пулів · зберігається окремо від профілів':'');
-  const diffs=state.poolError&&state.poolDiffs?`<div class="pooldiffs">${Object.entries(state.poolDiffs).map(([scope,files])=>Object.values(files).map(d=>`<div class="pooldiffs__row"><b>${esc(scopeName(scope))}</b>${diffStrip(d)}</div>`).join('')).join('')}<p class="print">Прийми файл у тій області («Прийняти файл» на її монтажі), потім збережи пули ще раз.</p></div>`:'';
+  const diffs=state.poolError&&state.poolDiffs?`<div class="pooldiffs">${Object.entries(state.poolDiffs).map(([scope,files])=>Object.values(files).map(d=>`<div class="pooldiffs__row"><b>${esc(scopeName(scope))}</b>${diffStrip(d)}</div>`).join('')).join('')}<p class="print">${state.poolDerived?'Це не зміна пулів, а перекомпіляція тих областей проти поточного глобального файлу чи каталогу. «Зберегти пули» ще раз запише й це.':'Прийми файл у тій області («Прийняти файл» на її монтажі), потім збережи пули ще раз.'}</p></div>`:'';
   return `<div class="tray__editor" id="pool-editor" role="tabpanel" aria-labelledby="pool-tab-${selected}" tabindex="-1">${line}${diffs}${poolConflictMarkup()}<div class="tray__grid tray__grid--seq" id="pool-line-${selected}" role="list" aria-label="Порядок CUTS ${label}">${list.map((r,i)=>node(selected,r,i,list.length,'pool')).join('')}${socketKey(selected,list.length,'pool','CUT','Додати CUT у '+label)}</div><div class="tray__foot"><span class="print">${label} · ${list.length} CUTS · спільні для всієї машини · ${esc(poolScopesNote())} · порядок: перетягни, ⋯ або Shift ← / →</span>${key('Скинути','pool-reset','key--sm',(!dirty&&!state.poolError)||state.saving?'disabled':'')}</div></div>`;
  }
  function poolBlock(role,route,i,group){
@@ -503,6 +505,8 @@
   if(!dsScreen&&plan?.error)rows.push(line('bad','red',esc(plan.error)));
   if(!dsScreen&&issues.length)rows.push(line('bad','red',esc(issues.map(i=>i.key.replace('role:','')+': '+i.message).join(' · '))));
   if(source.modeRecovery)rows.push(line('bad','red',esc(source.modeRecovery.error||'Незавершене збереження режимів'),(source.modeRecovery.files||[]).join('\n')));
+  // A scope file that is a symbolic link (dotfiles) is shown but never written; other scopes are not affected.
+  if(source.scope?.readOnly)rows.push(line('warn','amber',`Лише перегляд · <b>${esc(source.scope.readOnly.file||'')}</b> — символьне посилання`,source.scope.readOnly.error||''));
   // An outside edit (OMP, an editor): what changed, right beside «Прийняти файл» (DESIGN «Області і котушки»).
   for(const name of source.modeConflicts||[]){
    const d=source.modeConflictDiffs?.[name],what=name==='standard'?(source.scope?.kind==='global'?'Глобальний файл':'Файл області'):'Файл котушки '+prettyProfile(name);
@@ -837,14 +841,14 @@
   const l=laneLayers(x.role,x.group)||{paths:[],own:[],up:[],inherit:[]},vibe=x.group==='vibe',same=(a,b)=>a.join('\n')===b.join('\n');
   const own=path=>l.own.some(o=>same(o,path)),up=path=>l.up.some(o=>same(o,path));
   const where=l.paths.map(path=>LANE_PART[path[0]]+': '+(own(path)?(up(path)?'проєкт (перекриває глобальне)':'проєкт'):up(path)?'глобальне':vibe?'типово в OMP':path[0]==='retry'&&inheritsDefault(x.role)?'з default':'не задано')).join(' · ');
-  const blocked=promoteBlocked(x.role,x.group),files=scopeFiles();
+  const linked=!!source.scope?.globalReadOnly,blocked=promoteBlocked(x.role,x.group)||linked,files=scopeFiles();
   const item=(cap,action,attr='')=>`<button type="button" class="key key--menu" role="menuitem" data-action="${action}"${attr}><span class="key__cap">${cap}</span></button>`;
   const rows=[];
   if(l.inherit.length)rows.push(item(led(true,'green')+'Перевизначити в проєкті','lane-override',` title="${esc('Скопіювати в проєкт: '+l.inherit.map(path=>LANE_PART[path[0]]).join(', ')+'. Глобальний файл не зміниться.')}"`));
   if(l.own.length&&l.up.length)rows.push(item(led(true,'blue')+'Скинути до глобального','lane-reset',' title="Прибрати значення проєкту: OMP братиме глобальне"'));
   else if(l.own.length&&(vibe?agentInfo(x.role):roleInfo(x.role)))rows.push(item('Типово в OMP','lane-reset',' title="Прибрати значення проєкту: глобальне його не задає, модель обирає OMP"'));
   if(l.own.length)rows.push((rows.length?'<div class="menu__sep" role="separator"></div>':'')+item(led(true,'amber')+'Підняти в глобальне…','lane-promote',blocked?' disabled':''));
-  return `<div class="menu menu--tools menu--lane" data-picker role="menu" aria-label="${esc((vibe?'Агент ':'Доріжка ')+x.role+' · області')}" ${pos}><div class="menu__head"><span class="silk">${esc((vibe?'агент ':'')+x.role)} · області</span>${MENU_CLOSE('Закрити дії доріжки')}</div><p class="menu__note menu__where">${esc(where)}</p><div class="menu__bed">${rows.join('')||'<p class="menu__note">Немає дій</p>'}</div>${blocked?'<p class="menu__note">Підняти можна збережене значення · спершу «Зберегти»</p>':''}<p class="menu__note menu__files"><span>проєкт · ${esc(files.projectShort)}</span><span>глобальне · ${esc(files.globalShort)}</span></p></div>`;
+  return `<div class="menu menu--tools menu--lane" data-picker role="menu" aria-label="${esc((vibe?'Агент ':'Доріжка ')+x.role+' · області')}" ${pos}><div class="menu__head"><span class="silk">${esc((vibe?'агент ':'')+x.role)} · області</span>${MENU_CLOSE('Закрити дії доріжки')}</div><p class="menu__note menu__where">${esc(where)}</p><div class="menu__bed">${rows.join('')||'<p class="menu__note">Немає дій</p>'}</div>${blocked?`<p class="menu__note">${linked?'Глобальний файл — символьне посилання: Mana Tape його не записує':'Підняти можна збережене значення · спершу «Зберегти»'}</p>`:''}<p class="menu__note menu__files"><span>проєкт · ${esc(files.projectShort)}</span><span>глобальне · ${esc(files.globalShort)}</span></p></div>`;
  }
  function openLaneMenu(role,group,el){
   if(state.saving)return;
@@ -864,7 +868,9 @@
  function promoteBlocked(role,group){const l=laneLayers(role,group);if(!l)return true;return staleDrafts.has('standard')||diff('standard').some(c=>l.paths.some(path=>path.join('\n')===c.path.join('\n')));}
  function laneOverride(role,group){
   const l=laneLayers(role,group);if(!l?.inherit.length||state.saving)return;
-  for(const path of l.inherit){const value=path.reduce((o,k)=>o?.[k],globalLayer),parent=path.slice(0,-1).reduce((o,k)=>o[k]??={},p());parent[path.at(-1)]=copy(value);}
+  // The Global scope's logical value (a FREE pool stays a block, DeepSeek stays DeepSeek for this project's own mode),
+  // not the routes Global compiled: later pool saves and this project's mode keep reaching the copy.
+  for(const path of l.inherit){const value=path.reduce((o,k)=>o?.[k],globalLogical)??path.reduce((o,k)=>o?.[k],globalLayer),parent=path.slice(0,-1).reduce((o,k)=>o[k]??={},p());parent[path.at(-1)]=copy(value);}
   state.picker=null;state.opFeedback=(group==='vibe'?'Агент ':'')+role+' перевизначено в проєкті (копія глобального: '+l.inherit.map(path=>LANE_PART[path[0]]).join(', ')+') · далі зміни — лише в проєкті · «Зберегти» запише, ↶ скасує';render();focusLaneKey(role,group);
  }
  function laneReset(role,group){
@@ -880,9 +886,10 @@
   // An agent's @role that only this project defines would point nowhere in the Global config.
   const dangling=vibe?agentValues(role).filter(v=>v.startsWith('@')&&!globalLayer.modelRoles[aliasRole(v)]).map(v=>v.split(':')[0]):[];
   state.picker=null;
-  askConfirm({action:'promote',paths:l.own,role,group,focus:`[data-lane-menu="${CSS.escape(role)}"][data-group="${group}"]`,title:'Підняти в глобальне',sub:what,label:'Підняти в глобальне',
+  const spec={action:'promote',paths:l.own,role,group,pending:true,focus:`[data-lane-menu="${CSS.escape(role)}"][data-group="${group}"]`,title:'Підняти в глобальне',sub:what,label:'Підняти в глобальне',
    text:`Значення проєкту для <b>${esc(what)}</b> (${esc(parts)}) буде записано в глобальний файл і прибрано з файлу проєкту — одним записом, з резервними копіями обох файлів.<span class="path-list"><span>глобальне · <code>${esc(files.global)}</code></span><span>проєкт · <code>${esc(files.project)}</code></span></span>Після цього ${esc(what)} діятиме в усіх проєктах, де немає власного значення.`,
-   note:dangling.length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>'+esc(dangling.join(', '))+' є лише в цьому проєкті: у глобальному файлі це посилання агента нікуди не вестиме.</span></div>':''});
+   note:dangling.length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>'+esc(dangling.join(', '))+' є лише в цьому проєкті: у глобальному файлі це посилання агента нікуди не вестиме.</span></div>':''};
+  askConfirm(spec);previewAction(spec,'/api/scope-action',{action:'promote',revision:source.revisions.standard,paths:l.own});
  }
  // The Global scope of this scope (itself on the Global scope), and the files the scope actions write.
  function globalScopeRow(){const id=source.scope?.kind==='global'?source.projectId:source.scope?.parent;return id?(source.projects||[]).find(x=>x.id===id)||null:null;}
@@ -1012,7 +1019,7 @@
  root.addEventListener('compositionend',e=>{composing=false;searchInput(e.target);scheduleBackgroundWork();});
  root.addEventListener('input',e=>{if(e.isComposing)composing=true;searchInput(e.target);});
  root.addEventListener('change',e=>searchInput(e.target,true));
- root.addEventListener('click',e=>{if(e.target.closest('.menu--tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
+ root.addEventListener('click',e=>{if(e.target.closest('.menu--tools:not(.menu--lane) [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
  root.addEventListener('click',e=>{if(e.target.closest('.dock__menu .menu button'))win.querySelector('.dock__menu')?.removeAttribute('open');},true);
  root.addEventListener('toggle',e=>{const menu=e.target;if(menu.matches?.('.dock__menu')&&menu.open&&(!menu.contains(document.activeElement)||document.activeElement.matches('summary'))){menu.querySelector('.menu')?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});menu.querySelector('[role=menuitem]:not(:disabled)')?.focus({preventScroll:true});}},true);
  root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.effortRole){const x=state.picker;if(x?.thinking&&x.role===b.dataset.effortRole&&x.index===Number(b.dataset.index)&&x.group===b.dataset.group)closePicker();else openPicker(b.dataset.effortRole,b.dataset.index,b.dataset.group,b,true,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.laneMenu!==undefined){openLaneMenu(b.dataset.laneMenu,b.dataset.group||'role',b);return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){pickCut(state.picker,b.dataset.pick);return;}
@@ -1250,17 +1257,22 @@
  function draftSummary(name){const changes=diff(name);if(!changes.length)return '';const labels=[...new Set(changes.map(c=>pathLabel(c.path)))];return changes.length+' '+plural(changes.length,'зміна','зміни','змін')+': '+labels.slice(0,3).join(', ')+(labels.length>3?' і ще '+(labels.length-3):'');}
  function pathLabel([a,b,c]){return a==='modelRoles'?b+' · основна':a==='retry'?c+' · резерви':a==='task'?'агент '+c:a==='disabledProviders'?'провайдери профілю':a==='forgeMode'?'режим DeepSeek':a==='defaultThinkingLevel'?'thinking котушки':[a,b,c].filter(Boolean).join('.');}
  // Server problems with a code get a clear line instead of the generic «змінились вихідні дані» dialog.
- const PROBLEM_CODES=new Set(['mode-recovery','symlink','mode-conflict']);
+ const PROBLEM_CODES=new Set(['mode-recovery','symlink','mode-conflict','parent','deepseek-mode']);
  function problemText(d){
   const text=d.error||'Не вдалося виконати дію',files=(d.files||d.profiles||[]).join(', ');
   if(d.code==='mode-recovery')return 'Незавершене збереження: '+text+(files?' · файли: '+files:'');
   if(d.code==='symlink')return 'Файл — символьне посилання: '+text;
-  if(d.code==='mode-conflict')return 'Файл профілю змінено поза Mana Tape: '+text+(files?' · '+files:'')+' · «Прийняти файл» на монтажі';
+  if(d.code==='mode-conflict')return d.scope?text:'Файл профілю змінено поза Mana Tape: '+text+(files?' · '+files:'')+' · «Прийняти файл» на монтажі';
+  if(d.code==='derived')return 'Запис змінить більше, ніж ця дія: перекомпіляція проти поточного глобального файлу, каталогу чи пулів (рядки нижче). Натисни ще раз, щоб записати й це.';
   return text;
  }
+ // A write that would also change what the owner did not ask for answers 409 `derived` with those lines and a token;
+ // the same action sent again (after the owner saw the lines) carries the token and is written as previewed.
  async function api(path,body){
   const writes=path!=='/api/profile-preview';if(writes){writeEpoch++;activeWrites++;}
-  try{const r=await fetch(endpoint(path),{method:'POST',headers:{'Content-Type':'application/json','X-Forge-CSRF':source.csrf},body:JSON.stringify(body),signal:deadline(writes?30000:20000)});const d=await r.json();if(!r.ok){const e=Error(problemText(d));e.status=r.status;e.code=d.code||'';e.files=d.files||d.profiles||[];e.diffs=d.diffs||null;e.scopes=d.scopes||null;throw e;}return d;}
+  const dkey=writes?path+'\n'+JSON.stringify([body.action||'',body.profile||'',body.preset||'',body.paths||'',body.mode||'',body.source||'']):'',held=state.derivedOk;
+  if(writes&&held?.key===dkey&&body.confirm===undefined)body={...body,confirm:held.token};
+  try{const r=await fetch(endpoint(path),{method:'POST',headers:{'Content-Type':'application/json','X-Forge-CSRF':source.csrf},body:JSON.stringify(body),signal:deadline(writes?30000:20000)});const d=await r.json();if(!r.ok){const e=Error(problemText(d));e.status=r.status;e.code=d.code||'';e.files=d.files||d.profiles||[];e.diffs=d.diffs||null;e.scopes=d.scopes||null;e.scope=d.scope||'';e.derived=d.derived||null;e.token=d.token||'';if(d.code==='derived')state.derivedOk={key:dkey,token:d.token};throw e;}if(state.derivedOk?.key===dkey&&!body.dry)state.derivedOk=null;return d;}
   catch(e){
    // No answer in time: a write may or may not have landed, so the state is read again as soon as possible.
    if(e?.name==='TimeoutError'||e?.name==='AbortError'){const t=Error(writes?'Сервер не відповів за 30 с. Невідомо, чи зміни записано: чернетка лишилась у вікні, стан перечитується.':'Сервер не відповів вчасно. Спробуй ще раз.');t.status=0;t.code='timeout';if(writes)backgroundRefreshPending=true;throw t;}
@@ -1334,7 +1346,7 @@
    profiles[k]=copy(v);original[k]=copy(v);staleDrafts.delete(k);
   }
   if(discard||!poolsDirty()){poolOriginal=copy(fresh.freePools);poolDraft=copy(poolOriginal);poolRevision=fresh.poolsRevision;}
-  source=fresh;globalLayer=normalizeLayer(fresh.inherited);profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));roleKeys.splice(0,roleKeys.length,...knownRoleKeys(profiles.standard));
+  source=fresh;globalLayer=normalizeLayer(fresh.inherited);globalLogical=normalizeLayer(fresh.inheritedLogical||fresh.inherited);profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));roleKeys.splice(0,roleKeys.length,...knownRoleKeys(profiles.standard));
   if(!profiles[state.profile])state.profile='standard';state.favs=favSaved=fresh.favs||[];rebuild();state.offline=false;render();
   }finally{if(background)backgroundReloading=false;}
  }
@@ -1357,6 +1369,9 @@
   }catch(e){
    // The file moved on under the draft: rebase it now; only a field changed on both sides asks (QA1 B2).
    if(e.code==='revision'){state.opFeedback='';try{await reload();}catch{}if(staleDrafts.has(name)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:''});modalFit='';}else notify('Файл змінився поза цим вікном. Чернетку перенесено на актуальний файл: перевір і збережи ще раз.');}
+   // The save would also write what nobody asked for (DeepSeek OFF reaching a Global role, a catalogue change):
+   // shown in a confirmation first; «Зберегти й це» sends the same save with the server's token (M1).
+   else if(e.code==='derived'){state.error='';askConfirm({action:'save-derived',focus:'[data-action=save]',title:'Збереження змінить більше',sub:prettyProfile(name),label:'Зберегти й це',text:'Окрім твоїх змін збереження перекомпілює файл проти поточного глобального файлу, каталогу й пулів і тому запише ще й це (наприклад, DeepSeek OFF доходить до ролі, успадкованої з глобального):',note:derivedNote(e.derived)});}
    else if(e.status===409&&!PROBLEM_CODES.has(e.code)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:e.message});modalFit='';}else state.error=e.message;render();}
   finally{state.saving=false;render();}
  }
@@ -1529,7 +1544,7 @@
  }
 
  // In an installation (scopes) a copy is always a native OMP котушка (modelPresets): its name starts with a letter.
- function nativeClones(){return !!(source.scope?.parent||source.scope?.kind==='global'||(source.projects||[]).some(x=>x.kind));}
+ function nativeClones(){return !!(source.scope?.parent||source.scope?.kind==='global'||(source.projects||[]).some(x=>x.kind)||Object.values(source.nativePresets||{}).some(x=>x.own));}
  function profileNameResult(value,renaming=false){
   const result=ManaOperator.profileName(value),native=renaming?isNative(state.profile):nativeClones(),keyOf=n=>native?'preset:'+n:n;
   if(!result.error&&native&&!/^[a-z]/.test(result.name))result.error='Назва котушки OMP починається з латинської літери.';
@@ -1579,11 +1594,11 @@
   // A directory OMP ran in without its own settings: the dialog names the file it would create; nothing is created
   // without its key.
   if(kind==='candidate'){
-   const c=state.candidate||{},file=String(c.path||'').replace(/\/+$/,'')+'/.omp/config.yml',link=c.status==='symlink',seen=c.sessions?` (${c.sessions} ${plural(c.sessions,'сесія','сесії','сесій')}${c.lastSeen?' · востаннє '+esc(timeLabel(c.lastSeen)):''})`:'';
+   const c=state.candidate||{},file=String(c.path||'').replace(/\/+$/,'')+'/.omp/config.yml',link=c.status==='symlink',seen=c.sessions?` (${esc(c.sessions)} ${plural(c.sessions,'сесія','сесії','сесій')}${c.lastSeen?' · востаннє '+esc(timeLabel(c.lastSeen)):''})`:'';
    return {title:'Налаштувати проєкт',sub:c.name||'',focus:'[data-action=modal-close]',body:`<p class="print">OMP працював у каталозі <b>${esc(c.name)}</b>${seen}, але там немає власних налаштувань: OMP бере тут лише глобальні.</p><span class="path-list"><span>каталог · <code>${esc(c.path)}</code></span><span>буде створено · <code>${esc(file)}</code></span></span><p class="print">Файл міститиме лише коментар. Доки ти нічого не збережеш, проєкт успадковує все з глобального. Без цієї клавіші нічого не створюється.</p>${link?'<div class="msg" data-s="bad">'+led(true,'red')+'<span>.omp — символьне посилання: Mana Tape не створює файл через посилання</span></div>':''}${formFoot(`${cancel}${key(state.profileBusy?'Створення…':'Налаштувати проєкт','configure-project','key--action',link||busy?'disabled':'')}`)}`};
   }
   if(kind==='migrate')return migrateSpec(cancel,busy);
-  if(kind==='confirm'){const c=state.confirm||{};return {title:c.title||'Підтвердження',sub:c.sub||'',focus:'[data-action=confirm-cancel]',body:`<p class="print">${c.text||''}</p>${c.pending?'<div class="msg">'+led(false)+'<span>Перевіряю блоки FREE-пулів…</span></div>':c.note||''}${formFoot(`${key('Скасувати','confirm-cancel')}${key((c.danger?led(true,'red'):'')+esc(c.label||'Підтвердити'),'confirm-run',c.danger?'key--danger':'key--action',busy||c.pending?'disabled':'')}`)}`};}
+  if(kind==='confirm'){const c=state.confirm||{};return {title:c.title||'Підтвердження',sub:c.sub||'',focus:'[data-action=confirm-cancel]',body:`<p class="print">${c.text||''}</p>${c.pending?'<div class="msg">'+led(false)+'<span>'+esc(c.pendingText||'Готую перегляд змін…')+'</span></div>':c.note||''}${formFoot(`${key('Скасувати','confirm-cancel')}${key((c.danger?led(true,'red'):'')+esc(c.label||'Підтвердити'),'confirm-run',c.danger?'key--danger':'key--action',busy||c.pending?'disabled':'')}`)}`};}
   return {title:'',body:'',focus:''};
  }
  // MIGRATION of an old .omp/presets/*.yml котушка (DESIGN «Області і котушки»): the server's plan — what a native
@@ -1594,13 +1609,16 @@
  function migrateSpec(cancel,busy){
   const m=state.migrate||{},plan=m.plan,name=m.profile||'';
   if(!plan)return {title:'Перенести котушку',sub:name,focus:'[data-action=modal-close]',body:`${m.error?'':`<div class="msg">${led(false)}<span>Готую план перенесення…</span></div>`}${formFoot(cancel)}`};
-  const mode=m.mode||(plan.sameAsStandard?'archive':'roles'),exact=plan.modelChains.filter(c=>c.exact),loses=migrateLoses(plan,mode),ready=!loses||m.accept,collide=mode!=='archive'&&plan.collision;
+  const mode=m.mode||(plan.sameAsStandard?'archive':'roles'),exact=plan.modelChains.filter(c=>c.exact),loses=migrateLoses(plan,mode),ready=!loses||m.accept,collide=mode!=='archive'&&(plan.collision||String(m.name??plan.preset).trim()!==plan.preset);
   const carried=mode==='archive'?['нічого: нативної котушки не буде']:[...plan.carried,...(mode==='model-chains'?exact.map(c=>'ланцюг '+c.role+' → ключ '+c.selector+' ('+c.chain.length+')'):[])];
-  const lost=mode==='archive'?[]:plan.lost,chains=plan.modelChains.length?`<p class="print">Ланцюги ролей: ${plan.modelChains.map(c=>esc(c.role)+(c.exact?(mode==='model-chains'?' — перейде за моделлю':' — може перейти за моделлю'):' — не точно ('+esc(c.reason)+')')).join(' · ')}</p>`:'';
+  // Archiving drops the whole котушка: everything it changes against Standard (roles, thinking, chains) is listed.
+  const lost=mode==='archive'?[...(plan.roleChanges||[]),...plan.lost]:plan.lost,chains=plan.modelChains.length?`<p class="print">Ланцюги ролей: ${plan.modelChains.map(c=>esc(c.role)+(c.exact?(mode==='model-chains'?' — перейде за моделлю':' — може перейти за моделлю'):' — не точно ('+esc(c.reason)+')')).join(' · ')}</p>`:'';
   const modes=`<div class="keybed mig__modes" role="radiogroup" aria-label="Спосіб перенесення">${MIGRATE_MODES.map(([k,t])=>{const off=k==='model-chains'&&!exact.length;return `<button type="button" class="key key--sm" role="radio" data-radio="migrate-mode" data-value="${k}" aria-checked="${k===mode}" tabindex="${k===mode?0:-1}"${off?' disabled title="Немає ланцюга, який можна точно перенести за моделлю"':''}><span class="key__cap">${led(k===mode,'orange')}${esc(t)}</span></button>`;}).join('')}</div>`;
   const body=`<p class="print">Стара котушка <b>${esc(name)}</b> — файл <code>.omp/presets/${esc(name)}.yml</code>. OMP читає такі файли лише через <code>--config</code>, тож зараз вона не діє. Нативна котушка OMP (<code>modelPresets</code> у файлі області) несе лише моделі ролей і thinking.</p>
    ${plan.sameAsStandard?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Ролі збігаються зі Standard: як нативну котушку OMP вважатиме її активною разом зі Standard. Радимо «Архівувати».</span></div>':''}
-   <div class="mig"><section class="mig__col"><span class="silk">Перейде</span><ul class="mig__list">${carried.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></section><section class="mig__col"><span class="silk">Не перейде</span>${mode==='archive'?'<p class="print">уся котушка: файл лише в резервних копіях</p>':lost.length?diffStrip({lines:lost},'Що не перейде'):'<p class="print">нічого</p>'}${mode==='archive'?'':chains}</section></div>
+   <div class="mig"><section class="mig__col"><span class="silk">Перейде</span><ul class="mig__list">${carried.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></section><section class="mig__col"><span class="silk">Не перейде</span>${mode==='archive'?'<p class="print">уся котушка: файл лише в резервних копіях'+(lost.length?', а з нею й те, чим вона відрізняється від Standard:':' (від Standard вона нічим не відрізняється)')+'</p>'+diffStrip({lines:lost},'Що зникне з архівованою котушкою'):lost.length?diffStrip({lines:lost},'Що не перейде'):'<p class="print">нічого</p>'}${mode==='archive'?'':chains}</section></div>
+   ${Object.keys(plan.derived||{}).length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Файл області при цьому зміниться ще й так — не через котушку, а через перекомпіляцію проти поточного глобального файлу, каталогу чи пулів (наприклад, DeepSeek OFF доходить до успадкованої ролі). Клавіша нижче запише й це:</span></div>'+derivedNote(plan.derived):''}
+   ${mode!=='archive'&&plan.shadowsGlobal?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Глобальна котушка з назвою '+esc(plan.preset)+' уже є: у цьому проєкті нова котушка її перекриє.</span></div>':''}
    ${modes}<p class="print mig__mode">${esc(MIGRATE_MODES.find(x=>x[0]===mode)[2])}</p>
    ${mode!=='archive'?formField('name','Назва котушки OMP',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(m.name??plan.preset)}">`,{note:collide?'Котушка з такою назвою вже є · обери іншу':'Латинська літера на початку; зміна назви оновить план'}):''}
    ${loses?`<button type="button" class="key key--sm mig__accept" data-action="migrate-accept" aria-pressed="${!!m.accept}"><span class="key__cap">${led(false,'amber',' data-latch')}Розумію: «Не перейде» буде втрачено</span></button>`:''}
@@ -1609,15 +1627,38 @@
  }
  async function migratePlan(profile,name=''){
   state.migrate={...(state.migrate||{}),profile,pending:true};
-  try{const plan=await api('/api/profile-action',{action:'migrate-plan',profile,...(name?{name}:{})});if(state.modal!=='migrate'||state.migrate?.profile!==profile)return;state.migrate={...state.migrate,plan,pending:false,name:name||plan.preset};state.modalError='';state.modalCode='';}
-  catch(e){if(state.modal!=='migrate')return;state.migrate={...state.migrate,pending:false};state.modalError=e.message;state.modalCode=errorCode(e);}
+  const field=document.activeElement?.matches?.('.tray__form [name=name]')?document.activeElement:null,caret=field?[field.selectionStart,field.selectionEnd]:null;
+  try{const plan=await api('/api/profile-action',{action:'migrate-plan',profile,...(name?{name}:{})});if(state.modal!=='migrate'||state.migrate?.profile!==profile)return;if(name&&(state.migrate.name??'').trim()!==name)return;state.migrate={...state.migrate,plan,pending:false,name:name||plan.preset};state.modalError='';state.modalCode='';state.modalDiffs=null;}
+  catch(e){if(state.modal!=='migrate')return;state.migrate={...state.migrate,pending:false};modalProblem(e);}
   modalFit='';regions.invalidate('drawer/form');render();
+  // Typing goes on where it was: the re-planned form keeps the field's focus and caret.
+  if(caret){const again=win.querySelector('.tray__form [name=name]');if(again&&document.activeElement!==again){again.focus({preventScroll:true});try{again.setSelectionRange(...caret);}catch{}}}
  }
  // A short diff from the server (≤ 6 lines: ~ changed, − removed, + added, … more) printed on a recessed strip.
  function diffStrip(d,label='Зміни у файлі'){
   if(!d?.lines?.length)return '';
   const op=line=>({'~':'chg','+':'add','−':'del','-':'del'})[line[0]]||'more';
   return `<div class="diffstrip" role="group" aria-label="${esc(label+(d.file?' '+d.file:''))}">${d.file?`<span class="diffstrip__file">${esc(d.file)}${d.approximate?' · ≈ приблизно':''}</span>`:''}${d.lines.map(line=>`<span class="diffstrip__l" data-op="${op(line)}">${esc(line)}</span>`).join('')}</div>`;
+ }
+ // What a write also changes beyond the action (409 `derived` or a dry run's `derived`), one strip per file.
+ function derivedNote(derived){const rows=Object.values(derived||{});return rows.length?rows.map(d=>diffStrip(d,'Також зміниться')).join(''):'';}
+ // A confirmation's preview from the server's dry run: every file the action writes, and what of it is not the
+ // action itself (a recompile against the current Global file, catalogue or pools), which the key also confirms.
+ function previewNote(r,error){
+  if(error)return '<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Не вдалося підготувати перегляд змін ('+esc(error)+'). Якщо запис змінить більше, ніж ця дія, сервер спершу покаже це.</span></div>';
+  const files=Object.values(r?.files||{}),derived=Object.values(r?.derived||{});
+  return (files.length?'<p class="print">Запишеться:</p>'+files.map(d=>diffStrip(d,'Що запишеться')).join(''):'<p class="print">Файли вже такі: нічого не запишеться.</p>')
+   +(derived.length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Не все з цього — сама дія: решту дає перекомпіляція проти поточного глобального файлу, каталогу чи пулів (наприклад, DeepSeek OFF доходить до успадкованої ролі). Підтвердження запише й це:</span></div>'+derivedNote(r.derived):'');
+ }
+ // A confirmation that previews its write: the key waits for the dry run; its token confirms exactly that preview.
+ async function previewAction(spec,path,body,more){
+  let r=null,error=null;try{r=await api(path,{...body,dry:true});}catch(e){error=e;}
+  if(state.confirm!==spec)return;
+  // A refusal of the preview is the refusal of the action: shown as such (an outside edit of the Global file with its
+  // diff and the «Глобально» key, a read-only file, a DeepSeek mode clash), before the owner presses anything.
+  if(error?.status)modalProblem(error);
+  spec.pending=false;spec.token=r?.token||'';spec.note=(spec.note||'')+(error?.status?'':previewNote(r,error?.message||''))+(r&&more?more(r):'');
+  modalFit='';regions.invalidate('drawer/form');render();
  }
  function formSpecFocus(){return state.modal?formSpec().focus:'';}
  // The form drawer is as tall as its content (within the drawer's limits); measured once per form and error state.
@@ -1628,7 +1669,17 @@
  }
  function formTitle(f){return `<div class="tray__title tray__title--ed" id="tray-form-title">${led(true,'orange')}<span class="silk silk--ink">${esc(f.title)}</span>${f.sub?`<span class="tray__count">${esc(f.sub)}</span>`:''}</div>`;}
  // A server refusal keeps its code next to the text (HTTP status · error code), on one reserved line.
- function formMarkup(f){return `<div class="tray__form${f.wide?' tray__form--wide':''}">${state.modalError?`<div class="msg" data-s="bad" role="alert">${led(true,'red')}${state.modalCode?`<b class="msg__code">${esc(state.modalCode)}</b>`:''}<span>${esc(state.modalError)}</span></div>`:''}${f.body}</div>`;}
+ // With it, what the refusal is about: the lines a write would also change (`derived`) or the outside edit that blocks
+ // it, and for a conflict in another scope (the Global file) the key that goes there to accept it.
+ function formMarkup(f){return `<div class="tray__form${f.wide?' tray__form--wide':''}">${state.modalError?`<div class="msg" data-s="bad" role="alert">${led(true,'red')}${state.modalCode?`<b class="msg__code">${esc(state.modalCode)}</b>`:''}<span>${esc(state.modalError)}</span></div>`:''}${(state.modalDiffs||[]).map(d=>diffStrip(d,'Зміни у файлі')).join('')}${state.modalScope?`<div class="keybed">${key(led(true,'blue')+'Глобально · прийняти файл там','scope-global','key--sm')}</div>`:''}${f.body}</div>`;}
+ // A drawer's refusal keeps what the owner needs to act on it (M6).
+ function modalProblem(err){
+  state.modalError=err.message;state.modalCode=errorCode(err);state.modalScope='';
+  // The lines shown now are what the next press confirms.
+  if(err.code==='derived'){if(state.confirm)state.confirm.token=err.token;if(state.migrate?.plan)state.migrate.plan.derivedToken=err.token;}
+  state.modalDiffs=err.derived?Object.values(err.derived):err.code==='mode-conflict'&&err.diffs&&err.scope?Object.values(err.diffs).map(d=>({...d,file:scopeName(err.scope)+' · '+d.file})):null;
+  if(err.code==='mode-conflict'&&err.scope&&err.scope!==source.projectId&&err.scope===source.scope?.parent)state.modalScope=err.scope;
+ }
  const errorCode=e=>[e?.status,e?.code].filter(Boolean).join(' · ');
  // Client checks mirror the server's rules, so a field shows its problem before anything is sent.
  function providerProblems(f){
@@ -1657,7 +1708,7 @@
   finally{state.providerSaving=false;regions.invalidate('drawer/form');render();}
  }
  // A confirmation in the drawer instead of a browser dialog: what will happen, a safe key first, the action last.
- function askConfirm(spec){state.confirm=spec;state.modalError='';state.modalCode='';state.modal='confirm';render();}
+ function askConfirm(spec){state.confirm=spec;state.modalError='';state.modalCode='';state.modalDiffs=null;state.modalScope='';state.modal='confirm';render();}
  // OPERATOR — one control plane, three working surfaces.
  const op=ManaOperator;
  const healthNames={local:'Локально',healthy:'Є запас',risk:'Малий запас',empty:'Вичерпано',unknown:'Немає виміру',unavailable:'Недоступна'};
@@ -2362,7 +2413,7 @@
   if(el.hasAttribute('data-catalog-provider'))return '#catalog-provider';
   const prefix=el.closest('[data-picker]')?'[data-picker] ':el.closest('.tray__form')?'.tray__form ':'';
   if(el.name)return prefix+'[name="'+CSS.escape(el.name)+'"]';
-  const attr=['data-effort-role','data-edit','data-slot-actions','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-knob','data-fold-toggle','data-sync-vibe','data-adopt','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-radio','data-edit-provider','data-confirm','data-lane-menu','data-migrate','data-source'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
+  const attr=['data-effort-role','data-edit','data-slot-actions','data-migrate','data-source','data-adopt','data-action','data-cut','data-pick','data-analyze','data-fav','data-op-switch','data-pool-open','data-pool-tab','data-mode-scope','data-agent-role','data-agent-copy','data-focus-role','data-theme-toggle','data-knob','data-fold-toggle','data-sync-vibe','data-view','data-model-detail','data-history-bin','data-provider-toggle','data-reset-agent','data-radio','data-edit-provider','data-confirm','data-lane-menu'].find(key=>el.hasAttribute(key)&&!(key==='data-action'&&!el.getAttribute(key)));
   return attr?prefix+'['+attr+'="'+CSS.escape(el.getAttribute(attr))+'"]'+['data-index','data-group','data-direction','data-screen-hue','data-value'].filter(key=>el.hasAttribute(key)).map(key=>'['+key+'="'+CSS.escape(el.getAttribute(key))+'"]').join(''):'';
  }
  // One entry point for every state change. Builds the region tree and lets the region engine replace only
@@ -2493,8 +2544,8 @@
   }catch{}
  }
  // Opening a form in the drawer: a fresh form with no errors left from the previous one.
- function openForm(kind,extra={}){Object.assign(state,{modal:kind,modalError:'',modalCode:'',formErrors:{},returnFocus:''},extra);modalFit='';render();}
- function closeForm(){state.modal=null;state.modalError='';state.modalCode='';state.formErrors={};state.confirm=null;state.migrate=null;render();}
+ function openForm(kind,extra={}){Object.assign(state,{modal:kind,modalError:'',modalCode:'',modalDiffs:null,modalScope:'',formErrors:{},returnFocus:''},extra);modalFit='';render();}
+ function closeForm(){state.modal=null;state.modalError='';state.modalCode='';state.modalDiffs=null;state.modalScope='';state.formErrors={};state.confirm=null;state.migrate=null;render();}
  root.addEventListener('click',async e=>{
   const b=e.target.closest('button,a.brand');if(!b)return;
   if(b.matches('a.brand')){e.preventDefault();state.view='profiles';render();store();ForgeTape.logo(win.querySelector('.brand'),true);return;}
@@ -2505,19 +2556,27 @@
    if(action==='refresh'){await api('/api/refresh',{});await reload();notify('Оновлюю каталог і показники…');}
    if(action==='scope-global'){const rows=source.projects||[];if(source.scope?.kind==='global'){let back='';try{back=sessionStorage.getItem('mana:last-scope')||'';}catch{}const row=rows.find(x=>x.id===back&&x.kind!=='global')||rows.find(x=>x.kind==='project');if(row)goScope(row.id);else notify('Проєктів ще немає: OMP додасть їх сюди, щойно попрацює в каталозі.');}else{const g=globalScopeRow();if(g)goScope(g.id);}return;}
    if(action==='preset-edit-global'){const g=globalScopeRow();if(g)goScope(g.id,'preset:'+presetName(state.profile));return;}
-   if(action==='apply-preset'){const name=state.profile;if(!presetLike(name)||diff(name).length)return;askConfirm({action:'apply-preset',name,focus:'#profile-choice',title:'Застосувати котушку',sub:prettyProfile(name),label:'Застосувати',text:applyText(name)});return;}
+   if(action==='apply-preset'){const name=state.profile;if(!presetLike(name)||diff(name).length)return;const spec={action:'apply-preset',name,pending:true,focus:'#profile-choice',title:'Застосувати котушку',sub:prettyProfile(name),label:'Застосувати',text:applyText(name)};askConfirm(spec);previewAction(spec,'/api/profile-action',{action:'apply-preset',preset:presetName(name),revision:source.revisions.standard},r=>(r.fromGlobal?.length?'<p class="print">Ролі, яких котушка не називає, OMP і далі братиме з глобального: '+esc(r.fromGlobal.join(', '))+'.</p>':'')+(r.shadowed?.length?'<p class="print">Проєкт і далі задає сам: '+esc(r.shadowed.join(', '))+'.</p>':''));return;}
    if(action==='migrate-open'){const name=b.dataset.migrate;if(!name)return;openForm('migrate',{migrate:{profile:name},returnFocus:'[data-migrate="'+CSS.escape(name)+'"]'});migratePlan(name);return;}
    if(action==='migrate-accept'){if(state.migrate){state.migrate.accept=!state.migrate.accept;regions.invalidate('drawer/form');render();win.querySelector('[data-action=migrate-accept]')?.focus({preventScroll:true});}return;}
    if(action==='migrate-run'){
     const m=state.migrate;if(!m?.plan||state.profileBusy)return;const mode=m.mode||(m.plan.sameAsStandard?'archive':'roles');
     state.profileBusy=true;regions.invalidate('drawer/form');render();
-    try{const r=await api('/api/profile-action',{action:'migrate',profile:m.profile,mode,token:m.plan.token,acceptLoss:!!m.accept,name:m.plan.preset});state.modal=null;state.migrate=null;state.returnFocus='';await reload();if(profiles[r.name])state.profile=r.name;state.opFeedback=mode==='archive'?'Стару котушку '+m.profile+' архівовано · файл у резервних копіях':'Котушку '+m.profile+' перенесено → '+prettyProfile(r.name)+' (котушка OMP) · старий файл у резервних копіях';render();store();}
+    try{const r=await api('/api/profile-action',{action:'migrate',profile:m.profile,mode,token:m.plan.token,acceptLoss:!!m.accept,name:m.plan.preset,...(m.plan.derivedToken?{confirm:m.plan.derivedToken}:{})});state.modal=null;state.migrate=null;state.returnFocus='';await reload();if(profiles[r.name])state.profile=r.name;state.opFeedback=mode==='archive'?'Стару котушку '+m.profile+' архівовано · файл у резервних копіях':'Котушку '+m.profile+' перенесено → '+prettyProfile(r.name)+' (котушка OMP) · старий файл у резервних копіях';render();store();win.querySelector('#profile-choice')?.focus({preventScroll:true});}
     finally{state.profileBusy=false;if(state.modal)render();}
     return;
    }
    if(action==='configure-project'){
     const c=state.candidate;if(!c||state.profileBusy)return;state.profileBusy=true;regions.invalidate('drawer/form');render();
-    try{const r=await api('/api/scope-action',{action:'configure',candidate:c.id});state.modal=null;goScope(r.id);}finally{state.profileBusy=false;if(state.modal)render();}
+    try{const r=await api('/api/scope-action',{action:'configure',candidate:c.id});state.modal=null;goScope(r.id);}
+    catch(e){
+     // The list moved on (another window configured it, or the directory went): read it again now.
+     if(e.status!==404)throw e;
+     try{await api('/api/scope-action',{action:'rescan'});await reload();}catch{}
+     const again=(source.candidates||[]).find(x=>x.path===c.path);
+     if(again){state.candidate=again;throw Object.assign(Error('Список знайдених каталогів оновлено: натисни «Налаштувати проєкт» ще раз.'),{status:404,code:'rescan'});}
+     closeForm();notify(source.projects?.some(x=>x.path===c.path)?'Проєкт уже налаштований · обери його в барабані «Проєкт»':'Каталогу вже немає серед знайдених');
+    }finally{state.profileBusy=false;if(state.modal)render();}
     return;
    }
    if(action==='modal-close'){const back=state.modal==='confirm'&&state.confirm?.back;if(back){openForm(back);return;}closeForm();return;}
@@ -2556,24 +2615,40 @@
    // is never rewritten; its former version stays restorable.
    // The confirmation names every FREE pool block the file no longer repeats exactly: it becomes the file's own
    // CUTS (F5). The key waits for that answer; a failed check says so and still lets the owner accept.
-   if(action==='adopt-profile'){const name=b.dataset.adopt,orphan=source.modeOrphans?.includes(name),spec={action:'adopt-profile',profile:name,title:orphan?'Прийняти видалення':'Прийняти файл',sub:prettyProfile(name),label:orphan?'Забути запис режиму':'Прийняти файл як є',pending:!orphan,text:orphan?`Файл профілю <b>${esc(prettyProfile(name))}</b> уже видалено поза Mana Tape. Mana Tape забуде запис його режиму; копія запису лишиться в резервних.`:`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape. Прийняти його як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».`};askConfirm(spec);
+   if(action==='adopt-profile'){const name=b.dataset.adopt,orphan=source.modeOrphans?.includes(name),spec={action:'adopt-profile',profile:name,title:orphan?'Прийняти видалення':'Прийняти файл',sub:prettyProfile(name),label:orphan?'Забути запис режиму':'Прийняти файл як є',pending:!orphan,pendingText:'Перевіряю блоки FREE-пулів…',text:orphan?`Файл профілю <b>${esc(prettyProfile(name))}</b> уже видалено поза Mana Tape. Mana Tape забуде запис його режиму; копія запису лишиться в резервних.`:`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape. Прийняти його як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».`};askConfirm(spec);
     if(!orphan){let plan=null,error='';try{plan=await api('/api/profile-action',{action:'adopt-plan',profile:name});}catch(err){error=err.message;}if(state.confirm!==spec)return;spec.pending=false;spec.note=adoptPoolNote(plan,error);modalFit='';regions.invalidate('drawer/form');render();}return;}
    if(action==='discard-reload')askConfirm({action:'discard-reload',back:'conflict',danger:true,title:'Скинути чернетки',label:'Скинути й оновити',text:'Усі незбережені чернетки профілів і пулів у цьому вікні буде скинуто, а поточні файли — завантажено заново. Експорт чернеток доступний до цього кроку.'});
    if(action==='export-draft'){const drafts=Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:baseRevision(k),changes:diff(k)}]));if(poolsDirty())drafts['@free-pools']={revision:poolRevision,pools:poolDraft};const blob=new Blob([JSON.stringify(drafts,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  }catch(err){if(state.modal){state.modalError=err.message;state.modalCode=errorCode(err);regions.invalidate('drawer/form');}else state.error=err.message;render();}
+  }catch(err){
+   if(state.modal){
+    // A drawer never dead-ends on stale data: the state is read again (polling waits while a drawer is open), a
+    // migration plan is made again, and the next press uses the fresh revision or token.
+    if(err.code==='revision'){try{await reload();}catch{}if(state.modal==='migrate'&&state.migrate?.profile)await migratePlan(state.migrate.profile,state.migrate.plan?.preset||'');}
+    if(state.modal){modalProblem(err);if(err.code==='revision')state.modalError='Дані змінились, панель уже перечитала їх: перевір і натисни ще раз.';regions.invalidate('drawer/form');}
+   }else state.error=err.message;render();}
  });
  // What a confirmation drawer runs; each closes the drawer when it is done (errors stay on the drawer's line).
  const CONFIRM_ACTIONS={
   // Promote: the project's saved values move into the Global config, one journal for both files.
-  'promote':async c=>{await api('/api/scope-action',{action:'promote',revision:source.revisions.standard,paths:c.paths});state.modal=null;state.confirm=null;await reload();state.opFeedback=(c.group==='vibe'?'Агент ':'')+c.role+' піднято в глобальне · записано обидва файли (з резервними копіями)';render();},
+  'promote':async c=>{await api('/api/scope-action',{action:'promote',revision:source.revisions.standard,paths:c.paths,...(c.token?{confirm:c.token}:{})});state.modal=null;state.confirm=null;await reload();state.opFeedback=(c.group==='vibe'?'Агент ':'')+c.role+' піднято в глобальне · записано обидва файли (з резервними копіями)';render();},
   // Apply: OMP /modelpreset switch; the server names the file it wrote and the roles a higher layer still sets.
-  'apply-preset':async c=>{const r=await api('/api/profile-action',{action:'apply-preset',preset:presetName(c.name),revision:source.revisions.standard});state.modal=null;state.confirm=null;await reload();const target=(source.projects||[]).find(x=>x.id===r.target),files=scopeFiles();state.opFeedback='Котушку '+prettyProfile(c.name)+' застосовано · ролі записано в '+(target?.kind==='global'?files.globalShort||'глобальний файл':files.projectShort||'файл проєкту')+(r.shadowed?.length?' · далі задає вищий рівень: '+r.shadowed.join(', '):'');render();},
+  'apply-preset':async c=>{const r=await api('/api/profile-action',{action:'apply-preset',preset:presetName(c.name),revision:source.revisions.standard,...(c.token?{confirm:c.token}:{})});state.modal=null;state.confirm=null;await reload();const target=(source.projects||[]).find(x=>x.id===r.target),files=scopeFiles();state.opFeedback=(r.unchanged?'Котушка '+prettyProfile(c.name)+' уже діє · нічого не записано':'Котушку '+prettyProfile(c.name)+' застосовано · ролі записано в '+(target?.kind==='global'?files.globalShort||'глобальний файл':files.projectShort||'файл проєкту'))+(r.shadowed?.length?' · далі задає вищий рівень: '+r.shadowed.join(', '):'')+(r.fromGlobal?.length?' · з глобального: '+r.fromGlobal.join(', '):'');render();win.querySelector('#profile-choice')?.focus({preventScroll:true});},
+  // A save that also writes what the owner did not ask for: the same save again, with the token of what was shown.
+  'save-derived':async()=>{state.modal=null;state.confirm=null;render();await save();},
   'delete-provider':async()=>{await api('/api/provider',{id:state.editProvider,action:'delete',revision:source.providerRevision});state.modal=null;state.confirm=null;await reload();notify('Підключення видалено');},
   'adopt-profile':async c=>{await api('/api/profile-action',{action:'adopt',profile:c.profile,revision:source.revisions?.[c.profile]});state.modal=null;state.confirm=null;await reload();state.opFeedback=c.title==='Прийняти видалення'?'Запис режиму '+prettyProfile(c.profile)+' забуто · копія лишилась у резервних.':'Файл профілю '+prettyProfile(c.profile)+' прийнято.';render();},
   'conflict-discard':async()=>{const name=state.profile,fresh=freshProfile(name);original[name]=fresh;profiles[name]=copy(fresh);staleDrafts.delete(name);editHistory.reset(name,fresh);state.modal=null;state.confirm=null;state.opFeedback='Чернетку '+prettyProfile(name)+' скинуто · показано поточний файл.';render();},
   'discard-reload':async()=>{state.modal=null;state.confirm=null;state.error='';editHistory.profiles.clear();staleDrafts.clear();await reload(true);}
  };
+ // The migration name field: a pause in typing asks the server for the plan of that name (collision, token).
+ let migrateNameTimer=0;
  root.addEventListener('input',e=>{
+  if(state.modal==='migrate'&&e.target.name==='name'&&e.target.closest('.tray__form')&&state.migrate){
+   state.migrate.name=e.target.value;state.migrate.pending=true;clearTimeout(migrateNameTimer);
+   const profile=state.migrate.profile,value=e.target.value.trim();
+   migrateNameTimer=setTimeout(()=>{if(state.modal==='migrate'&&state.migrate?.profile===profile)migratePlan(profile,value);},350);
+   return;
+  }
   // A field that is corrected loses its error at once; the form is not rebuilt under the typing hand.
   if(e.target.form?.getAttribute('id')==='new-provider')clearFixedFields(e.target.form,e.target.name);
   if(!e.target.matches('#clone-form input,#rename-form input'))return;if(e.target.form.id==='clone-form')state.cloneName=e.target.value;else state.renameName=e.target.value;checkProfileName(e.target.form);state.modalError='';win.querySelector('.tray__form > .msg[data-s=bad]')?.remove();regions.invalidate('drawer/form');
@@ -2603,12 +2678,15 @@
  window.addEventListener('online',()=>{state.error='';pollState();});
  Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(saved?.drawerResized===true&&Number.isFinite(saved.drawerHeight))state.drawerHeight=saved.drawerHeight;if(Number.isFinite(saved?.editorHeight))state.editorHeight=saved.editorHeight;}catch{}
  state.syncVibe=true;state.favs=source.favs||[];favSaved=state.favs;state.error='';state.modalError='';
- try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(profiles[v.profile])state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;if(v.revision!==source.revisions[k])staleDrafts.set(k,{revision:v.revision,conflicts:[]});}}}catch{}
- try{const draft=JSON.parse(sessionStorage.getItem(poolDraftKey())||sessionStorage.getItem(storageKey('forge-pool-draft'))||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
+ try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(typeof v.profile==='string'&&Object.hasOwn(profiles,v.profile))state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;if(v.revision!==source.revisions[k])staleDrafts.set(k,{revision:v.revision,conflicts:[]});}}}catch{}
+ // An older tab kept the pools draft per project; it moves once to the machine-wide key and the old key goes, so a
+ // stale draft cannot come back on every load (and loop on a 409 revision).
+ try{const legacy=storageKey('forge-pool-draft');if(legacy!==poolDraftKey()){const old=sessionStorage.getItem(legacy);if(old&&!sessionStorage.getItem(poolDraftKey()))sessionStorage.setItem(poolDraftKey(),old);sessionStorage.removeItem(legacy);}}catch{}
+ try{const draft=JSON.parse(sessionStorage.getItem(poolDraftKey())||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
  for(const [k,v] of Object.entries(profiles)){v.forgeMode??=copy(source.profileModes?.[k]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});original[k].forgeMode??=copy(v.forgeMode);}
  // A restored draft made on an older file moves onto the current one now, or waits for its «Конфлікт…» choice.
  for(const [k,row] of staleDrafts){if(!diff(k).length){original[k]=freshProfile(k);profiles[k]=copy(original[k]);staleDrafts.delete(k);continue;}row.conflicts=rebaseDraft(k,freshProfile(k),'auto');}
- {const wanted=new URLSearchParams(location.search).get('profile');if(wanted&&profiles[wanted])state.profile=wanted;}
+ {const url=new URL(location.href),wanted=url.searchParams.get('profile');if(wanted&&Object.hasOwn(profiles,wanted))state.profile=wanted;if(url.searchParams.has('profile')){url.searchParams.delete('profile');try{history.replaceState(history.state,'',url);}catch{}}}
  if(!profiles[state.profile])state.profile='standard';
  rebuild();render();ManaScreen.boot(win);
  // A new service worker takes over at once (skipWaiting + clients.claim); the page itself moves to the new shell

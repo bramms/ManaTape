@@ -1349,7 +1349,7 @@ test('QA2 B21: Ukrainian counts agree',()=>{
 });
 
 test('QA4 P0-4: every request has a deadline; a hung write unlocks with a clear message',async()=>{
- let signal;const context={source:{csrf:'x'},endpoint:x=>x,writeEpoch:0,activeWrites:0,backgroundRefreshPending:false,scheduleBackgroundWork:()=>{},
+ let signal;const context={source:{csrf:'x'},state:{},endpoint:x=>x,writeEpoch:0,activeWrites:0,backgroundRefreshPending:false,scheduleBackgroundWork:()=>{},
   deadline:ms=>({ms}),fetch:(url,options)=>{signal=options.signal;return Promise.reject(Object.assign(new Error('aborted'),{name:'TimeoutError'}));}};
  runInNewContext(appFunction('api')+'\n'+appFunction('problemText'),context);
  await assert.rejects(context.api('/api/profile',{}),e=>e.code==='timeout'&&/30 с/.test(e.message));
@@ -1551,6 +1551,7 @@ test('layers: a project lane reads the Global value per key and an edit writes o
 
 test('layers: the lane menu overrides, resets and promotes by value path; a project drops only its own value',()=>{
  const {context,profile}=layerContext({modelRoles:{curator:'p/cur'},retry:{fallbackChains:{curator:['p/c1']}}});
+ context.globalLogical=null;
  const paths=l=>JSON.parse(JSON.stringify(l));
  assert.deepEqual(paths(context.laneLayers('smol','role')),{paths:[['modelRoles','smol'],['retry','fallbackChains','smol']],own:[],up:[['modelRoles','smol'],['retry','fallbackChains','smol']],inherit:[['modelRoles','smol'],['retry','fallbackChains','smol']]});
  assert.deepEqual(paths(context.laneLayers('curator','role')).own,[['modelRoles','curator'],['retry','fallbackChains','curator']]);
@@ -1570,6 +1571,60 @@ test('layers: the lane menu overrides, resets and promotes by value path; a proj
  assert.match(context.state.opFeedback,/curator скинуто до глобального/);
  // Outside a project (the Global scope, a single project) there is no lane menu.
  context.globalLayer=null;assert.equal(context.laneLayers('smol','role'),null);
+});
+
+test('review M7: «Перевизначити в проєкті» copies the Global scope’s logical value (a pool block, DeepSeek), not its compiled routes',()=>{
+ const {context,profile}=layerContext({});
+ // Global compiled smol (a FREE pool expanded, DeepSeek replaced by Global's OFF) vs. what the Global scope holds.
+ context.globalLogical={modelRoles:{smol:'mana-pool/free-good'},retry:{fallbackChains:{smol:['p/deepseek-v4']}},task:{agentModelOverrides:{}}};
+ Object.assign(context,{render:()=>{},focusLaneKey:()=>{},copy:structuredClone,LANE_PART:{modelRoles:'основна',retry:'резерви',task:'список агента'}});
+ runInNewContext(appFunction('laneOverride'),context);
+ context.laneOverride('smol','role');
+ assert.equal(profile.modelRoles.smol,'mana-pool/free-good','the pool stays a block that later pool saves reach');
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.smol),['p/deepseek-v4'],'this project’s own mode decides about DeepSeek');
+});
+
+test('review L12: a project null replaces a Global chain, agent list or provider list; a null role does not',()=>{
+ const {context,profile}=layerContext({modelRoles:{smol:null},retry:{fallbackChains:{smol:null}},disabledProviders:null});
+ const view=context.eff(profile);
+ assert.equal(view.modelRoles.smol,'g/smol');
+ assert.ok(!Object.hasOwn(view.retry.fallbackChains,'smol'),'OMP replaces the chain with null: nothing of Global’s is used');
+ assert.deepEqual(Array.from(view.disabledProviders),[]);
+});
+
+test('review M1: a write refused as `derived` is repeated with its token only for the same action',async()=>{
+ const sent=[];let answer;
+ const context={source:{csrf:'x'},state:{},endpoint:x=>x,writeEpoch:0,activeWrites:0,scheduleBackgroundWork:()=>{},deadline:()=>undefined,
+  fetch:(url,options)=>{sent.push(JSON.parse(options.body));return Promise.resolve(answer());}};
+ runInNewContext(appFunction('api')+'\n'+appFunction('problemText'),context);
+ answer=()=>({ok:false,status:409,json:async()=>({error:'more',code:'derived',token:'t1',derived:{'one/standard':{file:'.omp/config.yml',lines:['+ modelRoles.commit: paid/small']}}})});
+ await assert.rejects(context.api('/api/scope-action',{action:'reset',paths:[['modelRoles','plan']]}),e=>e.code==='derived'&&e.token==='t1'&&e.derived['one/standard'].lines.length===1);
+ answer=()=>({ok:true,json:async()=>({ok:true})});
+ await context.api('/api/scope-action',{action:'promote',paths:[['modelRoles','plan']]});
+ assert.equal(sent[1].confirm,undefined,'another action never carries the token');
+ await context.api('/api/scope-action',{action:'reset',paths:[['modelRoles','plan']]});
+ assert.equal(sent[2].confirm,'t1','the same action, after the lines were shown, confirms them');
+ await context.api('/api/scope-action',{action:'reset',paths:[['modelRoles','plan']]});
+ assert.equal(sent[3].confirm,undefined,'once');
+});
+
+test('review M5/F2/M6: the migration drawer re-plans a typed name, lists what archiving drops, and never dead-ends',()=>{
+ assert.match(source,/state\.modal==='migrate'&&e\.target\.name==='name'[^\n]*\n[^\n]*migrateNameTimer/,'typing a name schedules a new plan');
+ assert.match(source,/migratePlan\(profile,value\)/);
+ assert.match(source,/mode==='archive'\?\[\.\.\.\(plan\.roleChanges\|\|\[\]\),\.\.\.plan\.lost\]/,'archive lists role changes and lost keys');
+ assert.match(source,/String\(m\.name\?\?plan\.preset\)\.trim\(\)!==plan\.preset/,'a name without its plan cannot be sent');
+ assert.match(source,/if\(err\.code==='revision'\)\{try\{await reload\(\);\}catch\{\}if\(state\.modal==='migrate'/,'a stale drawer reloads and re-plans');
+ assert.match(source,/confirm:m\.plan\.derivedToken/);
+});
+
+test('review M8: the old per-project pool draft moves to the machine key once and is removed',()=>{
+ const store=new Map([['forge-pool-draft:one','{"draft":1}']]);
+ const sessionStorage={getItem:k=>store.has(k)?store.get(k):null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)};
+ const code=source.slice(source.indexOf(' try{const legacy=storageKey('),source.indexOf('\n',source.indexOf(' try{const legacy=storageKey(')));
+ runInNewContext(code,{sessionStorage,storageKey:k=>k+':one',poolDraftKey:()=>'mana:pools:/agent'});
+ assert.deepEqual([...store],[['mana:pools:/agent','{"draft":1}']]);
+ runInNewContext(code,{sessionStorage,storageKey:k=>k+':one',poolDraftKey:()=>'mana:pools:/agent'});
+ assert.deepEqual([...store],[['mana:pools:/agent','{"draft":1}']],'nothing comes back');
 });
 
 test('layers: a native котушка holds role primaries only; its reserves are the scope’s and locked; a Global котушка is read-only',()=>{

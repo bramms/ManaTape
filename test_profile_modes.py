@@ -470,7 +470,13 @@ class ProfileModesTest(unittest.TestCase):
         changed=copy.deepcopy(body);changed['modeSettings']['alternatives']=['demo/four']
         with self.assertRaises(Problem):self.app.save_profile(changed)
         self.app.save_profile(body)
+        # A comment (or any key Mana Tape does not manage) added outside is no conflict; the next write keeps it.
         with self.app.path('high').open('a') as f:f.write('# outside\n')
+        self.assertEqual(self.app.mode_conflicts(),[])
+        self.save_mode(changes=[{'path':['modelRoles','smol'],'value':'demo/four'}])
+        self.assertIn('# outside',self.app.path('high').read_text())
+        # A value Mana Tape manages changed outside: the write is refused and the file stays as it is.
+        path=self.app.path('high');path.write_text(path.read_text().replace('demo/four','demo/three'))
         before=self.app.path('high').read_bytes()
         with self.assertRaises(Problem):self.save_mode()
         self.assertEqual(self.app.path('high').read_bytes(),before)
@@ -703,8 +709,7 @@ class ProfileModesTest(unittest.TestCase):
     def test_adopt_accepts_outside_edit_without_rewriting_it(self):
         self.init_modes(); self.save_mode('standard')
         std = self.app.path('standard')
-        std.write_text(std.read_text() + '# owner note\n')
-        edited = std.read_bytes()
+        edited = self.outside_edit(std, lambda data: data['modelRoles'].__setitem__('smol', 'demo/four'))
         with self.assertRaises(Problem) as blocked:
             self.save_mode('high')
         self.assertEqual((blocked.exception.code, blocked.exception.details['profiles']), ('mode-conflict', ['standard']))

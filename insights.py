@@ -183,18 +183,24 @@ class Insights:
         out = r.stdout.decode('utf-8')
         return json.loads(out[out.index('{'):])
 
-    def snapshot(self):
+    def snapshot(self, app=None):
+        """Telemetry as one scope shows it. One Insights serves every scope of an OMP agent directory (`omp usage` and
+        `omp stats` are per agent directory); benchmark weights follow the asking scope's ui."""
+        app = app or self.app
         usage = self.data['usage']
         reports = list(usage['reports'])
         if not any(r['provider'] == 'commandcode' for r in reports):
-            try:
-                external = json.loads((self.app.state_dir / 'commandcode-usage.json').read_text(encoding='utf-8'))
-                if external.get('provider') == 'commandcode' and external.get('limits'):
-                    external['stale'] = time.time() - external['at'] > 900
-                    reports.append(external)
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
-        benchmarks = {**self.data.get('benchmarks', {}), 'weights': self.app.ui.get('benchmarkWeights', WEIGHTS), 'weightsAA': self.app.ui.get('benchmarkWeightsAA', AA_WEIGHTS)}
+            # The Mac launcher pushes CodexBar's snapshot into the state directory it was configured with.
+            for folder in dict.fromkeys((app.state_dir, self.app.state_dir)):
+                try:
+                    external = json.loads((folder / 'commandcode-usage.json').read_text(encoding='utf-8'))
+                    if external.get('provider') == 'commandcode' and external.get('limits'):
+                        external['stale'] = time.time() - external['at'] > 900
+                        reports.append(external)
+                        break
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+        benchmarks = {**self.data.get('benchmarks', {}), 'weights': app.ui.get('benchmarkWeights', WEIGHTS), 'weightsAA': app.ui.get('benchmarkWeightsAA', AA_WEIGHTS)}
         return {**self.data, 'benchmarks': benchmarks, 'usage': {**usage, 'reports': reports}}
 
     def failed(self, section, message):
