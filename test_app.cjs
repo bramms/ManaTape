@@ -224,6 +224,41 @@ test('agent conversion waits for OFF preview and rejects an OFF singleton with d
  pending=false;context.copyAgentRole('custom');assert.match(notices.pop(),/default/);assert.equal(JSON.stringify(profile),before);
 });
 
+test('every CommandCode account shows 5 год, Тиждень and Місяць; the month prints plan units and a % only when CodexBar measured it',()=>{
+ const ManaScreen=require('./static/screen.js'),now=Date.now(),at=now/1000-60;
+ const units=(remaining,limit)=>({remaining,...(limit?{limit}:{}),unit:'credits'});
+ const five=(left,amount)=>({id:'commandcode:5h',label:'5-hour limit',window:'5-hour',durationMs:18e6,remaining:left,resets:now+3e6,balance:amount});
+ const week=(left,amount)=>({id:'commandcode:7d',label:'Weekly limit',window:'Weekly',durationMs:6048e5,remaining:left,resets:now+3e8,balance:amount});
+ const reports=[
+  {provider:'commandcode',account:1,at,limits:[five(95.1,units(13.314,14)),week(77.5,units(27.125,35)),
+   {id:'commandcode:balance',label:'Місяць',window:'Місяць',windowMinutes:43200,remaining:5.3,resets:now+7e8,source:'CodexBar · Mac',balance:{...units(3.68),limit:70,estimated:true}}]},
+  {provider:'commandcode',account:2,at,limits:[{id:'commandcode:balance',label:'Місяць',window:'Місяць',remaining:null,resets:null,balance:units(70)},five(100,units(14,14))]},
+  {provider:'other',account:3,at,limits:[{id:'x',label:'Daily',window:'',remaining:40}]}];
+ const context={source:{insights:{usage:{reports}}},myProviderIds:()=>new Set(['commandcode']),state:{},opReportCache:null,providerName:id=>id==='commandcode'?'CommandCode':id,providerCode:id=>id.slice(0,2).toUpperCase(),providerSlot:()=>'stu',esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),ManaScreen,
+  op:{pace:()=>({kind:'unknown',label:'Темп невідомий'})},timeLabel:()=>'',opPaceText:q=>q.label,opForecast:()=>'Без прогнозу',resetTitle:()=>'Скидання',microDuration:()=>'',deepSeekCatalog:false,modeOff:()=>false};
+ runInNewContext(['numberFormat','num','led','limitLabel','usageReports','planAmount','winCell','screenHead','quotaScreen','usageScreens','hueEncoder'].map(appFunction).join('\n')+
+  "\nconst screenHue=()=>250;const GLASS_OPEN=['<div class=\"screen__win\">','<div class=\"screen__gasket\">','<div class=\"glass\">'];const glass=inner=>GLASS_OPEN.join('')+inner+'</div></div></div>';const segments=p=>p/100;const screenId=r=>'quota:'+r.provider+':'+r.account;const winsMarkup=(r,name)=>'<div class=\"wins\">'+r.limits.map(l=>winCell(l,r,name)).join('')+'</div>';",context);
+ const shown=context.usageReports(),labels=r=>Array.from(r.limits,l=>context.limitLabel(l));
+ assert.deepEqual(Array.from(shown.filter(r=>r.provider==='commandcode'),labels),[['5 год','Тиждень','Місяць'],['5 год','Тиждень','Місяць']],'the same windows, in the same order, on every account');
+ assert.equal(shown[1].limits[1].remaining,null,'a window OMP did not report for this account is its own empty cell');
+ assert.deepEqual(labels(shown[2]),['Daily'],'other providers are not padded');
+ assert.equal(reports[1].limits.length,2,'the snapshot itself is not changed');
+ const {rows}=context.usageScreens(),html=rows.map(r=>context.quotaScreen(r,'')),cells=h=>h.split(/(?=<div class="win(?: is-stale)?" title=)/).slice(1),visible=h=>h.replace(/ (title|aria-[a-z]+)="[^"]*"/g,'');
+ const [used,fresh]=html.map(cells);
+ assert.equal(used.length,3);assert.equal(fresh.length,3);
+ assert.match(used[0],/<span class="win__l">5 год<\/span><b class="win__v">95,1%<\/b><span class="win__sub">13,3 з 14 од\.<\/span>/);
+ assert.match(used[1],/<span class="win__sub">27,1 з 35 од\.<\/span>/);
+ assert.match(used[2],/<span class="win__l">Місяць<\/span><b class="win__v">5,3%<\/b><span class="win__sub">3,7 з ~70 од\.<\/span>/,'the matched month: CodexBar’s %, its own amount and the estimated cap');
+ assert.match(used[2],/role="meter"[^>]*aria-valuetext="5,3% · 3,7 з ~70 од\."/);
+ assert.match(used[2],/title="Місяць · 3,7 з ~70 од\.[^"]*% і скидання — CodexBar · Mac[^"]*~ — ліміт оцінено з % CodexBar[^"]*одиниці плану CommandCode \(в API — credits\), не куплені кредити"/);
+ assert.match(fresh[2],/<span class="win__l">Місяць<\/span><b class="win__v">—<\/b><span class="win__sub">залишок 70 од\.<\/span>/,'no CodexBar: the amount without a cap or a %');
+ assert.doesNotMatch(fresh[2],/role="meter"|--q:/,'no meter reading without a %');
+ assert.match(fresh[2],/<span>% невідомий<\/span>/);
+ assert.match(fresh[2],/title="Місяць · залишок 70 од\. · % невідомий: OMP дає лише залишок/);
+ assert.match(fresh[1],/<b class="win__v">—<\/b><\/div>[^]*немає виміру/,'an unreported week stays «немає виміру» without an amount');
+ for(const h of html){assert.doesNotMatch(h,/Credit balance|5-hour|Weekly/);assert.doesNotMatch(visible(h),/кредит|credits|кр\./,'plan units are «од.» on the glass');}
+});
+
 test('quota screens stay compact, keep complete family labels and give each account a stable screen and its own ТОН encoder',()=>{
  const ManaScreen=require('./static/screen.js');
  let reports=[{provider:'google-antigravity',account:4,limits:['Anthropic','Claude','Google','OpenAI'].map(label=>({label:label+' 7 day',window:'7 day',remaining:50}))},
@@ -231,7 +266,7 @@ test('quota screens stay compact, keep complete family labels and give each acco
  const context={state:{meters:'full'},opReportCache:null,usageReports:()=>reports,providerName:id=>id,providerCode:id=>id.slice(0,3).toUpperCase(),providerSlot:()=>'stu',esc:String,ManaScreen,
   catalog:[],deepSeekCatalog:false,modeOff:()=>false,deepseek:()=>false,
   op:{pace:()=>({kind:'unknown'})},timeLabel:()=>'',reportAge:()=>'',opPaceText:()=>'',opForecast:()=>'',resetTitle:()=>'',resetCountdown:()=>'',microDuration:()=>'',num:String};
- runInNewContext(['led','limitLabel','winCell','screenHead','quotaScreen','usageScreens','hueEncoder'].map(appFunction).join('\n')+
+ runInNewContext(['led','limitLabel','planAmount','winCell','screenHead','quotaScreen','usageScreens','hueEncoder'].map(appFunction).join('\n')+
   "\nconst SCREEN_HUE={stu:250};const screenHue=()=>250;const GLASS_OPEN=['<div class=\"screen__win\">','<div class=\"screen__gasket\">','<div class=\"glass\">'];const glass=inner=>GLASS_OPEN.join('')+inner+'</div></div></div>';const segments=()=>0;const screenId=r=>'quota:'+r.provider+':'+r.account;const winsMarkup=(r,name)=>r.limits.length?'<div class=\"wins\">'+r.limits.map(l=>winCell(l,r,name)).join('')+'</div>':'<div class=\"g-empty\"></div>';",context);
  assert.equal(context.limitLabel({label:'Claude & GPT shared · 7 day',window:'7 day'}),'Claude & GPT shared · 7 днів');
  const markup=()=>context.usageScreens().rows.map(r=>context.quotaScreen(r,'')).join('');
@@ -256,7 +291,7 @@ test('the DeepSeek screen stands apart: a provider that serves DeepSeek keeps a 
   op:{pace:()=>({kind:'unknown'})},timeLabel:()=>'',opPaceText:()=>'',opForecast:()=>'',resetTitle:()=>'',microDuration:()=>'',num:String,locked:()=>false};
  context.modeOff=()=>context.off;
  assert.ok(source.includes("const screenId=r=>'quota:'+r.provider+':'+r.account;"),'provider screen ids are only quota:<provider>:<n>');
- runInNewContext(['led','key','leaf','box','nest','limitLabel','winCell','screenHead','screenLegend','quotaScreen','usageScreens','hueEncoder','modeChin','deepSeekScreen','screensBank'].map(appFunction).join('\n')+
+ runInNewContext(['led','key','leaf','box','nest','limitLabel','planAmount','winCell','screenHead','screenLegend','quotaScreen','usageScreens','hueEncoder','modeChin','deepSeekScreen','screensBank'].map(appFunction).join('\n')+
   "\nconst SCREEN_HUE={ds:32,stu:250};const screenHue=()=>250;const SLIDE_FACE='';const GLASS_OPEN=['<div class=\"screen__win\">','<div class=\"screen__gasket\">','<div class=\"glass\">'];const glass=inner=>GLASS_OPEN.join('')+inner+'</div></div></div>';const segments=()=>0;const screenId=r=>'quota:'+r.provider+':'+r.account;const winsMarkup=(r,name)=>r.limits.length?'<div class=\"wins\">'+r.limits.map(l=>winCell(l,r,name)).join('')+'</div>':'<div class=\"g-empty\"></div>';",context);
  const flat=r=>r.children?[r,...r.children.flatMap(flat)]:[r],html=r=>r.children?r.open+r.children.map(html).join(''):r.html,bank=()=>context.screensBank()[1].children;
  assert.deepEqual(bank().map(s=>s.key),['screen:quota:opencode-go:1','screen:quota:studio:1','screen:tariff'],'every provider keeps its screen; the DeepSeek screen comes last');

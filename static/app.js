@@ -1501,10 +1501,21 @@
   let scope=limit.label||'';
   if(period&&at>=0)scope=scope.slice(0,at)+scope.slice(at+period.length);
   scope=scope.replace(/\b(usage|limit)\b/gi,'').replace(/[()]/g,'').replace(/^[\s·:–—-]+|[\s·:–—-]+$/g,'');
-  const windowLabel=({'5 hour':'5 год','7 day':'7 днів','7 days':'7 днів','weekly':'Тиждень','monthly':'Місяць'})[period.toLowerCase()]||period;
+  const windowLabel=({'5 hour':'5 год','5-hour':'5 год','7 day':'7 днів','7 days':'7 днів','weekly':'Тиждень','monthly':'Місяць'})[period.toLowerCase()]||period;
   return [scope,windowLabel].filter(Boolean).join(' · ')||limit.label||'Період';
  }
- function usageReports(){const reports=(source.insights?.usage?.reports||[]).map(r=>({...r,stale:!!r.stale||!r.at||Date.now()/1000-r.at>900,limits:[...r.limits]}));if(!reports.some(r=>r.provider==='commandcode')&&myProviderIds().has('commandcode'))reports.push({provider:'commandcode',at:0,source:'CodexBar · Mac',limits:[]});const cc=reports.find(r=>r.provider==='commandcode');if(cc){for(const [id,label,pattern]of [['primary','5 год',/5.*(hour|год)/i],['secondary','Тиждень',/week|тиж|7.*day/i],['tertiary','Місяць',/month|місяц/i]])if(!cc.limits.some(l=>pattern.test(l.window+' '+l.label)))cc.limits.push({id,label,window:'',remaining:null});}return reports;}
+ // Every CommandCode account shows the same windows in the same order — 5 год, Тиждень, Місяць (its balance, see
+ // insights.commandcode_month); a window OMP did not measure for that account stays its own «немає виміру» cell.
+ function usageReports(){
+  const reports=(source.insights?.usage?.reports||[]).map(r=>({...r,stale:!!r.stale||!r.at||Date.now()/1000-r.at>900,limits:[...r.limits]}));
+  if(!reports.some(r=>r.provider==='commandcode')&&myProviderIds().has('commandcode'))reports.push({provider:'commandcode',at:0,source:'CodexBar · Mac',limits:[]});
+  for(const r of reports.filter(r=>r.provider==='commandcode')){
+   const rest=[...r.limits];
+   r.limits=[['primary','5 год',/5.*(hour|год)/i],['secondary','Тиждень',/week|тиж|7.*day/i],['tertiary','Місяць',/month|місяц/i]].map(([id,label,pattern])=>{
+    const at=rest.findIndex(l=>pattern.test(l.window+' '+l.label));return at<0?{id,label,window:'',remaining:null}:rest.splice(at,1)[0];}).concat(rest);
+  }
+  return reports;
+ }
 
  function resetCountdown(at,now=Date.now()){
   if(!Number.isFinite(at)||at<=0)return '↻ —';
@@ -1740,13 +1751,25 @@
  const glass=inner=>`${GLASS_OPEN.join('')}<div class="glass__content"><div class="g">${inner}</div></div><div class="glass__sweep"></div></div></div></div>`;
  function nest(key,opens,children){let out=children;for(let i=opens.length-1;i>=0;i--)out=[box(key+(i?'/'+i:''),opens[i],out)];return out[0];}
  const segments=p=>p<=0?0:Math.max(1,Math.round(p/5))/20;
+ // What is left in the provider's own units, printed under the value: «13,3 з 14 од.», «3,7 з ~70 од.» (a cap
+ // estimated from CodexBar's %), «залишок 70 од.» (no cap known). CommandCode meters the subscription itself in units
+ // its API calls `credits` — nobody bought them — so they are «од.» there.
+ function planAmount(l,r){
+  const b=l.balance;if(!b||!Number.isFinite(b.remaining))return null;
+  const cc=r.provider==='commandcode',unit=cc?'од.':b.unit==='credits'?'кред.':b.unit||'';
+  const text=(b.limit>0?num(b.remaining)+' з '+(b.estimated?'~':'')+num(b.limit):'залишок '+num(b.remaining))+(unit?' '+unit:'');
+  return {text,note:[b.estimated?'~ — ліміт оцінено з % CodexBar і залишку OMP':'',cc?'одиниці плану CommandCode (в API — credits), не куплені кредити':''].filter(Boolean).join(' · ')};
+ }
  function winCell(l,r,name){
-  const q=op.pace(l,r),left=l.remaining,label=limitLabel(l),reset=`<span data-reset="${Number(l.resets)||0}"></span>`;
-  const title=esc(label+' · '+opPaceText(q)+' · '+opForecast(q)+' · '+resetTitle(l.resets)+(q.estimated?' · Лінійна оцінка за тривалістю вікна':''));
-  if(left==null)return `<div class="win" title="${title}"><div class="win__top"><span class="win__l">${esc(label)}</span><b class="win__v">—</b></div><div class="meter is-unknown" role="img" aria-label="${esc(name+' '+label)}: немає виміру"><span class="meter__unlit"></span></div><span class="meter__scale"></span><div class="win__row">${reset}</div><div class="win__row"><span class="pace is-even">?</span><span>немає виміру</span></div></div>`;
+  const q=op.pace(l,r),left=l.remaining,label=limitLabel(l),reset=`<span data-reset="${Number(l.resets)||0}"></span>`,amount=planAmount(l,r);
+  const sub=amount?`<span class="win__sub">${esc(amount.text)}</span>`:'';
+  // A balance with no % is a measurement too: the amount stands, only the percentage (and so the pace) is unknown.
+  const why=left==null&&amount?['% невідомий: '+(r.provider==='commandcode'?'OMP дає лише залишок; % місяця додає CodexBar на Mac, коли його 5 год і тиждень збігаються з цим акаунтом':'провайдер дає лише залишок')]:[opPaceText(q),opForecast(q)];
+  const title=esc([label,amount?.text,...why,resetTitle(l.resets),l.source&&'% і скидання — '+l.source,q.estimated&&'Лінійна оцінка за тривалістю вікна',amount?.note].filter(Boolean).join(' · '));
+  if(left==null)return `<div class="win" title="${title}"><div class="win__top"><span class="win__l">${esc(label)}</span><b class="win__v">—</b>${sub}</div><div class="meter is-unknown" role="img" aria-label="${esc(name+' '+label)}: ${amount?'% невідомий, '+esc(amount.text):'немає виміру'}"><span class="meter__unlit"></span></div><span class="meter__scale"></span><div class="win__row">${reset}</div><div class="win__row"><span class="pace is-even">?</span><span>${amount?'% невідомий':'немає виміру'}</span></div></div>`;
   const stale=r.stale,s=left<10?'bad':left<25?'warn':'',delta=q.delta||0,pace=q.kind==='unknown'?['is-even','?']:q.kind==='empty'?['is-minus','∅']:delta>2?['is-minus','−'+Math.round(delta)+'%']:delta< -2?['is-plus','+'+Math.round(-delta)+'%']:['is-even','±'+Math.round(Math.abs(delta))+'%'];
   const forecast=stale?'≈ —':q.kind==='unknown'?'':q.kind==='empty'?'∅':q.lasts?'до ↻':q.eta>Date.now()?'≈'+microDuration(q.eta):'≈вич.',marker=!stale&&q.expected!=null?`;--m:${+((100-q.expected)/100).toFixed(3)}`:'';
-  return `<div class="win${stale?' is-stale':''}" title="${title}"><div class="win__top"><span class="win__l">${esc(label)}</span><b class="win__v">${num(left)}%</b></div><div class="meter${stale?' is-stale':''}"${s?` data-s="${s}"`:''} style="--q:${segments(left)}${marker}" role="meter" aria-label="${esc(name+' '+label+' залишок')}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${left}"><span class="meter__unlit"></span><span class="meter__lit"><i></i></span>${marker?'<span class="meter__pace" title="Рівномірний темп"></span>':''}</div><span class="meter__scale"></span><div class="win__row">${reset}</div><div class="win__row"><span class="pace ${pace[0]}">${esc(pace[1])}</span><span>${esc(forecast)}</span></div></div>`;
+  return `<div class="win${stale?' is-stale':''}" title="${title}"><div class="win__top"><span class="win__l">${esc(label)}</span><b class="win__v">${num(left)}%</b>${sub}</div><div class="meter${stale?' is-stale':''}"${s?` data-s="${s}"`:''} style="--q:${segments(left)}${marker}" role="meter" aria-label="${esc(name+' '+label+' залишок')}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${left}"${amount?` aria-valuetext="${esc(num(left)+'% · '+amount.text)}"`:''}><span class="meter__unlit"></span><span class="meter__lit"><i></i></span>${marker?'<span class="meter__pace" title="Рівномірний темп"></span>':''}</div><span class="meter__scale"></span><div class="win__row">${reset}</div><div class="win__row"><span class="pace ${pace[0]}">${esc(pace[1])}</span><span>${esc(forecast)}</span></div></div>`;
  }
  function screenHead(r,name,mode=''){const stale=r.at&&r.stale;return `<div class="g-head"><span class="g-name" title="${esc(name)}">${esc(name)}</span><span class="g-age${stale?' is-stale':''}" title="${esc(timeLabel(r.at))}"><span data-age="${r.at||0}"></span>${stale?' · застаріло △':''}</span><span class="g-grow"></span>${mode||'<span class="g-reels" aria-hidden="true"><i></i><i></i></span>'}</div>`;}
  const winsMarkup=(r,name)=>r.limits.length?`<div class="wins">${r.limits.map(l=>winCell(l,r,name)).join('')}</div>`:`<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Ще немає вимірів</span></div>`;

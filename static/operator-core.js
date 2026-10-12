@@ -64,7 +64,8 @@ const ManaOperator=(()=>{
   if(!report||report.stale||!report.at||now-report.at*1000>9e5)return {kind:'unknown',label:model.local===true?'GPU · без виміру':'Ліміт невідомий'};
   const limits=report.limits.filter(l=>(!model.free||l.models?.length)&&applies(l,model));
   const valid=limits.filter(l=>l.remaining!=null&&(!l.resets||l.resets>now));
-  if(valid.some(l=>l.remaining<=0))return {kind:'empty',label:'Ліміт вичерпано',remaining:0};
+  // A balance reported without a % (CommandCode's month outside CodexBar) is still exhausted at zero units.
+  if(valid.some(l=>l.remaining<=0)||limits.some(l=>l.remaining==null&&l.balance?.remaining<=0&&(!l.resets||l.resets>now)))return {kind:'empty',label:'Ліміт вичерпано',remaining:0};
   if(!valid.length)return {kind:'unknown',label:'Ліміт невідомий'};
   const remaining=Math.min(...valid.map(l=>l.remaining));
   if(remaining<15||valid.some(l=>{const q=pace(l,report,now);return q.kind==='deficit'&&!q.lasts;}))return {kind:'risk',label:'Малий запас',remaining};

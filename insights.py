@@ -156,6 +156,20 @@ def merge_shared(limits):
     return list(merged.values())
 
 
+def balance_of(amount):
+    """What is left in the provider's own units: `remaining`, else `limit − used`, with the cap when one is reported.
+    None without an absolute reading: a fraction alone is no amount."""
+    left = amount.get('remaining')
+    cap = amount['limit'] if finite_number(amount.get('limit')) and amount['limit'] > 0 else None
+    if not finite_number(left):
+        left = cap - amount['used'] if cap is not None and finite_number(amount.get('used')) else None
+    if left is None:
+        return None
+    unit = amount.get('unit')
+    return {'remaining': round(max(0, left), 4), **({'limit': cap} if cap is not None else {}),
+            'unit': unit if isinstance(unit, str) else ''}
+
+
 def usage_report(report, account):
     """One native `omp usage` report; a malformed one raises and is skipped alone."""
     limits = []
@@ -165,18 +179,92 @@ def usage_report(report, account):
         if value is None and finite_number(amount.get('usedFraction')):
             value = 1 - amount['usedFraction']
         window, scope = raw.get('window') or {}, raw.get('scope') or {}
-        limits.append({'id': raw['id'], 'label': raw['label'],
-            # NaN or true is not a measurement: unknown, never "100 % left".
+        limit = {'id': raw['id'], 'label': raw['label'],
+            # NaN or true is not a measurement: unknown, never "100 % left". A balance without a fraction has no %.
             'remaining': round(max(0, min(1, value)) * 100, 1) if finite_number(value) else None,
             'resets': window.get('resetsAt'), 'starts': window.get('startsAt'),
             'durationMs': window.get('durationMs'), 'window': window.get('label', ''), 'status': raw.get('status'),
-            'models': scope.get('modelIds', []), 'tier': scope.get('tier', '')})
+            'models': scope.get('modelIds', []), 'tier': scope.get('tier', '')}
+        balance = balance_of(amount)
+        if balance:
+            limit['balance'] = balance
+        limits.append(limit)
     limits = merge_shared(limits)
     fetched = report.get('fetchedAt', 0)
     if not finite_number(fetched):
         raise ValueError('fetchedAt')
     return {'provider': report['provider'], 'account': account, 'at': fetched / 1000,
         'plan': (report.get('metadata') or {}).get('planType', ''), 'limits': limits}
+
+
+# CodexBar and OMP read the same CommandCode account when its 5 h and weekly remaining agree this closely (points).
+CODEXBAR_MATCH = 0.2
+FRESH = 900
+
+
+def plan_cap(units, percent):
+    """The roundest whole cap consistent with `units` left at `percent` (CodexBar rounds to 0.1 pt; the two readings may
+    be minutes apart, hence the 2 % slack). An estimate only, shown as «~70»; None when the percentage is too coarse."""
+    if not (finite_number(units) and finite_number(percent)) or units <= 0 or not 1 <= percent <= 100:
+        return None
+    low, high = units * 100 / (percent + .05) * .98, units * 100 / (percent - .05) * 1.02
+    for grain in (100, 50, 10, 5, 1):
+        cap = math.ceil(low / grain) * grain
+        if cap <= high:
+            return cap
+    return None
+
+
+def commandcode_month(limit):
+    """CommandCode meters the subscription itself in plan units (`credits` in its API; nothing was bought): its
+    windowless balance is what is left of the monthly plan allowance, so the panel calls it «Місяць»."""
+    windowless = not limit.get('window') and (limit.get('balance') or str(limit.get('id', '')).endswith(':balance'))
+    return {**limit, 'label': 'Місяць', 'window': 'Місяць'} if windowless else limit
+
+
+def codexbar_account(reports, external, now):
+    """The one native CommandCode account CodexBar measured: its 5 h and weekly remaining both agree with CodexBar's
+    within CODEXBAR_MATCH points, and the two readings are fresh and close in time. None when stale or ambiguous."""
+    if not external or not finite_number(external.get('at')) or now - external['at'] > FRESH:
+        return None
+    theirs = {l.get('id'): l.get('remaining') for l in external.get('limits') or []}
+    found = []
+    for n, report in enumerate(reports):
+        if report.get('provider') != 'commandcode' or not finite_number(report.get('at')) or abs(report['at'] - external['at']) > FRESH:
+            continue
+        ours = {str(l.get('id', '')).rsplit(':', 1)[-1]: l.get('remaining') for l in report.get('limits') or []}
+        if all(finite_number(ours.get(own)) and finite_number(theirs.get(bar)) and abs(ours[own] - theirs[bar]) <= CODEXBAR_MATCH + 1e-9
+               for own, bar in (('5h', 'primary'), ('7d', 'secondary'))):
+            found.append(n)
+    return found[0] if len(found) == 1 else None
+
+
+def commandcode_view(reports, external=None, now=None):
+    """Every native CommandCode account shows its balance as «Місяць»; the account CodexBar measured (codexbar_account)
+    also gets CodexBar's monthly % and reset there, and a cap estimated from that % and its own balance."""
+    now = time.time() if now is None else now
+    reports = [{**r, 'limits': [commandcode_month(l) for l in r['limits']]} if r.get('provider') == 'commandcode' else r
+               for r in reports]
+    n = codexbar_account(reports, external, now)
+    month = next((l for l in (external or {}).get('limits') or [] if l.get('id') == 'tertiary' and finite_number(l.get('remaining'))), None)
+    if n is None or not month:
+        return reports
+    limits = list(reports[n]['limits'])
+    at = next((i for i, l in enumerate(limits) if l.get('window') == 'Місяць'), None)
+    own = limits[at] if at is not None else {'id': 'commandcode:balance', 'starts': None, 'durationMs': None,
+                                             'status': None, 'models': [], 'tier': ''}
+    merged = {**own, 'label': 'Місяць', 'window': 'Місяць', 'remaining': month['remaining'], 'resets': month.get('resets'),
+              'windowMinutes': month.get('windowMinutes'), 'source': external.get('source') or 'CodexBar'}
+    balance = own.get('balance')
+    cap = plan_cap((balance or {}).get('remaining'), month['remaining'])
+    if balance and cap and 'limit' not in balance:
+        merged['balance'] = {**balance, 'limit': cap, 'estimated': True}
+    if at is None:
+        limits.append(merged)
+    else:
+        limits[at] = merged
+    reports[n] = {**reports[n], 'limits': limits}
+    return reports
 
 
 class Insights:
@@ -205,17 +293,21 @@ class Insights:
         usage = self.data['usage']
         # Snapshots stored before merge_shared existed still carry the duplicates.
         reports = [{**r, 'limits': merge_shared(r.get('limits') or [])} for r in usage['reports']]
-        if not any(r['provider'] == 'commandcode' for r in reports):
-            # The Mac launcher pushes CodexBar's snapshot into the state directory it was configured with.
-            for folder in dict.fromkeys((app.state_dir, self.app.state_dir)):
-                try:
-                    external = json.loads((folder / 'commandcode-usage.json').read_text(encoding='utf-8'))
-                    if external.get('provider') == 'commandcode' and external.get('limits'):
-                        external['stale'] = time.time() - external['at'] > 900
-                        reports.append(external)
-                        break
-                except (OSError, ValueError, KeyError, TypeError):
-                    pass
+        external, now = None, time.time()
+        # The Mac launcher pushes CodexBar's snapshot into the state directory it was configured with.
+        for folder in dict.fromkeys((app.state_dir, self.app.state_dir)):
+            try:
+                found = json.loads((folder / 'commandcode-usage.json').read_text(encoding='utf-8'))
+                if found.get('provider') == 'commandcode' and found.get('limits'):
+                    external = {**found, 'stale': now - found['at'] > FRESH}
+                    break
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        if any(r['provider'] == 'commandcode' for r in reports):
+            # OMP's own accounts stand; CodexBar only completes the month of the account it measured.
+            reports = commandcode_view(reports, external, now)
+        elif external:
+            reports.append(external)
         benchmarks = {**self.data.get('benchmarks', {}), 'weights': app.ui.get('benchmarkWeights', WEIGHTS), 'weightsAA': app.ui.get('benchmarkWeightsAA', AA_WEIGHTS)}
         return {**self.data, 'benchmarks': benchmarks, 'usage': {**usage, 'reports': reports}}
 

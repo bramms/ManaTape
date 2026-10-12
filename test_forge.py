@@ -586,6 +586,90 @@ unrelated: {keep: true}
         self.assertEqual([(l['id'], l['remaining']) for l in report['limits']], [('g', 90.0), ('a', 100.0), ('x', 50.0)])
         self.assertEqual(report['limits'][1]['models'], ['claude', 'gpt'])
 
+    @staticmethod
+    def commandcode_native(account, used_5h, used_week, balance, at):
+        """One CommandCode account as `omp usage --json --redact` reports it (OMP 18.9)."""
+        from insights import usage_report
+        window = lambda key, label, cap, used, ms: {'id': 'commandcode:' + key, 'label': label + ' limit', 'status': 'ok',
+            'window': {'id': key, 'label': label, 'durationMs': ms, 'resetsAt': at * 1000 + ms // 2},
+            'amount': {'used': used, 'limit': cap, 'usedFraction': used / cap, 'unit': 'credits'}}
+        return usage_report({'provider': 'commandcode', 'fetchedAt': at * 1000, 'limits': [
+            window('5h', '5-hour', 14, used_5h, 18000000), window('7d', 'Weekly', 35, used_week, 604800000),
+            {'id': 'commandcode:balance', 'label': 'Credit balance', 'amount': {'remaining': balance, 'unit': 'credits'}}]}, account)
+
+    @staticmethod
+    def codexbar(at, five=95.1, week=77.5, month=5.3):
+        return {'provider': 'commandcode', 'account': 1, 'at': at, 'plan': '', 'source': 'CodexBar · Mac', 'limits': [
+            {'id': 'primary', 'label': '5 год', 'window': '5 год', 'windowMinutes': 300, 'remaining': five, 'resets': at * 1000 + 7e6},
+            {'id': 'secondary', 'label': 'Тиждень', 'window': 'Тиждень', 'windowMinutes': 10080, 'remaining': week, 'resets': at * 1000 + 4e7},
+            {'id': 'tertiary', 'label': 'Місяць', 'window': 'Місяць', 'windowMinutes': 43200, 'remaining': month, 'resets': at * 1000 + 7e8}]}
+
+    def test_usage_report_keeps_balance_in_plan_units_without_inventing_a_percentage(self):
+        from insights import usage_report
+        report = self.commandcode_native(1, 0.686, 7.875, 3.68, 1791824654)
+        five, week, balance = report['limits']
+        self.assertEqual((five['remaining'], five['balance']), (95.1, {'remaining': 13.314, 'limit': 14, 'unit': 'credits'}))
+        self.assertEqual(week['balance'], {'remaining': 27.125, 'limit': 35, 'unit': 'credits'})
+        # The balance has no fraction and no window: its amount stays, its % stays unknown.
+        self.assertEqual(balance['balance'], {'remaining': 3.68, 'unit': 'credits'})
+        self.assertIsNone(balance['remaining'])
+        self.assertIsNone(balance['resets'])
+        odd = usage_report({'provider': 'p', 'fetchedAt': 1, 'limits': [
+            {'id': 'f', 'label': 'F', 'amount': {'usedFraction': .5}},
+            {'id': 'n', 'label': 'N', 'amount': {'remaining': float('nan'), 'unit': 'credits'}},
+            {'id': 't', 'label': 'T', 'amount': {'remaining': True}},
+            {'id': 'z', 'label': 'Z', 'amount': {'used': 3, 'limit': 0}}]}, 1)
+        self.assertEqual([l.get('balance') for l in odd['limits']], [None] * 4, 'no absolute reading, no amount')
+
+    def test_codexbar_month_joins_only_the_account_it_measured(self):
+        from insights import commandcode_view
+        now = 1791824900
+        used = self.commandcode_native(1, 0.686, 7.875, 3.68, now - 240)
+        fresh = self.commandcode_native(2, 0, 0, 70, now - 240)
+        reports = commandcode_view([used, fresh], self.codexbar(now - 60), now)
+        month = reports[0]['limits'][2]
+        self.assertEqual((month['label'], month['window'], month['remaining'], month['windowMinutes'], month['source']),
+                         ('Місяць', 'Місяць', 5.3, 43200, 'CodexBar · Mac'))
+        self.assertEqual(month['resets'], (now - 60) * 1000 + 7e8)
+        self.assertEqual(month['balance'], {'remaining': 3.68, 'unit': 'credits', 'limit': 70, 'estimated': True})
+        other = reports[1]['limits'][2]
+        self.assertEqual((other['label'], other['window'], other['remaining'], other['resets']), ('Місяць', 'Місяць', None, None))
+        self.assertEqual(other['balance'], {'remaining': 70, 'unit': 'credits'}, 'no cap is invented for an unmeasured account')
+        self.assertNotIn('Credit balance', json.dumps(reports, ensure_ascii=False))
+        self.assertEqual([l['remaining'] for l in reports[0]['limits'][:2]], [95.1, 77.5], 'OMP keeps its own 5 h and week')
+        # Within ±0.2 pt on both windows still matches; the 5-hour window alone does not.
+        self.assertEqual(commandcode_view([used, fresh], self.codexbar(now - 60, 95.3, 77.3), now)[0]['limits'][2]['remaining'], 5.3)
+        for why, external, pair in [
+                ('5 h differs', self.codexbar(now - 60, 95.4), [used, fresh]),
+                ('week differs', self.codexbar(now - 60, week=77.8), [used, fresh]),
+                ('stale CodexBar', self.codexbar(now - 901), [used, fresh]),
+                ('readings far apart', self.codexbar(now - 60), [self.commandcode_native(1, 0.686, 7.875, 3.68, now - 1000), fresh]),
+                ('ambiguous', self.codexbar(now - 60, 100, 100), [self.commandcode_native(1, 0, 0, 70, now - 240), fresh]),
+                ('no CodexBar', None, [used, fresh])]:
+            with self.subTest(why):
+                months = [r['limits'][2] for r in commandcode_view(pair, external, now)]
+                self.assertEqual([(m['label'], m['remaining'], m['resets']) for m in months], [('Місяць', None, None)] * 2)
+                self.assertNotIn('limit', months[0]['balance'])
+                self.assertNotIn('source', months[0])
+
+    def test_plan_cap_is_an_estimate_only_when_the_percentage_can_carry_it(self):
+        from insights import plan_cap
+        self.assertEqual([plan_cap(3.68, 5.3), plan_cap(70, 100), plan_cap(54.25, 77.5), plan_cap(150, 50)], [70, 70, 70, 300])
+        self.assertEqual([plan_cap(0.5, 0.7), plan_cap(0, 50), plan_cap(3, None), plan_cap(3, 101)], [None] * 4)
+
+    def test_snapshot_merges_codexbar_into_native_commandcode_and_keeps_it_alone_otherwise(self):
+        now = time.time()
+        native = [self.commandcode_native(1, 0.686, 7.875, 3.68, now - 120), self.commandcode_native(2, 0, 0, 70, now - 120)]
+        (self.app.state_dir / 'commandcode-usage.json').write_text(json.dumps(self.codexbar(now - 30)))
+        self.app.insights.data['usage'] = {'at': now, 'reports': native, 'error': ''}
+        reports = self.app.insights.snapshot()['usage']['reports']
+        self.assertEqual([r['provider'] for r in reports], ['commandcode', 'commandcode'], 'CodexBar adds no third account')
+        self.assertEqual([r['limits'][2]['remaining'] for r in reports], [5.3, None])
+        self.assertEqual(self.app.insights.data['usage']['reports'][0]['limits'][2]['label'], 'Credit balance', 'stored data stays native')
+        self.app.insights.data['usage']['reports'] = []
+        alone = self.app.insights.snapshot()['usage']['reports']
+        self.assertEqual([(r['source'], r['stale']) for r in alone], [('CodexBar · Mac', False)])
+
     def test_failure_log_names_type_and_place_but_no_message(self):
         try:
             raise OSError(errno.ENOSPC, 'SECRET /private/path')

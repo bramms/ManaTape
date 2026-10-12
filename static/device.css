@@ -687,6 +687,9 @@ a.key{text-decoration:none}
 .win__l{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow));min-width:0;overflow:hidden;overflow-wrap:anywhere;
  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3}
 .win__v{display:inline-block;flex:none;margin-left:auto;min-width:4ch;text-align:right;font:700 var(--fs-value)/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink);text-shadow:0 0 8px rgb(var(--s-ink-c)/calc(var(--s-glow)*.55))}
+/* the amount in the provider's own units, under the value («13,3 з 14 од.»): part of the top, so the meters of the
+   bank still sit on one line */
+.win__sub{flex:1 0 100%;margin-top:3px;text-align:right;color:var(--s-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .win__row{display:flex;justify-content:space-between;gap:6px;color:var(--s-dim);margin-top:3px;white-space:nowrap}
 .win__row>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pace{display:inline-block;min-width:5ch}

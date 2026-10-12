@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create a credential-free, offline fixture; never read native OMP state."""
 import argparse
+from datetime import datetime, timezone
 import json
 import subprocess
 import sys
@@ -130,6 +131,7 @@ def seed_showcase():
                                window=['5 год', 'Тиждень', 'Місяць', 'Доба'][i], durationMs=duration,
                                remaining=left, starts=now*1000-duration*.35, resets=now*1000+duration*.65, models=[]))
         reports.append(dict(provider=pid, account=1, at=now, plan='DEMO · вигадані ліміти', source='DEMO', limits=limits))
+    reports += commandcode_demo(state, now)
     hour = int(now // 3600)*3600000
     series = [dict(timestamp=hour-(47-i)*3600000, requests=8+(i*7)%37, tokens=2500+(i*1307)%28000,
                    errors=int(i % 17 == 0), cost=round(.03+(i % 11)*.017, 3)) for i in range(48)]
@@ -155,6 +157,31 @@ def seed_showcase():
     (root/'SHOWCASE_READY').write_text('Synthetic showcase. No native accounts or inference.\n', encoding='utf-8')
     seed_layers(root, project, agent)
     return project, agent, state
+
+
+def commandcode_demo(state, now):
+    """Two synthetic CommandCode accounts in OMP's own shape (plan units, a windowless balance) through the real
+    normalisation, and a CodexBar snapshot of the first one, which the panel joins by its 5 h and weekly readings."""
+    from insights import commandcode_report, usage_report
+
+    def account(n, used_5h, used_week, balance):
+        def window(key, label, cap, used, ms, left):
+            return {'id': 'commandcode:' + key, 'label': label + ' limit', 'status': 'ok',
+                    'window': {'id': key, 'label': label, 'durationMs': ms, 'resetsAt': int(now * 1000 + ms * left)},
+                    'amount': {'used': used, 'limit': cap, 'usedFraction': used / cap, 'unit': 'credits'}}
+        report = usage_report({'provider': 'commandcode', 'fetchedAt': now * 1000, 'limits': [
+            window('5h', '5-hour', 14, used_5h, 18000000, .45), window('7d', 'Weekly', 35, used_week, 604800000, .6),
+            {'id': 'commandcode:balance', 'label': 'Credit balance', 'amount': {'remaining': balance, 'unit': 'credits'}}]}, n)
+        return {**report, 'plan': 'DEMO · вигадані ліміти', 'source': 'DEMO'}
+
+    used, fresh = account(1, 0.686, 7.875, 3.68), account(2, 0, 0, 70)
+    iso = lambda at: datetime.fromtimestamp(at, timezone.utc).isoformat()
+    window = lambda limit: {'usedPercent': round(100 - limit['remaining'], 1), 'resetsAt': iso(limit['resets'] / 1000)}
+    codexbar = commandcode_report([{'provider': 'commandcode', 'usage': {'updatedAt': iso(now),
+        'primary': {**window(used['limits'][0]), 'windowMinutes': 300}, 'secondary': {**window(used['limits'][1]), 'windowMinutes': 10080},
+        'tertiary': {'usedPercent': 94.7, 'resetsAt': iso(now + 8 * 86400), 'windowMinutes': 43200}}}])
+    (state / 'commandcode-usage.json').write_text(json.dumps({**codexbar, 'source': 'DEMO · CodexBar'}), encoding='utf-8')
+    return [used, fresh]
 
 
 SHARED_UI = ('localProviders', 'providerCodes', 'providerLabels')
@@ -216,6 +243,9 @@ def seed_layers(root, project, agent):
             app.persist()
             if show.insights.path.exists() and not app.insights.path.exists():
                 app.insights.path.write_bytes(show.insights.path.read_bytes())
+            codexbar = show.state_dir / 'commandcode-usage.json'
+            if codexbar.exists() and not (app.state_dir / 'commandcode-usage.json').exists():
+                (app.state_dir / 'commandcode-usage.json').write_bytes(codexbar.read_bytes())
 
     def confirmed(call, body):
         # The demo's Global file is seeded after the project: its first write also brings what DeepSeek OFF and

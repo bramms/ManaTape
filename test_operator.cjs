@@ -39,6 +39,10 @@ test('partial measurements and stale zero distinguish unknown from exhausted',()
  assert.equal(op.health(m,[{...report,provider:'p',limits}],[],now).kind,'unknown');
  assert.equal(op.health(m,[{...report,provider:'p',stale:true,limits:[{remaining:0}]}],[],now).kind,'unknown');
  assert.equal(op.health(m,[{...report,provider:'p',limits:[{remaining:0},{remaining:null}]}],[],now).kind,'empty');
+ // A balance without a % (CommandCode's month outside CodexBar): units left keep it «incomplete», zero units is exhausted.
+ const month=units=>({label:'Місяць',window:'Місяць',remaining:null,balance:{remaining:units,unit:'credits'}});
+ assert.equal(op.health(m,[{...report,provider:'p',limits:[{remaining:60},month(70)]}],[],now).label,'Ліміти неповні');
+ assert.equal(op.health(m,[{...report,provider:'p',limits:[{remaining:60},month(0)]}],[],now).kind,'empty');
 });
 test('role estimates require every weighted test, zero is a real score',()=>{
  assert.equal(op.score({scores:{a:80}},{a:.5,b:.5}),null);
