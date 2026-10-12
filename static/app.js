@@ -9,7 +9,20 @@
  let source,stateTag='';
  // A boot that waits too long offers «Повторити» on the plate; after 15 s the wait ends on the retry screen (QA4 P0-4).
  const bootSlow=setTimeout(()=>{const plate=win.querySelector('.boot');if(plate&&!plate.querySelector('#retry-load')){plate.insertAdjacentHTML('beforeend','<button type="button" class="key" id="retry-load"><span class="key__cap">Повторити</span></button>');plate.querySelector('#retry-load').onclick=()=>location.reload();}},5000);
- try {const res=await fetch(endpoint('/api/state'),{signal:deadline(15000)});source=await res.json();if(!res.ok)throw Error(source.error);stateTag=res.headers.get('ETag')||'';}catch(e){clearTimeout(bootSlow);win.innerHTML='<div class="device"><div class="boot"><div class="screen" data-screen="startup" data-screen-default="27"><div class="screen__win"><div class="screen__gasket"><div class="glass"><div class="glass__content"><div class="g"><div class="g-head"><span class="g-name">Mana Tape</span><span class="g-age">немає зв’язку</span></div><div class="g-msg" data-s="bad"><span>Сервер не відповідає. Перевір підключення.</span></div></div></div></div></div></div></div><button type="button" class="key" id="retry-load"><span class="key__cap">Повторити</span></button></div></div>';window.ManaScreen?.sync();document.getElementById('retry-load').onclick=()=>location.reload();return;}
+ // A failed boot keeps the whole plate (brand, screws, body); only its glass turns red (DESIGN «Корпус»). A response
+ // with an error status prints the server's own reason and code (F3); no response at all is a connection problem.
+ function bootMessage(e){return e?.status?(e.message||'Сервер відмовив')+' · HTTP '+e.status+(e.code?' · '+e.code:''):'Сервер не відповідає. Перевір підключення.';}
+ function bootFailed(e){
+  const safe=bootMessage(e).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
+  let plate=win.querySelector('.boot');
+  if(!plate){win.innerHTML='<div class="device"><i class="screw screw--tl"></i><i class="screw screw--tr"></i><i class="screw screw--bl"></i><i class="screw screw--br"></i><div class="boot"><div class="screen" data-screen="startup"><div class="screen__win"><div class="screen__gasket"><div class="glass"><div class="glass__content"><div class="g"></div></div></div></div></div></div></div></div>';plate=win.querySelector('.boot');}
+  const scr=plate.querySelector('.screen');scr.dataset.screenDefault='27';
+  scr.querySelector('.g').innerHTML=`<div class="g-head"><span class="g-name">Mana Tape</span><span class="g-age">${e?.status?'відмова сервера':'немає зв’язку'}</span></div><div class="g-msg" data-s="bad" role="alert"><span>${safe}</span></div>`;
+  plate.removeAttribute('aria-busy');plate.classList.add('boot--failed');
+  if(!plate.querySelector('#retry-load'))plate.insertAdjacentHTML('beforeend','<button type="button" class="key" id="retry-load"><span class="key__cap">Повторити</span></button>');
+  plate.querySelector('#retry-load').onclick=()=>location.reload();window.ManaScreen?.sync();
+ }
+ try {const res=await fetch(endpoint('/api/state'),{signal:deadline(15000)});source=await res.json().catch(()=>null);if(!res.ok||!source)throw Object.assign(Error(source?.error||'Сервер відповів без даних'),{status:res.status,code:source?.code||''});stateTag=res.headers.get('ETag')||'';}catch(e){clearTimeout(bootSlow);bootFailed(e);return;}
  clearTimeout(bootSlow);
 
  const labels=source.ui?.roleLabels||{};
@@ -145,7 +158,8 @@
  const scrollToControl=el=>el?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
  // The search field takes the focus only on a keyboard/mouse device; a touch opens the list without the keyboard.
  function focusPicker(){const picker=win.querySelector('[data-picker]');if(!picker)return;const target=state.picker?.thinking?picker.querySelector('[role=menuitemradio][aria-checked=true]:not(:disabled)')||picker.querySelector('[role=menuitemradio]:not(:disabled)')||picker.querySelector('[data-action=picker-close]'):state.picker?.actionsOnly?picker.querySelector('[role=menuitem]:not(:disabled)')||picker.querySelector('[data-action=picker-close]'):coarsePointer()?picker.querySelector('.is-current,[data-pick]')||picker.querySelector('#picker-search'):picker.querySelector('#picker-search');target?.focus({preventScroll:true});}
- function trayFocusSelector(el){return el?.dataset.edit?`[data-edit="${CSS.escape(el.dataset.edit)}"][data-index="${el.dataset.index}"][data-group="${el.dataset.group}"]`:el?.dataset.modeScope?`[data-mode-scope="${CSS.escape(el.dataset.modeScope)}"]`:el?.dataset.poolOpen?'[data-pool-open]':'[data-action="mode-panel"]';}
+ // An agent's ⇄ key carries its role's scope too (F2): the key is found inside its own lane.
+ function trayFocusSelector(el){const lane=el?.dataset.modeScope&&el.closest?.('.lane[data-role]');return el?.dataset.edit?`[data-edit="${CSS.escape(el.dataset.edit)}"][data-index="${el.dataset.index}"][data-group="${el.dataset.group}"]`:el?.dataset.modeScope?(lane?`.lane[data-role="${CSS.escape(lane.dataset.role)}"][data-lane-group="${CSS.escape(lane.dataset.laneGroup||'role')}"] `:'')+`[data-mode-scope="${CSS.escape(el.dataset.modeScope)}"]`:el?.dataset.poolOpen?'[data-pool-open]':'[data-action="mode-panel"]';}
  // Open or close an editor in the drawer. Opening lands the focus in the editor; closing returns it to the key (or the
  // CUT, the ⇄ mark) that opened it. The drawer then goes back to the collection if it was open, or slides away.
  function editTray(kind,open,opener){
@@ -204,8 +218,11 @@
  function agentLink(worker){const values=agentValues(worker);return values.length===1&&values[0].startsWith('@')?values[0]:'';}
  function agentTier(worker){return ({task:'Vibe GOOD',sonic:'Vibe FAST'})[worker]||'';}
  // An agent's lane key: ↳, native id and a printed sub-line (Vibe tier, file source, own list); LED blue = own list.
- function agentName(worker,own=false){const origin=agentSource(worker),sub=[agentTier(worker),origin&&origin+(agentInfo(worker)?.overrides?' · замінює штатного':''),own&&'власний список'].filter(Boolean).join(' · ');return `<span class="lane__label"><span class="lane__name">${esc(worker)}</span>${sub?`<span class="lane__sub">${esc(sub)}</span>`:''}</span>`;}
- function agentKey(worker,own=false,title=''){return `<div class="lane__key"${title?` title="${esc(title)}"`:''}><span class="lane__idx" aria-hidden="true">↳</span>${agentName(worker,own)}${led(own,'blue')}</div>`;}
+ function agentSub(worker,own=false){const origin=agentSource(worker);return [agentTier(worker),origin&&origin+(agentInfo(worker)?.overrides?' · замінює штатного':''),own&&'власний список'].filter(Boolean).join(' · ');}
+ function agentName(worker,own=false){const sub=agentSub(worker,own);return `<span class="lane__label"><span class="lane__name">${esc(worker)}</span>${sub?`<span class="lane__sub">${esc(sub)}</span>`:''}</span>`;}
+ // A name or note that the key cuts with an ellipsis keeps its full text in the tooltip (F6): a 156-px key shows
+ // about 11 characters of the name and 14 of the note.
+ function agentKey(worker,own=false,title=''){const sub=agentSub(worker,own),full=worker.length>11||sub.length>14?[worker,sub].filter(Boolean).join(' · '):'';title=[full,title].filter(Boolean).join(' · ');return `<div class="lane__key"${title?` title="${esc(title)}"`:''}><span class="lane__idx" aria-hidden="true">↳</span>${agentName(worker,own)}${led(own,'blue')}</div>`;}
  // An override for an agent that is in no file: a red-LED eject key in the lane's tool cluster, never a pill in the tape.
  function agentRemove(worker){return !agentInfo(worker)&&Object.hasOwn(p().task.agentModelOverrides||{},worker)?key(led(true,'red')+'Прибрати','','key--sm key--danger',`data-reset-agent="${esc(worker)}" aria-label="Прибрати перевизначення агента, якого немає у файлах: ${esc(worker)}" title="Агента немає серед штатних і файлів .omp/agents. Перевизначення лишилося в конфігурації."`):'';}
  // A patch key replaces the old «До ролі ↗» link: it scrolls to the role's lane and blinks its LED.
@@ -510,10 +527,10 @@
   const steps=Math.max(8,1+Math.max(...roleKeys.map(r=>count(r)),...workers().map(r=>count(r,'vibe'))));if(renderCache)renderCache.steps=steps;return steps;
  }
  // A recessed jack for a new CUT; it glows while a CUT is dragged and stays pinned to the right of a long lane.
- function socketKey(role,index,group,word,label){return `<button type="button" class="socket" data-edit="${esc(role)}" data-index="${index}" data-group="${group}" aria-label="${esc(label)}"><span class="socket__plus" aria-hidden="true"></span>${esc(word)}</button>`;}
+ function socketKey(role,index,group,word,label){const jack=`<button type="button" class="socket" data-edit="${esc(role)}" data-index="${index}" data-group="${group}" aria-label="${esc(label)}"><span class="socket__plus" aria-hidden="true"></span>${esc(word)}</button>`;return group==='role'||group==='vibe'?`<span class="socket-dock">${jack}</span>`:jack;}
  function laneKey(role,index,own){
   const inheritsStandard=state.profile!=='standard'&&!Object.hasOwn(source.presets[state.profile]?.modelRoles||{},role)&&own;
-  const title=[labels[role]&&labels[role]!==role?role+' · '+labels[role]:'',inheritsStandard?'основна модель успадкована зі Standard':''].filter(Boolean).join(' · ');
+  const title=[labels[role]&&labels[role]!==role?role+' · '+labels[role]:role.length>11?role:'',inheritsStandard?'основна модель успадкована зі Standard':''].filter(Boolean).join(' · ');
   return `<button type="button" class="lane__key" data-focus-role="${esc(role)}"${role===state.role?' aria-current="true"':''}${title?` title="${esc(title)}"`:''} aria-label="${esc((labels[role]&&labels[role]!==role?role+' · '+labels[role]:role)+(own?'':' · типово в OMP'))}"><span class="lane__idx">${String(index+1).padStart(2,'0')}</span><span class="lane__name">${esc(role)}</span>${led(own,'green')}</button>`;
  }
  // A role lane: lane key, then the tape; an unconfigured role is leader tape («Типово в OMP»), not a CUT.
@@ -595,8 +612,9 @@
   return new Set(source.providers.filter(v=>v.custom||v.managed||v.used.length||subscribed.has(v.id)).map(v=>v.id));
  }
  function pickerModels(x){
-  const mine=myProviderIds(),disabled=new Set(p().disabledProviders||[]);
-  return catalog.filter(m=>acceptsRoleModel(x.role,x.group,m)&&(x.group!=='pool'||ManaOperator.isFreeModel(m))&&(x.group!=='alternatives'||!deepseek(m.provider+'/'+m.id))&&m.status!=='missing'&&!disabled.has(m.provider)&&!source.providers.find(v=>v.id===m.provider)?.expired&&(x.scope==='all'||mine.has(m.provider)));
+  const mine=myProviderIds(),disabled=new Set(p().disabledProviders||[]),expired=new Set(source.providers.filter(v=>v.expired).map(v=>v.id));
+  // Cheap tests first: the capability check runs only for a CUT the provider filters let through.
+  return catalog.filter(m=>m.status!=='missing'&&!disabled.has(m.provider)&&!expired.has(m.provider)&&(x.scope==='all'||mine.has(m.provider))&&(x.group!=='pool'||ManaOperator.isFreeModel(m))&&(x.group!=='alternatives'||!deepseek(m.provider+'/'+m.id))&&acceptsRoleModel(x.role,x.group,m));
  }
  // MENUS — small recessed trays with labelled keys of the panel's shape (DESIGN «Меню»). The ⋯ CUT tools are a
  // role=menu (arrows, Home/End, Escape returns to ⋯); the quick pick is a dialog that shows the current CUT first and
@@ -650,6 +668,14 @@
   const index=Math.max(0,Math.min(x.index,chain(x.role,x.group).length-1));
   const target=[...win.querySelectorAll(`button[data-edit="${CSS.escape(x.role)}"][data-index="${index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);
   target?.focus({preventScroll:true});return !!target;
+ }
+ // Quick pick replaces the CUT (or fills the socket). A route that already stands elsewhere on this lane is never
+ // copied (F7): it moves to the picked place, exactly as a drop from the collection does (commitCut).
+ function pickCut(x,route){
+  if(!x||state.saving)return;const a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===route){closePicker();return;}
+  if(a.some((r,i)=>i!==x.index&&split(r).raw===route)){state.picker=null;commitCut(route,{role:x.role,index:x.index,group:x.group,profile:state.profile,expected:a[x.index]??null});pickerFocus({role:x.role,group:x.group,index:Math.min(x.index,a.length-1)});return;}
+  const prior=previous?.effort||'',old=carryEffort(prior,route);a[x.index]=route+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();
+  if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');
  }
  // Focus goes back to what opened the menu: the ⋯ key for CUT tools, the CUT (or socket) for the quick pick.
  function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(!restore||!x)return;const more=x.actionsOnly&&[...win.querySelectorAll(`[${x.thinking?'data-effort-role':'data-slot-actions'}="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);if(more)more.focus({preventScroll:true});else pickerFocus(x);}
@@ -712,7 +738,7 @@
  root.addEventListener('click',e=>{if(e.target.closest('.menu--tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
  root.addEventListener('click',e=>{if(e.target.closest('.dock__menu .menu button'))win.querySelector('.dock__menu')?.removeAttribute('open');},true);
  root.addEventListener('toggle',e=>{const menu=e.target;if(menu.matches?.('.dock__menu')&&menu.open&&(!menu.contains(document.activeElement)||document.activeElement.matches('summary'))){menu.querySelector('.menu')?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});menu.querySelector('[role=menuitem]:not(:disabled)')?.focus({preventScroll:true});}},true);
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.effortRole){const x=state.picker;if(x?.thinking&&x.role===b.dataset.effortRole&&x.index===Number(b.dataset.index)&&x.group===b.dataset.group)closePicker();else openPicker(b.dataset.effortRole,b.dataset.index,b.dataset.group,b,true,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const prior=previous?.effort||'',old=carryEffort(prior,b.dataset.pick);a[x.index]=b.dataset.pick+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.effortRole){const x=state.picker;if(x?.thinking&&x.role===b.dataset.effortRole&&x.index===Number(b.dataset.index)&&x.group===b.dataset.group)closePicker();else openPicker(b.dataset.effortRole,b.dataset.index,b.dataset.group,b,true,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){pickCut(state.picker,b.dataset.pick);return;}
 
  const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;state.opFeedback='Чернетку '+prettyProfile(state.profile)+' скинуто · можна скасувати ↶';render();win.querySelector('.dock__menu summary')?.focus({preventScroll:true});}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('#picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('#picker-results').scrollTop=offset;}if(a==='picker-clear'){state.picker.query='';state.picker.limit=20;render();win.querySelector('#picker-search')?.focus({preventScroll:true});}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(a==='set-effort'){const x=state.picker,list=x&&chain(x.role,x.group);if(!list?.[x.index])return;list[x.index]=split(list[x.index]).raw+(b.dataset.value?':'+b.dataset.value:'');setChain(x.role,list,x.group);closePicker();return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){turnCatalogPage(a==='next-page'?1:-1,a);}if(a==='provider-add')openForm('provider',{editProvider:null});if(a==='provider-create'){await saveProvider();}
 
@@ -859,7 +885,7 @@
    if(!same&&routeWarning(split(route).raw)){notify('Цей маршрут зараз недоступний.');return;}
    const list=ManaOperator.transferCut(sourceList,chain(role,group),d.index,index,same),limit=group==='pool'?Infinity:group==='alternatives'?12:group==='vibe'?30:31;
    if(list.length>limit){notify('Доріжка вже має максимальну кількість CUTS.');return;}
-   if(setChain(role,list,group,same?{moved:list.indexOf(route)}:{inserted:list.indexOf(route)})){focus={role,group,index:list.indexOf(route)};if(!same)state.opFeedback=withNotes('Скопійовано CUT → '+role+(chainNotes.some(n=>n.startsWith('thinking прибрано'))?'':' · thinking збережено'));}
+   if(setChain(role,list,group,same?{moved:list.indexOf(route)}:{inserted:list.indexOf(route)})){focus={role,group,index:list.indexOf(route)};if(!same){const pool=poolNames[poolName(route)];state.opFeedback=withNotes('Скопійовано '+(pool||'CUT')+' → '+role+(pool||!split(route).effort||chainNotes.some(n=>n.startsWith('thinking прибрано'))?'':' · thinking збережено'));}}
   }
   render();pickerFocus(focus);
  }
@@ -871,7 +897,8 @@
  }
  root.addEventListener('pointerdown',e=>{
   suppressClipClick=false;
-  if(drag||e.button!==0||e.pointerType==='touch'||state.saving||e.target.closest('select,.cut__think,.cut__more,[data-knob],.tray__grip'))return;
+  // Only the lane's thinking key is a control; the thinking printed on a drawer CUT is part of the CUT (F8).
+  if(drag||e.button!==0||e.pointerType==='touch'||state.saving||e.target.closest('select,button.cut__think,.cut__more,[data-knob],.tray__grip'))return;
   const lane=e.target.closest('[data-node-role]'),cut=lane?null:e.target.closest('[data-cut],[data-cut-route]');
   if(lane&&!state.picker)drag={kind:'clip',node:lane,role:lane.dataset.nodeRole,index:Number(lane.dataset.index),group:lane.dataset.group};
   else if(cut&&!cut.disabled)drag={kind:'cut',node:cut,key:cut.dataset.cut,route:cut.dataset.cutRoute};
@@ -936,6 +963,14 @@
   editHistory.rebase(name,entry=>rebaseValue(old,next,entry,mode==='theirs'?'theirs':'mine').value);
   original[name]=copy(next);profiles[name]=value;staleDrafts.delete(name);return [];
  }
+ // «FREE GOOD: curator, агент scout» — the pool blocks an adoption keeps or turns into the file's own CUTS.
+ function adoptPoolNote(plan,error){
+  if(error)return '<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Не вдалося перевірити блоки FREE-пулів ('+esc(error)+'). Блок, який файл не повторює дослівно, стане окремими CUTS.</span></div>';
+  const where=k=>k.startsWith('role:')?k.slice(5):k.startsWith('vibe:')?'агент '+k.slice(5):'резерви default',list=items=>{const by=new Map();for(const k of items){const pool=poolNames[k.pool]||k.pool;if(!by.has(pool))by.set(pool,new Set());by.get(pool).add(where(k.key));}return [...by].map(([pool,at])=>pool+': '+[...at].join(', ')).join(' · ');};
+  return (plan?.lost?.length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Файл уже не повторює дослівно ці блоки пулів, тож вони стануть окремими CUTS із файлу — '+esc(list(plan.lost))+'.</span></div>':'')+(plan?.kept?.length?'<div class="msg" data-s="ok">'+led(true,'green')+'<span>Лишаються блоками пулів — '+esc(list(plan.kept))+'.</span></div>':'');
+ }
+ // «2 зміни: composer · основна, judge · резерви» — what an unsaved draft of this profile holds.
+ function draftSummary(name){const changes=diff(name);if(!changes.length)return '';const labels=[...new Set(changes.map(c=>pathLabel(c.path)))];return changes.length+' '+plural(changes.length,'зміна','зміни','змін')+': '+labels.slice(0,3).join(', ')+(labels.length>3?' і ще '+(labels.length-3):'');}
  function pathLabel([a,b,c]){return a==='modelRoles'?b+' · основна':a==='retry'?c+' · резерви':a==='task'?'агент '+c:a==='disabledProviders'?'провайдери профілю':a==='forgeMode'?'режим DeepSeek':[a,b,c].filter(Boolean).join('.');}
  // Server problems with a code get a clear line instead of the generic «змінились вихідні дані» dialog.
  const PROBLEM_CODES=new Set(['mode-recovery','symlink','mode-conflict']);
@@ -1045,7 +1080,7 @@
    await reload();notify('Збережено · '+(saved.forgeMode.mode==='no-deepseek'?'Без DeepSeek':'З DeepSeek'));
   }catch(e){
    // The file moved on under the draft: rebase it now; only a field changed on both sides asks (QA1 B2).
-   if(e.code==='revision'){try{await reload();}catch{}if(staleDrafts.has(name)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:''});modalFit='';}else notify('Файл змінився поза цим вікном. Чернетку перенесено на актуальний файл: перевір і збережи ще раз.');}
+   if(e.code==='revision'){state.opFeedback='';try{await reload();}catch{}if(staleDrafts.has(name)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:''});modalFit='';}else notify('Файл змінився поза цим вікном. Чернетку перенесено на актуальний файл: перевір і збережи ще раз.');}
    else if(e.status===409&&!PROBLEM_CODES.has(e.code)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:e.message});modalFit='';}else state.error=e.message;render();}
   finally{state.saving=false;render();}
  }
@@ -1067,6 +1102,14 @@
   }
   const unfit=list.find(r=>!poolName(r)&&catalogMap.has(split(r).raw)&&!acceptsRoleModel(role,group,catalogMap.get(split(r).raw)));
   if(unfit){const m=catalogMap.get(split(unfit).raw),vision=group==='pool'?poolVisionLane(role):'';notify(vision?poolNames[role]+' стоїть на доріжці зору ('+vision+'): '+cutTitle(unfit)+' не читає зображень.':cutTitle(unfit)+' не підтримує роль '+(group==='alternatives'?String(role).replace(/^role:/,''):role)+(!readsImages(m)&&acceptsRoleModel(role,group,{...m,input:['image']})?' · потрібен зір':'')+'.');return false;}
+  if(group!=='pool'){
+   // A FREE pool block obeys the lane's rule as a whole, as on the server (F1): every saved member must suit the
+   // role (on a vision lane: read images). A block that already stood on the lane is not judged again.
+   const current=chain(role,group),id=group==='alternatives'?String(role).replace(/^role:/,''):role;
+   for(const token of list){const name=poolName(token);if(!name||current.includes(token))continue;const bad=(source.freePools?.[name]||[]).find(r=>{const m=catalogMap.get(split(r).raw);return m&&!acceptsRoleModel(role,group,m);});if(bad){const m=catalogMap.get(split(bad).raw),vision=!readsImages(m)&&acceptsRoleModel(role,group,{...m,input:['image']});notify(poolNames[name]+(vision?' не стане на доріжку зору '+id+': '+cutTitle(bad)+' не читає зображень.':' не підходить ролі '+id+': '+cutTitle(bad)+' не підтримує цю роль.'));return false;}}
+   // A lane never holds one route twice (F7). Every edit path dedupes; this refuses one that would not.
+   if(group!=='alternatives'){const raws=l=>l.map(r=>poolName(r)?r:split(r).raw),twice=l=>{const a=raws(l);return a.length-new Set(a).size;};if(twice(list)>twice(current)){const seen=new Set(),dup=raws(list).find(r=>seen.has(r)||!seen.add(r));notify((poolNames[poolName(dup)]||cutTitle(dup))+' уже стоїть на цій доріжці.');return false;}}
+  }
   if(group!=='pool')state.poolPanel=false;
   if(group==='pool'){if(list.some(r=>!ManaOperator.isFreeModel(catalogMap.get(split(r).raw)||{}))){notify('До пулу можна додавати лише підтверджені FREE CUTS.');return false;}poolDraft[role]=[...new Map(list.map(v=>[split(v).raw,v])).values()];return true;}
   if(group==='alternatives'){
@@ -1236,11 +1279,12 @@
   const stale=kind==='conflict'&&staleDrafts.get(state.profile);
   if(stale){const fields=stale.conflicts.length?stale.conflicts.map(path=>`<b>${esc(pathLabel(path))}</b>`).join(', '):'';return {title:'Конфлікт із файлом',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<div class="msg" data-s="warn">${led(true,'amber')}<span>Файл профілю ${esc(prettyProfile(state.profile))} змінився після початку цієї чернетки</span></div><p class="print">${fields?'Обидві сторони змінили: '+fields+'. ':''}Решта твоїх змін переноситься на актуальний файл у будь-якому разі. «Лишити мої» бере твої значення цих полів, «Взяти з файлу» — значення з файлу.</p>${formFoot(`${cancel}${key('Експорт чернеток','export-draft')}${key('Взяти з файлу','conflict-theirs')}${key('Лишити мої','conflict-mine','key--action')}${key(led(true,'red')+'Скинути чернетку','conflict-discard','key--danger')}`)}`};}
   if(kind==='conflict')return {title:'Змінились вихідні дані',focus:'[data-action=export-draft]',body:`<div class="msg" data-s="warn">${led(true,'amber')}<span>${esc(state.error||'Конфігурацію змінено зовні.')}</span></div><p class="print">Твоя чернетка лишилась у вікні. Експортуй її перед завантаженням актуального профілю.</p>${formFoot(`${key('Експорт чернеток','export-draft')}${key(led(true,'red')+'Скинути чернетки й оновити','discard-reload','key--danger')}`)}`};
-  if(kind==='history'){const ok=source.restorable.includes(state.profile);return {title:'Попереднє збереження',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Кожне збереження створює резервну копію. Відновлення поверне попередні налаштування та режим DeepSeek профілю <b>${esc(prettyProfile(state.profile))}</b>; поточна версія лишиться в резервних.</p>${ok?'':'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Для цього профілю ще немає попередньої версії</span></div>'}${formFoot(`${cancel}${key(led(ok,'amber')+'Відновити попередню','restore-profile','',ok&&!busy?'':'disabled')}`)}`};}
+  // An unsaved draft is named before it is replaced (F4); Undo brings it back after the restore.
+  if(kind==='history'){const ok=source.restorable.includes(state.profile),draft=draftSummary(state.profile);return {title:'Попереднє збереження',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Кожне збереження створює резервну копію. Відновлення поверне попередні налаштування та режим DeepSeek профілю <b>${esc(prettyProfile(state.profile))}</b>; поточна версія лишиться в резервних.</p>${ok&&draft?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Незбережену чернетку ('+esc(draft)+') замінить відновлена версія. ↶ Undo поверне чернетку.</span></div>':''}${ok?'':'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Для цього профілю ще немає попередньої версії</span></div>'}${formFoot(`${cancel}${key(led(ok,'amber')+'Відновити попередню','restore-profile','',ok&&!busy?'':'disabled')}`)}`};}
   if(kind==='rename')return {title:'Перейменувати котушку',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="rename-form" class="form form--one" novalidate>${formField('name','Нова назва',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.renameName??state.profile)}">`,{note:profileNameHint(state.renameName??state.profile,true),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Збереження…':'Перейменувати','rename-confirm','key--action',state.profileBusy?'disabled':'')}`,'Налаштування та чернетка збережуться')}</form>`};
   if(kind==='delete-profile')return {title:'Видалити котушку',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Профіль <b>${esc(prettyProfile(state.profile))}</b> зникне зі списку й не буде доступний для нових запусків OMP. Збережена версія лишиться в резервній копії.</p>${diff(state.profile).length?'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Незбережену чернетку цього профілю також буде видалено</span></div>':''}${formFoot(`${cancel}${key(led(true,'red')+(state.profileBusy?'Видалення…':'Видалити профіль'),'delete-confirm','key--danger',state.profileBusy?'disabled':'')}`)}`};
   if(kind==='clone')return {title:'Копія котушки',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="clone-form" class="form form--one" novalidate>${formField('name','Назва нового профілю',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.cloneName||'')}" placeholder="Standard FreeTier">`,{note:profileNameHint(state.cloneName||''),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Створення…':'Створити','clone-create','key--action',state.profileBusy?'disabled':'')}`,'Копіюється збережена конфігурація '+esc(prettyProfile(state.profile))+'; спершу збережи чернетку, якщо вона потрібна')}</form>`};
-  if(kind==='confirm'){const c=state.confirm||{};return {title:c.title||'Підтвердження',sub:c.sub||'',focus:'[data-action=confirm-cancel]',body:`<p class="print">${c.text||''}</p>${formFoot(`${key('Скасувати','confirm-cancel')}${key((c.danger?led(true,'red'):'')+esc(c.label||'Підтвердити'),'confirm-run',c.danger?'key--danger':'key--action',busy?'disabled':'')}`)}`};}
+  if(kind==='confirm'){const c=state.confirm||{};return {title:c.title||'Підтвердження',sub:c.sub||'',focus:'[data-action=confirm-cancel]',body:`<p class="print">${c.text||''}</p>${c.pending?'<div class="msg">'+led(false)+'<span>Перевіряю блоки FREE-пулів…</span></div>':c.note||''}${formFoot(`${key('Скасувати','confirm-cancel')}${key((c.danger?led(true,'red'):'')+esc(c.label||'Підтвердити'),'confirm-run',c.danger?'key--danger':'key--action',busy||c.pending?'disabled':'')}`)}`};}
   return {title:'',body:'',focus:''};
  }
  function formSpecFocus(){return state.modal?formSpec().focus:'';}
@@ -1322,7 +1366,7 @@
  function screenHead(r,name,mode=''){const stale=r.at&&r.stale;return `<div class="g-head"><span class="g-name" title="${esc(name)}">${esc(name)}</span><span class="g-age${stale?' is-stale':''}" title="${esc(timeLabel(r.at))}"><span data-age="${r.at||0}"></span>${stale?' · застаріло △':''}</span><span class="g-grow"></span>${mode||'<span class="g-reels" aria-hidden="true"><i></i><i></i></span>'}</div>`;}
  const winsMarkup=(r,name)=>r.limits.length?`<div class="wins">${r.limits.map(l=>winCell(l,r,name)).join('')}</div>`:`<div class="g-empty"><span class="g-empty__glyph">∅</span><span>Ще немає вимірів</span></div>`;
  const screenId=r=>r.provider==='@tariff'?'tariff':'quota:'+r.provider+':'+r.account;
- function screenLegend(ds,families){return `<p class="print screen__legend" aria-label="Легенда екранів"><span>+ запас / − перевитрата · % від повного ліміту</span><span>≈ прогноз · ↻ скидання${ds?' · ▨ пік DeepSeek':''}</span>${families?'<span>Anthropic / Google / OpenAI — окремі сімейства Antigravity</span>':''}</p>`;}
+ function screenLegend(ds,families,row=false){return `<p class="print screen__legend${row?' screens__legend':''}" aria-label="Легенда екранів"><span>+ запас / − перевитрата · % від повного ліміту</span><span>≈ прогноз · ↻ скидання${ds?' · ▨ пік DeepSeek':''}</span>${families?'<span>Anthropic / Google / OpenAI — окремі сімейства Antigravity</span>':''}</p>`;}
  function quotaScreen(r,legend){
   const id=screenId(r),name=r.name,def=screenHue(r.provider);
   return `<div class="screen" data-screen="${esc(id)}" data-screen-default="${def}">${glass(screenHead(r,name)+winsMarkup(r,name))}<div class="screen__chin"><span class="screen__id" title="${esc(r.at?r.stale?'Застарілий вимір':'Свіжий вимір':'Немає виміру')}">${led(!!r.at,r.stale?'amber':'green')}<span class="silk">${esc(providerCode(r.provider))}</span></span>${legend||'<span class="strip__grow"></span>'}${hueEncoder(id,name,def)}</div></div>`;
@@ -1347,9 +1391,12 @@
   if(state.view!=='profiles')return [leaf('meters/key',''),leaf('meters/bank',''),leaf('seam:screens','')];
   const {rows,ds}=usageScreens();if(!rows.length&&!ds)return [leaf('meters/key',''),leaf('meters/bank',''),leaf('seam:screens','')];
   let wide=-1;rows.forEach((r,i)=>{if(wide<0||r.limits.length>rows[wide].limits.length)wide=i;});
-  const families=rows.some(r=>r.provider==='google-antigravity'),legend=screenLegend(!!ds,families);
-  const screens=rows.map((r,i)=>leaf('screen:'+screenId(r),quotaScreen(r,i===wide?legend:'')));
+  // The legend sits in the chin of the widest bank when that chin has room (three windows or more); a narrower bank
+  // would push it over its neighbour (final QA P1-2), so it then prints as its own row under the banks.
+  const families=rows.some(r=>r.provider==='google-antigravity'),inChin=wide>=0&&rows[wide].limits.length>=3,legend=screenLegend(!!ds,families,!inChin);
+  const screens=rows.map((r,i)=>leaf('screen:'+screenId(r),quotaScreen(r,inChin&&i===wide?legend:'')));
   if(ds)screens.push(deepSeekScreen(ds));
+  if(!inChin&&rows.length)screens.push(leaf('meters/legend',legend));
   return [leaf('meters/key',rows.length?`<button type="button" class="key key--wide screens__key" data-action="meters-mobile" aria-expanded="${!!state.mobileMeters}" aria-controls="meter-bank"><span class="key__cap"><span class="key__lbl">${led(false,'green',' data-latch')}Ліміти</span><span class="rd" style="--rd:2ch">${rows.length}</span></span></button>`:''),
    box('meters/bank',`<section class="screens" id="meter-bank" aria-label="Панель підписок: залишки, скидання та темп" data-mobile-expanded="${!!state.mobileMeters}">`,screens),leaf('seam:screens','<div class="seam"></div>')];
  }
@@ -1582,7 +1629,7 @@
   if(!setChain(role,list,group,existing>=0||sequence?{inserted:at}:{}))return;
   if(narrowSurface())state.cuts=false;
   if(sequence)state.editorMsg=(existing>=0?'Переставлено · ':'Вставлено · ')+name+' · '+String(at+1).padStart(2,'0');
-  else state.opFeedback=withNotes((existing>=0?'Переставлено ':'Вставлено ')+(poolName(route)?name:short(split(route).id)+' · '+providerName(split(route).provider))+' → '+role+(old?.effort&&!effort&&existing<0&&!poolName(route)&&!thinkingOff(role,group)?' · thinking → типово':''));
+  else state.opFeedback=withNotes((existing>=0?'Переставлено ':'Вставлено ')+(poolName(route)?name:cutTitle(route)+' · '+providerName(split(route).provider))+' → '+role+(old?.effort&&!effort&&existing<0&&!poolName(route)&&!thinkingOff(role,group)?' · thinking → типово':''));
   render();if(narrowSurface()){pickerFocus({role,index:sequence?at:index,group});scrollToControl(document.activeElement);}
  }
  function contextTokens(n){return n>=1e6?num(n/1e6)+'M':num(n/1e3)+'K';}
@@ -2072,13 +2119,18 @@
     }finally{state.profileBusy=false;}
    }
    // The history drawer is the confirmation itself: its key restores at once.
-   if(action==='restore-profile'){if(state.profileBusy)return;state.profileBusy=true;render();try{await api('/api/profile-action',{action:'restore',profile:state.profile,revision:source.revisions[state.profile]});profiles[state.profile]=copy(original[state.profile]);editHistory.profiles.delete(state.profile);state.poolPanel=false;state.modal=null;state.opFeedback='';await reload();notify('Попередню версію відновлено');}finally{state.profileBusy=false;if(state.modal)render();}}
+   // The restored file replaces the draft, but the draft is one Undo step away (F4): Undo shows it again over the
+   // restored version, and saving it brings it back.
+   if(action==='restore-profile'){if(state.profileBusy)return;state.profileBusy=true;render();try{const name=state.profile,draft=diff(name).length?copy(profiles[name]):null;await api('/api/profile-action',{action:'restore',profile:name,revision:source.revisions[name]});profiles[name]=copy(original[name]);state.poolPanel=false;state.modal=null;state.opFeedback='';await reload();if(profiles[name])editHistory.reset(name,profiles[name],false,draft?[draft]:[]);if(draft)state.opFeedback='Попередню версію відновлено · незбережену чернетку повертає ↶';render();notify('Попередню версію відновлено');}finally{state.profileBusy=false;if(state.modal)render();}}
    if(action==='delete-provider'){const v=source.providers.find(x=>x.id===state.editProvider);askConfirm({action:'delete-provider',back:'provider',danger:true,title:'Видалити підключення',sub:providerName(state.editProvider),label:'Видалити підключення',text:`Підключення <b>${esc(v?.name||state.editProvider)}</b> зникне з каталогу. Якщо його моделі є в профілях, видалення буде заблоковано, а профілі не зміняться.`});}
 
    if(action==='clear-error'){state.error='';render();}
    // «Прийняти файл»: accept a profile file as it is now after an outside edit (or forget a removed one). The file
    // is never rewritten; its former version stays restorable.
-   if(action==='adopt-profile'){const name=b.dataset.adopt,orphan=source.modeOrphans?.includes(name);askConfirm({action:'adopt-profile',profile:name,title:orphan?'Прийняти видалення':'Прийняти файл',sub:prettyProfile(name),label:orphan?'Забути запис режиму':'Прийняти файл як є',text:orphan?`Файл профілю <b>${esc(prettyProfile(name))}</b> уже видалено поза Mana Tape. Mana Tape забуде запис його режиму; копія запису лишиться в резервних.`:`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape. Прийняти його як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».`});return;}
+   // The confirmation names every FREE pool block the file no longer repeats exactly: it becomes the file's own
+   // CUTS (F5). The key waits for that answer; a failed check says so and still lets the owner accept.
+   if(action==='adopt-profile'){const name=b.dataset.adopt,orphan=source.modeOrphans?.includes(name),spec={action:'adopt-profile',profile:name,title:orphan?'Прийняти видалення':'Прийняти файл',sub:prettyProfile(name),label:orphan?'Забути запис режиму':'Прийняти файл як є',pending:!orphan,text:orphan?`Файл профілю <b>${esc(prettyProfile(name))}</b> уже видалено поза Mana Tape. Mana Tape забуде запис його режиму; копія запису лишиться в резервних.`:`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape. Прийняти його як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».`};askConfirm(spec);
+    if(!orphan){let plan=null,error='';try{plan=await api('/api/profile-action',{action:'adopt-plan',profile:name});}catch(err){error=err.message;}if(state.confirm!==spec)return;spec.pending=false;spec.note=adoptPoolNote(plan,error);modalFit='';regions.invalidate('drawer/form');render();}return;}
    if(action==='discard-reload')askConfirm({action:'discard-reload',back:'conflict',danger:true,title:'Скинути чернетки',label:'Скинути й оновити',text:'Усі незбережені чернетки профілів і пулів у цьому вікні буде скинуто, а поточні файли — завантажено заново. Експорт чернеток доступний до цього кроку.'});
    if(action==='export-draft'){const drafts=Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:baseRevision(k),changes:diff(k)}]));if(poolsDirty())drafts['@free-pools']={revision:poolRevision,pools:poolDraft};const blob=new Blob([JSON.stringify(drafts,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   }catch(err){if(state.modal){state.modalError=err.message;state.modalCode=errorCode(err);regions.invalidate('drawer/form');}else state.error=err.message;render();}

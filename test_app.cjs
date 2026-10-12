@@ -19,10 +19,10 @@ function roleContext(context){
  return context;
 }
 // The real lane-edit path: setChain with OFF routing, agent aliases, default inheritance and agent sync.
-const CHAIN=['workers','agentValues','agentLink','vibeAlias','aliasRole','resolveAlias','baseChain','inheritsDefault','oldSetChain','agentFromResolved','writeAgent','thinkingOff','withNotes','setChain','syncAgentTails','applyModeEdit','modeList','modeScope'];
+const CHAIN=['workers','agentValues','agentLink','vibeAlias','aliasRole','resolveAlias','baseChain','inheritsDefault','oldSetChain','agentFromResolved','writeAgent','thinkingOff','withNotes','setChain','syncAgentTails','applyModeEdit','modeList','modeScope','chain'];
 function chainContext(context,extra=[]){
  const notices=context.notices||[];
- Object.assign(context,{notices,chainNotes:[],notify:context.notify||(s=>notices.push(s)),projectionPending:context.projectionPending||(()=>false),modeView:context.modeView||(()=>null),
+ Object.assign(context,{notices,chainNotes:[],notify:context.notify||(s=>notices.push(s)),projectionPending:context.projectionPending||(()=>false),modeView:context.modeView||(()=>null),poolNames:context.poolNames||{'free-good':'FREE GOOD','free-fast':'FREE FAST'},cutTitle:context.cutTitle||(r=>r),
   deepseek:context.deepseek||(r=>/deepseek/.test(r)&&!/free/.test(r)),state:{syncVibe:true,...context.state}});
  roleContext(context);
  runInNewContext([...CHAIN,...extra].filter(name=>!Object.hasOwn(context,name)).map(appFunction).join('\n'),context);
@@ -159,7 +159,7 @@ test('save replaces a queued preview even when a changed token requires another 
 test('linked agents show role inheritance instead of pretending a primary pool is a startup list',()=>{
  const profile={modelRoles:{reader:'mana-pool/free-fast'},retry:{modelFallback:true},task:{agentModelOverrides:{reviewer:'@reader',scout:['@reader'],external:'@advisor',task:['@reader','p/backup']}}};
  const context=roleContext({p:()=>profile,roleKeys:['reader'],esc:s=>s,tool:()=>'',poolName:r=>r==='mana-pool/free-fast'?'free-fast':undefined});
- runInNewContext(['led','key','agentValues','agentLink','agentTier','agentName','agentKey','agentRemove','patchKey','agentLinkedTrack'].map(appFunction).join('\n'),context);
+ runInNewContext(['led','key','agentValues','agentLink','agentTier','agentSub','agentName','agentKey','agentRemove','patchKey','agentLinkedTrack'].map(appFunction).join('\n'),context);
  for(const worker of ['reviewer','scout']){
   const html=context.agentLinkedTrack(worker);
   assert.match(html,/Успадковує @reader/);assert.match(html,/Основна й резерви ролі/);
@@ -378,7 +378,7 @@ test('built-in agents display native defaults without materializing override lis
  const builtinAgents=[{id:'scout',model:'@smol',description:'Read only'},{id:'security-reviewer',model:null},{id:'task',model:'@task'}];
  const profile={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{custom:['p/unknown']}}},before=JSON.stringify(profile);
  const context=roleContext({source:{agents:builtinAgents},p:()=>profile,roleKeys:['smol','task'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
- context.chainNotes=[];runInNewContext(['led','workers','agentValues','agentTier','agentName','agentKey','patchKey','socketKey','agentDefaultTrack','aliasRole','resolveAlias','baseChain','vibeAlias','oldSetChain','agentFromResolved','writeAgent'].map(appFunction).join('\n'),context);
+ context.chainNotes=[];runInNewContext(['led','workers','agentValues','agentTier','agentSub','agentName','agentKey','patchKey','socketKey','agentDefaultTrack','aliasRole','resolveAlias','baseChain','vibeAlias','oldSetChain','agentFromResolved','writeAgent'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.workers()),['scout','security-reviewer','task','custom']);
  const html=context.agentDefaultTrack('scout');
  assert.match(html,/<div class="leader"[^>]*><b>Типово в OMP<\/b>/,'leader tape, not a CUT');assert.doesNotMatch(html,/class="cut/);
@@ -454,7 +454,7 @@ test('custom agents show their source, own model default and remain removable wh
   {id:'reviewer',model:'@slow',description:'Custom reviewer',source:'project',overrides:true}];
  const profile={modelRoles:{slow:'p/slow'},retry:{fallbackChains:{}},task:{agentModelOverrides:{gone:['p/old']}}};
  const context=roleContext({source:{agents},p:()=>profile,roleKeys:['slow','smol'],esc:s=>String(s??''),tool:(txt,act,cl,attr)=>`<button ${attr}>${txt}</button>`});
- runInNewContext(['led','key','workers','agentValues','agentTier','agentName','agentKey','agentRemove','patchKey','socketKey','agentDefaultTrack'].map(appFunction).join('\n'),context);
+ runInNewContext(['led','key','workers','agentValues','agentTier','agentSub','agentName','agentKey','agentRemove','patchKey','socketKey','agentDefaultTrack'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.workers()),['scout','designer','helper','reviewer','gone']);
  assert.match(context.agentName('designer'),/проєкт/);assert.match(context.agentName('helper'),/користувач/);
  assert.doesNotMatch(context.agentName('scout'),/проєкт|користувач/);assert.match(context.agentName('reviewer'),/замінює штатного/);
@@ -915,6 +915,7 @@ function laneContext(chains,open=[]){
  runInNewContext(['led','plural','socketKey','laneKey','graphRow','laneGroups','foldOf','foldOpen','laneGraph','leaf','box'].map(appFunction).join('\n'),context);
  return context;
 }
+const laneRows=tree=>tree.children;
 
 test('an unconfigured role is leader tape with a socket, never a CUT',()=>{
  const context=laneContext({default:[],slow:[],composer:['p/a']});
@@ -931,20 +932,21 @@ test('a run of three or more inherited lanes folds into one printed row; default
  let context=laneContext({default:[],smol:[],slow:[],vision:[],plan:[],composer:['p/a'],tiny:[],task:[],judge:['p/b']});
  assert.deepEqual(JSON.parse(JSON.stringify(context.laneGroups())),[{role:'default'},{fold:['smol','slow','vision','plan']},{role:'composer'},{role:'tiny'},{role:'task'},{role:'judge'}]);
  assert.equal(context.foldOf('vision'),'smol');assert.equal(context.foldOf('tiny'),'');
- let tree=context.laneGraph(),keys=Array.from(tree.children,c=>c.key);
+ let tree=context.laneGraph(),keys=Array.from(laneRows(tree),c=>c.key);
  assert.deepEqual(keys,['p/row:default','p/fold:smol','p/foldlanes:smol','p/row:composer','p/row:tiny','p/row:task','p/row:judge']);
- const row=tree.children[1].html,lanes=tree.children[2];
+ const row=laneRows(tree)[1].html,lanes=laneRows(tree)[2];
  assert.match(row,/data-fold-toggle="smol" aria-expanded="false"/);assert.match(row,/02–05/);assert.match(row,/Показати <span class="rd"[^>]*>4<\/span>/);assert.match(row,/smol · slow · vision · plan/);
  assert.match(lanes.open,/class="fold__lanes" id="fold-smol"/);assert.deepEqual(Array.from(lanes.children,c=>c.key),['p/row:smol','p/row:slow','p/row:vision','p/row:plan'],'folded lanes stay real lanes (sockets, focus)');
  context=laneContext({default:[],smol:[],slow:[],vision:[],composer:['p/a']},['smol']);
  tree=context.laneGraph();
- assert.match(tree.children[2].open,/fold__lanes is-open/,'an opened fold is remembered');assert.match(tree.children[1].html,/aria-expanded="true"/);assert.match(tree.children[1].html,/Сховати/);
+ assert.match(laneRows(tree)[2].open,/fold__lanes is-open/,'an opened fold is remembered');assert.match(laneRows(tree)[1].html,/aria-expanded="true"/);assert.match(laneRows(tree)[1].html,/Сховати/);
  // QA1 B6: an assignment in the middle of an open run splits it; both halves stay open (no lanes vanish under the hand).
  const chains={default:[],a:[],b:[],c:[],d:[],e:[],f:[],g:[],composer:['p/a']},openLanes=['a','b','c','d','e','f','g'];
  context=laneContext(chains,openLanes);chains.d=['p/x'];tree=context.laneGraph();
- assert.deepEqual(Array.from(tree.children,c=>c.key),['p/row:default','p/fold:a','p/foldlanes:a','p/row:d','p/fold:e','p/foldlanes:e','p/row:composer']);
- assert.match(tree.children[2].open,/is-open/);assert.match(tree.children[5].open,/is-open/,'the split-off run inherits the open state');
+ assert.deepEqual(Array.from(laneRows(tree),c=>c.key),['p/row:default','p/fold:a','p/foldlanes:a','p/row:d','p/fold:e','p/foldlanes:e','p/row:composer']);
+ assert.match(laneRows(tree)[2].open,/is-open/);assert.match(laneRows(tree)[5].open,/is-open/,'the split-off run inherits the open state');
 });
+
 
 test('the transport lives on the drawer front only, with its scope; the dock has no Undo, Redo or Save',()=>{
  const SVG={undo:'',redo:'',close:'',more:'',search:'',refresh:''};
@@ -1291,4 +1293,108 @@ test('QA4 P0-1: thinking on a CUT is one key, not a native select per CUT',()=>{
  assert.match(context.thinkSelect({effort:'',raw:'p/m'},'composer',0,'role','x'),/>типово</);
  assert.equal(context.thinkSelect({effort:'',raw:'p/m'},'judge',0,'role','x'),'','a role without thinking has no key');
  assert.doesNotMatch(source,/<select class="cut__think"/);
+});
+
+const splitEffort=r=>{const m=String(r).match(/:(off|low|high)$/);const raw=m?r.slice(0,-m[0].length):r;return {raw,provider:raw.split('/')[0],id:raw.split('/')[1],effort:m?.[1]||''};};
+const poolOf=r=>String(r).startsWith('mana-pool/')?r.slice(10):undefined;
+
+test('final QA F7: a quick pick never puts one route twice on a lane; the CUT moves to the picked place',()=>{
+ const profile={modelRoles:{composer:'p/ds:high',smol:'p/a'},retry:{fallbackChains:{composer:['p/atlas:high','mana-pool/free-good'],default:['p/b','p/c']}},task:{agentModelOverrides:{}}},focus=[];
+ const context=chainContext({p:()=>profile,builtinRoles:[{id:'default'},{id:'composer'},{id:'smol'}],split:splitEffort,poolName:poolOf,
+  state:{profile:'standard',picker:{role:'composer',index:0,group:'role'}},catalogMap:new Map(),source:{agents:[],freePools:{'free-good':['p/f1']}},
+  modeOff:()=>false,routeWarning:()=>false,narrowSurface:()=>false,providerName:s=>s,render:()=>{},closePicker:()=>{context.state.picker=null;},pickerFocus:x=>focus.push(x)},
+  ['acceptsRoleModel','readsImages','visionRole','carryEffort','commitCut','pickCut']);
+ // Composer [deepseek, atlas, FREE GOOD]: picking Atlas for CUT 1 moves Atlas (with its thinking) to the front.
+ context.pickCut(context.state.picker,'p/atlas');
+ assert.deepEqual([profile.modelRoles.composer,...profile.retry.fallbackChains.composer],['p/atlas:high','p/ds:high','mana-pool/free-good']);
+ assert.match(context.state.opFeedback,/^Переставлено p\/atlas/);assert.deepEqual({...focus.at(-1)},{role:'composer',group:'role',index:0});
+ // An inherited default fallback is not copied next to itself (sparse demo: smol [cut-b, cut-b, cut-c]).
+ context.state.picker={role:'smol',index:0,group:'role'};context.pickCut(context.state.picker,'p/b');
+ assert.deepEqual([profile.modelRoles.smol,...profile.retry.fallbackChains.smol],['p/b','p/a','p/c']);
+ // The socket with a route already on the lane moves it to the end instead of appending a copy.
+ context.state.picker={role:'smol',index:3,group:'role'};context.pickCut(context.state.picker,'p/b');
+ assert.deepEqual([profile.modelRoles.smol,...profile.retry.fallbackChains.smol],['p/a','p/c','p/b']);
+ // A new route still replaces the CUT in place.
+ context.state.picker={role:'smol',index:1,group:'role'};context.pickCut(context.state.picker,'p/new');
+ assert.deepEqual([profile.modelRoles.smol,...profile.retry.fallbackChains.smol],['p/a','p/new','p/b']);
+ // Any other path that would add a second copy is refused with a line, and nothing changes.
+ assert.equal(context.setChain('smol',['p/a','p/new','p/b','p/a:high']),false);
+ assert.match(context.notices.at(-1),/p\/a уже стоїть на цій доріжці/);
+ assert.deepEqual([profile.modelRoles.smol,...profile.retry.fallbackChains.smol],['p/a','p/new','p/b']);
+ assert.match(source,/if\(b\.dataset\.pick\)\{pickCut\(state\.picker,b\.dataset\.pick\);return;\}/,'the quick-pick key goes through pickCut');
+});
+
+test('final QA F1: a FREE pool block obeys the vision rule of its lane before it lands; the line names a block, not thinking',()=>{
+ const profile={modelRoles:{vision:'p/eye',plan:'p/a'},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}};
+ const catalogMap=new Map([['p/eye',{input:['text','image']}],['p/f1',{input:['text','image']}],['p/f2',{input:['text']}],['p/a',{input:['text']}]]);
+ const context=chainContext({p:()=>profile,builtinRoles:[{id:'vision'},{id:'plan'}],catalogMap,poolName:poolOf,split:splitEffort,original:{},profiles:{},poolToken:n=>'mana-pool/'+n,
+  source:{agents:[],ui:{visionRoles:['vision']},freePools:{'free-good':['p/f1'],'free-fast':['p/f1','p/f2']}}},['acceptsRoleModel','readsImages','visionRole','poolVisionLane']);
+ assert.equal(context.setChain('vision',['p/eye','mana-pool/free-fast']),false);
+ assert.match(context.notices.at(-1),/^FREE FAST не стане на доріжку зору vision: p\/f2 не читає зображень/);
+ assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'vision'),'refused before it lands');
+ assert.equal(context.setChain('vision',['p/eye','mana-pool/free-good']),true);
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.vision),['mana-pool/free-good']);
+ assert.equal(context.setChain('plan',['p/a','mana-pool/free-fast']),true,'a text lane takes the same block');
+ assert.match(appFunction('clipDrop'),/'Скопійовано '\+\(pool\|\|'CUT'\)/);
+ assert.match(appFunction('clipDrop'),/pool\|\|!split\(route\)\.effort/,'a pool block or a CUT without thinking never claims «thinking збережено»');
+});
+
+test('final QA F2: closing Заміни returns focus to the ⇄ key inside the lane that opened it',()=>{
+ const context={CSS:{escape:s=>String(s).replace(/"/g,'\\"')}};
+ runInNewContext(appFunction('trayFocusSelector'),context);
+ const lane={dataset:{role:'writing-team',laneGroup:'vibe'}},agentKey={dataset:{modeScope:'role:composer'},closest:s=>s==='.lane[data-role]'?lane:null};
+ assert.equal(context.trayFocusSelector(agentKey),'.lane[data-role="writing-team"][data-lane-group="vibe"] [data-mode-scope="role:composer"]');
+ assert.equal(context.trayFocusSelector({dataset:{modeScope:'profile'},closest:()=>null}),'[data-mode-scope="profile"]');
+ assert.equal(context.trayFocusSelector({dataset:{poolOpen:'1'}}),'[data-pool-open]');
+});
+
+test('final QA F3 / P1-4: a failed boot keeps the plate, turns only the glass red and prints the server reason',()=>{
+ const context={};runInNewContext(appFunction('bootMessage'),context);
+ assert.equal(context.bootMessage(Object.assign(Error('Невідомий хост'),{status:403,code:''})),'Невідомий хост · HTTP 403');
+ assert.equal(context.bootMessage(Object.assign(Error('Відновлення'),{status:409,code:'mode-recovery'})),'Відновлення · HTTP 409 · mode-recovery');
+ assert.match(context.bootMessage(new DOMException('timeout','TimeoutError')),/^Сервер не відповідає/);
+ const g={innerHTML:''},scr={dataset:{screenDefault:'150'},querySelector:()=>g};let added='',classes=[],busy=true;
+ const plate={querySelector:s=>s==='.screen'?scr:s==='#retry-load'?(added?{}:null):null,removeAttribute:a=>{if(a==='aria-busy')busy=false;},classList:{add:c=>classes.push(c)},insertAdjacentHTML:(_,h)=>{added=h;}};
+ const win={querySelector:s=>s==='.boot'?plate:null};Object.defineProperty(win,'innerHTML',{set(){throw Error('the plate must stay');}});
+ const ui={win,location:{reload(){}},window:{ManaScreen:{sync(){}}}};runInNewContext(appFunction('bootMessage')+'\n'+appFunction('bootFailed'),ui);
+ ui.bootFailed(Object.assign(Error('Невідомий <хост>'),{status:403}));
+ assert.equal(scr.dataset.screenDefault,'27');assert.match(g.innerHTML,/Невідомий &#60;хост&#62; · HTTP 403/);assert.match(g.innerHTML,/відмова сервера/);
+ assert.match(added,/Повторити/);assert.equal(busy,false);assert.deepEqual(classes,['boot--failed']);
+});
+
+test('final QA F4: «Відновити попередню» names the unsaved draft it replaces; Undo brings the draft back',()=>{
+ const context={diff:()=>[{path:['modelRoles','composer']},{path:['retry','fallbackChains','composer']},{path:['modelRoles','plan']}]};
+ runInNewContext(['plural','pathLabel','draftSummary'].map(appFunction).join('\n'),context);
+ assert.equal(context.draftSummary('standard'),'3 зміни: composer · основна, composer · резерви, plan · основна');
+ context.diff=()=>[];assert.equal(context.draftSummary('standard'),'');
+ const restore=source.slice(source.indexOf("if(action==='restore-profile')"),source.indexOf("if(action==='delete-provider')"));
+ assert.match(restore,/draft=diff\(name\)\.length\?copy\(profiles\[name\]\):null/);assert.match(restore,/editHistory\.reset\(name,profiles\[name\],false,draft\?\[draft\]:\[\]\)/);
+ assert.doesNotMatch(restore,/editHistory\.profiles\.delete/,'the history is not wiped');
+ assert.match(source,/Незбережену чернетку \('\+esc\(draft\)\+'\) замінить відновлена версія/);
+});
+
+test('final QA F5: the «Прийняти файл» confirmation waits for and names the pool blocks that become CUTS',()=>{
+ const context={esc:s=>String(s),led:()=>'',poolNames:{'free-good':'FREE GOOD','free-fast':'FREE FAST'}};
+ runInNewContext(appFunction('adoptPoolNote'),context);
+ const note=context.adoptPoolNote({lost:[{key:'role:curator',pool:'free-good'},{key:'vibe:scout',pool:'free-good'},{key:'fallback:default',pool:'free-fast'}],kept:[{key:'role:composer',pool:'free-fast'}]},'');
+ assert.match(note,/стануть окремими CUTS із файлу — FREE GOOD: curator, агент scout · FREE FAST: резерви default/);
+ assert.match(note,/Лишаються блоками пулів — FREE FAST: composer/);
+ assert.equal(context.adoptPoolNote({lost:[],kept:[]},''),'');
+ assert.match(context.adoptPoolNote(null,'HTTP 500'),/Не вдалося перевірити блоки FREE-пулів \(HTTP 500\)/);
+ assert.match(source,/busy\|\|c\.pending\?'disabled':''/,'the confirm key waits for the plan');
+});
+
+test('final QA F6: a truncated role or agent name keeps its full text in the tooltip',()=>{
+ const context={state:{profile:'standard',role:''},source:{presets:{}},labels:{},esc:s=>String(s),led:()=>''};
+ runInNewContext(appFunction('laneKey'),context);
+ assert.match(context.laneKey('very-long-role-name-for-layout-testing',0,true),/title="very-long-role-name-for-layout-testing"/);
+ assert.doesNotMatch(context.laneKey('composer',0,true),/title=/,'a name shown in full gets no tooltip');
+ const agents={esc:s=>String(s),led:()=>'',agentSource:()=>'проєкт',agentTier:()=>'',agentInfo:()=>({overrides:true})};
+ runInNewContext(['agentSub','agentName','agentKey'].map(appFunction).join('\n'),agents);
+ assert.match(agents.agentKey('very-long-agent-name',true,'власний список з 3 CUTS'),/title="very-long-agent-name · проєкт · замінює штатного · власний список · власний список з 3 CUTS"/);
+});
+
+test('final QA F8: a drag can start on the thinking printed on a drawer CUT; only the lane thinking key is excluded',()=>{
+ const down=source.slice(source.indexOf("root.addEventListener('pointerdown',e=>{\n  suppressClipClick=false;"));
+ assert.match(down.slice(0,600),/e\.target\.closest\('select,button\.cut__think,\.cut__more,\[data-knob\],\.tray__grip'\)/);
 });

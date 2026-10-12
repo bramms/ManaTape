@@ -25,7 +25,7 @@ import tempfile
 import threading
 import time
 import traceback
-from profile_modes import (EFFORT, POOL_NAMES, compile_profile, default_settings, is_free_model, pool_name, raw_route,
+from profile_modes import (EFFORT, POOL_NAMES, chain_entries, collapse_pools, compile_profile, default_settings, is_free_model, pool_name, raw_route,
     route_statuses, route_text, tariff_status, thinking_efforts, validate_pools, validate_settings)
 from omp_roles import BUILTIN_ROLES, agent_catalog, accepts_model, fallback_chain
 from insights import Insights
@@ -639,7 +639,8 @@ class Forge:
                 raise Problem('План змінився. Онови заміни, переглянь карту та збережи ще раз.', 409)
             return self.commit_mode(prepared)
 
-    def commit_mode(self, prepared):
+    def commit_mode(self, prepared, dry=False):
+        """Write one profile's logical version and every native file it changes; `dry` only returns those files."""
         name = prepared['name']
         # Profiles changed outside Mana Tape stay byte-for-byte untouched until adopted.
         frozen = set(prepared.get('frozen', ())) - {name}
@@ -664,8 +665,9 @@ class Forge:
         references = {raw_route(member) for ref in references for member in (pools.get(pool_name(ref), []) if pool_name(ref) is not None else [ref])}
         frozen_catalog = prepared.get('catalog', {r: {k: copy.deepcopy(models[r].get(k)) for k in ('id', 'name', 'kind', 'webSearch', 'cost', 'input', 'thinking', 'freeEvidence')} if r in models else None for r in references})
         if not prepared.get('poolsOnly'):
-            # An adopted file keeps its exact text; other saves store the patched logical profile.
-            normal = prepared['text'] if prepared.get('text') is not None else yaml_dump(prepared['normal'])
+            # An adopted file keeps its exact text; other saves (and an adoption that kept pool blocks) store the
+            # patched logical profile.
+            normal = prepared['text'] if prepared.get('text') is not None and not prepared.get('collapsed') else yaml_dump(prepared['normal'])
             records[name] = {**(prior or {}), 'normal': normal, 'settings': settings,
                 'statuses': {r: v for r, v in prepared['statuses'].items() if r in references},
                 'catalog': frozen_catalog, 'previous': previous, 'at': time.time()}
@@ -711,6 +713,9 @@ class Forge:
                     output.setdefault('task', {}).setdefault('agentModelOverrides', {})[worker] = copy.deepcopy(values)
             normal_text = records[n]['normal'] if n in records else before_bytes[n].decode('utf-8')
             rendered = normal_text if plain(output) == plain(overlay) else yaml_dump(output)
+            # An adopted file stays byte for byte when its logical profile writes the same data (F5).
+            if n == name and prepared.get('text') is not None and plain(output) == plain(yaml_load(prepared['text'])):
+                rendered = prepared['text']
             if plain(yaml_load(rendered)) != plain(output):
                 raise Problem('Перевірка YAML не пройдена', 422)
             if n in records or rendered != normal_text:
@@ -726,6 +731,8 @@ class Forge:
         for n, raw in before_bytes.items():
             if n not in frozen and read_or_none(self.path(n)) != raw:
                 raise Problem('Файл змінився під час підготовки. Збереження скасовано.', 409)
+        if dry:
+            return files
         after = {**self.mode_state, 'profiles': records}
         if 'pools' in prepared:
             after['pools'] = pools
@@ -764,12 +771,57 @@ class Forge:
         conflicts = self.mode_conflicts()
         if name != 'standard' and 'standard' in conflicts:
             raise Problem('Спочатку прийми файл Standard: від нього залежать інші профілі.', 409, 'mode-conflict', profiles=conflicts)
-        normal = self.read(path)
-        # The file is taken as written, so DeepSeek is ON; saved replacements stay for the next OFF.
+        prepared, _, _ = self.adoption(name, raw, conflicts)
+        return self.commit_mode(prepared)
+
+    def adoption(self, name, raw, conflicts):
+        """What «Прийняти файл» commits (F5), plus the FREE pool blocks it keeps and the ones that become the file's
+        own CUTS. The file is taken as written, so DeepSeek is ON; saved replacements stay for the next OFF. A pool
+        block stays a block only where the file still holds its exact expansion, and only when the logical profile
+        with the blocks compiles to this very file: the adoption never rewrites the adopted file.
+        """
+        written = self.read(self.path(name))
         settings = {**self.mode_settings(name), 'mode': 'deepseek'}
         statuses = route_statuses(self.mode_catalog(), self.managed)
-        return self.commit_mode({'name': name, 'normal': normal, 'text': raw.decode('utf-8'), 'settings': settings,
-            'statuses': statuses, 'frozen': set(conflicts) - {name}})
+        prepared = {'name': name, 'normal': written, 'text': raw.decode('utf-8'), 'settings': settings,
+            'statuses': statuses, 'frozen': set(conflicts) - {name}}
+        record, pools = self.mode_state['profiles'].get(name), self.pools()
+        if not record or not any(pools.values()):
+            return prepared, [], []
+        logical = yaml_load(record['normal'])
+        inherited = {} if name == 'standard' else self.profiles()[0]
+        _, kept_all, lost_all = collapse_pools(written, logical, pools, inherited)
+        if not kept_all:
+            return prepared, [], lost_all
+        def exact(keys):
+            # The logical profile with these blocks must write this very file again, byte for byte. Dependent
+            # presets then compile from the same logical Standard as before the outside edit.
+            trial = collapse_pools(written, logical, pools, inherited, keys)[0]
+            try:
+                return name not in self.commit_mode({**prepared, 'normal': trial, 'collapsed': True}, dry=True)
+            except (Problem, ValueError, TypeError, KeyError):
+                return False  # The plain adoption then reports the file's own problem.
+        # Normally every block re-expands exactly; otherwise only the chains that do on their own keep theirs.
+        # A chain can change without a block of its own (an @role head folds back, a spelled-out chain goes).
+        before, after = chain_entries(plain(written)), chain_entries(plain(collapse_pools(written, logical, pools, inherited)[0]))
+        keys = sorted({k['key'] for k in kept_all} | {k for k in set(before) | set(after) if before.get(k) != after.get(k)})
+        if not exact(keys):
+            keys = [key for key in keys if exact([key])]
+            if keys and not exact(keys):
+                keys = []
+        if not keys:
+            return prepared, [], lost_all + kept_all
+        candidate, kept, _ = collapse_pools(written, logical, pools, inherited, keys)
+        return {**prepared, 'normal': candidate, 'collapsed': True}, kept, lost_all + [k for k in kept_all if k['key'] not in keys]
+
+    def adopt_plan(self, name):
+        """The pool blocks an adoption keeps and loses, for its confirmation; nothing is written."""
+        path = self.path(name)
+        raw, record = read_or_none(path), self.mode_state['profiles'].get(name)
+        if raw is None or record is None or digest(raw) == record.get('hash'):
+            return {'kept': [], 'lost': []}
+        _, kept, lost = self.adoption(name, raw, self.mode_conflicts())
+        return {'kept': kept, 'lost': lost}
 
     def refs(self, base=None, ps=None):
         if ps is None:
@@ -927,6 +979,8 @@ class Forge:
             name, action = body.get('profile'), body.get('action')
             path = self.path(name)
             # Adopting a file is also how the owner accepts it after an interrupted transaction.
+            if action == 'adopt-plan':
+                return self.adopt_plan(name)
             self.writable({name} if action == 'adopt' else ())
             if action == 'adopt':
                 return self.adopt(name, body)

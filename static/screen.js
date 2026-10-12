@@ -171,11 +171,14 @@ const ManaScreen=(()=>{
  const angles=new Map();   /* encoder angle accumulates, so 359 → 0 turns forward, never spins back */
  function hueOf(id,def){return own(state.screens,id)?state.screens[id].hue:wrapHue(def);}
  function screensById(id){return [...document.querySelectorAll('[data-screen]')].filter(el=>el.dataset.screen===id);}
+ /* the glass window holds the colours: the chin (encoder ticks, LEDs, switches) never reads them, so a turn of a
+    knob restyles only what glows, not the 24 tick lines of every encoder */
+ const glassOf=el=>el.querySelector?.(':scope>.screen__win')||el;
  function paint(el){
   const id=el.dataset.screen;if(!validId(id))return;
-  const h=hueOf(id,el.dataset.screenDefault),k=h+'|'+state.brightness;
-  if(el.__manaScreen===k)return;el.__manaScreen=k;
-  const v=screenVars(palette(h,state.brightness));for(const n in v)el.style.setProperty(n,v[n]);
+  const win=glassOf(el),h=hueOf(id,el.dataset.screenDefault),k=h+'|'+state.brightness;
+  if(win.__manaScreen===k)return;win.__manaScreen=k;
+  const v=screenVars(palette(h,state.brightness));for(const n in v)win.style.setProperty(n,v[n]);
   const near=nearStatus(h);if((el.dataset.near||'')!==near){if(near)el.dataset.near=near;else delete el.dataset.near;}
  }
  function renderHue(k){
@@ -207,10 +210,23 @@ const ManaScreen=(()=>{
   }else{
    const b=clampBrightness(v);if(b===state.brightness)return false;
    state={...state,brightness:b};
-   for(const el of document.querySelectorAll('[data-screen]'))paint(el);
+   if(g&&g.k.dataset.knob==='brightness'){if(!turnRaf)turnRaf=raf(turnStep);}
+   else for(const el of document.querySelectorAll('[data-screen]'))paint(el);
    for(const e of document.querySelectorAll('[data-knob="brightness"]'))renderBrightness(e);
   }
   return true;
+ }
+ /* While the brightness knob turns by hand, the screens follow in turns: each frame repaints the half of them that
+    waited longest, so a frame restyles about half the glass and the knob itself never waits (final QA perf). The
+    gesture's end paints every screen at once with the final value. */
+ let turnRaf=0,turnClock=0;
+ function turnStep(){
+  turnRaf=0;turnClock++;
+  const all=[...document.querySelectorAll('[data-screen]')],stale=[];
+  for(const el of all){const win=glassOf(el),h=hueOf(el.dataset.screen,el.dataset.screenDefault);if(win.__manaScreen!==h+'|'+state.brightness)stale.push([win.__manaTurn||0,el]);}
+  stale.sort((a,b)=>a[0]-b[0]);const n=Math.max(2,Math.ceil(all.length/2));
+  for(const [,el] of stale.slice(0,n)){paint(el);glassOf(el).__manaTurn=turnClock;}
+  if(stale.length>n)turnRaf=raf(turnStep);
  }
  function defaultOf(k){return k.dataset.knob==='hue'?wrapHue(k.dataset.screenDefault):DEFAULT_BRIGHTNESS;}
 
@@ -220,8 +236,9 @@ const ManaScreen=(()=>{
     Pointer moves only store the target; one write per animation frame. */
  let g=null;
  function endGesture(cancel){
-  if(!g)return;const x=g;g=null;caf(x.raf);
+  if(!g)return;const x=g;g=null;caf(x.raf);caf(turnRaf);turnRaf=0;
   if(cancel)setValue(x.k,x.v0);else if(x.next!==null)setValue(x.k,x.next);
+  for(const el of document.querySelectorAll('[data-screen]'))paint(el);   /* screens still waiting for their turn */
   x.k.classList.remove('is-turning');delete root.dataset.displayTuning;
   try{if(x.k.hasPointerCapture(x.id))x.k.releasePointerCapture(x.id);}catch{}
   if(!cancel&&value(x.k)!==x.v0)persist();
@@ -270,7 +287,7 @@ const ManaScreen=(()=>{
  function armWheel(k){if(k.__manaWheel)return;k.__manaWheel=true;k.addEventListener('wheel',onWheel,{passive:false});}
  document.addEventListener('pointerover',e=>{const k=e.target.closest&&e.target.closest('[data-knob]');if(k)armWheel(k);},{passive:true});
  document.addEventListener('dblclick',e=>{const k=e.target.closest&&e.target.closest('[data-knob]');if(k&&setValue(k,defaultOf(k)))persist();});
- addEventListener('storage',e=>{if(e.key!==KEY)return;endGesture(true);state=readStore();for(const el of document.querySelectorAll('[data-screen]'))el.__manaScreen=null;sync();});
+ addEventListener('storage',e=>{if(e.key!==KEY)return;endGesture(true);state=readStore();for(const el of document.querySelectorAll('[data-screen]'))glassOf(el).__manaScreen=null;sync();});
 
  /* ---------- analog toggle (.tgl, role=switch) ----------
     click / Space / Enter flip it; ↑ = on, ↓ = off; a vertical flick of 8px flips it too.
@@ -318,7 +335,7 @@ const ManaScreen=(()=>{
   screens.forEach((s,i)=>{s.style.setProperty('--i',i);s.classList.toggle('is-boot-b',bootParity);s.classList.add('is-booting');});
   for(const m of meters)m.classList.add('is-zero');
   bootFill=setTimeout(()=>{for(const m of meters)m.classList.remove('is-zero');},260);
-  bootOff=setTimeout(()=>{for(const s of screens)s.classList.remove('is-booting','is-boot-b');},1800);
+  bootOff=setTimeout(()=>{for(const s of screens)s.classList.remove('is-booting','is-boot-b');},1100+4*120+100);   /* the longest animation + the capped stagger */
  }
 
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>sync());else sync();

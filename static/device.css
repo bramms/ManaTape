@@ -123,7 +123,7 @@
  --el-recess-1:inset 1px 1px 2px rgb(var(--sh)/calc(.24*var(--sha))),inset -1px -1px 1px var(--bevel-hi),0 1px 0 var(--lip-hi);                   /* key socket, groove */
  --el-recess-2:inset 2px 3px 6px rgb(var(--sh)/calc(.26*var(--sha))),inset 0 1px 1px rgb(var(--sh)/calc(.2*var(--sha))),inset -1px -2px 3px var(--bounce-in),0 1px 0 var(--lip-hi); /* socket, slot, field */
  --el-bay:inset 2px 3px 7px rgb(var(--sh)/calc(.17*var(--sha))),inset 0 1px 1px rgb(var(--sh)/calc(.15*var(--sha))),inset -2px -2px 4px var(--bounce-in);  /* pocket floor */
- --el-tray-cast:0 -14px 30px -8px rgb(var(--sh)/calc(.45*var(--sha))),0 -2px 4px rgb(var(--sh)/calc(.18*var(--sha)));                              /* drawer onto the page */
+ --el-tray-cast:0 -14px 30px -8px rgb(var(--sh)/calc(.36*var(--sha))),0 -2px 4px rgb(var(--sh)/calc(.18*var(--sha)));                              /* drawer onto the page */
  --ring:0 0 0 2px var(--focus),0 0 12px 2px var(--focus-glow);                                                                                   /* focus = an LED ring */
 }
 
@@ -226,6 +226,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .boot .g-head .g-age{margin-left:auto}
 /* while it connects, the tape runs: both reels turn (the small one faster, as on a real transport) */
 .boot .reel{animation:boot-reel 2.4s linear infinite}
+.boot--failed .reel{animation:none}
 .boot .reel--b{animation-duration:1.5s}
 @keyframes boot-reel{to{transform:rotate(360deg)}}
 
@@ -324,6 +325,7 @@ a.key{text-decoration:none}
 .ctl>.silk{font-size:var(--fs-label);letter-spacing:.1em;white-space:nowrap}
 .ctl__read{display:grid;gap:3px;justify-items:end}
 .ctl__read output{font:700 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
+.ctl .rd[data-screen-brightness-out]{min-width:3.2ch}
 /* KNOB / ENCODER — knurl + pointer rotate; light, face and specular stay put */
 .knob{all:unset;position:relative;display:block;width:var(--k,36px);height:var(--k,36px);border-radius:50%;cursor:ns-resize;touch-action:none;-webkit-tap-highlight-color:transparent;flex:none}
 .knob::before{/* ≥ 44px hit area */content:"";position:absolute;inset:calc((var(--k,36px) - 46px)/2);border-radius:50%}
@@ -357,7 +359,8 @@ a.key{text-decoration:none}
    stays top-left. aria-checked=true = lever up. JS: screen.js (click, Space/Enter, ↑/↓, vertical flick). */
 .tgl{all:unset;box-sizing:border-box;position:relative;display:grid;justify-items:center;align-content:center;gap:6px;min-width:var(--hit);min-height:var(--hit);padding:0 3px;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
 .tgl__lab{font:650 var(--fs-label)/1.15 var(--font-sans);letter-spacing:var(--track-silk);text-transform:uppercase;color:var(--silk-2);transition:color var(--t-med);white-space:nowrap}
-.tgl[aria-checked=true] .tgl__lab--on,.tgl[aria-checked=false] .tgl__lab--off{color:var(--ink)}
+.tgl__lab{font-weight:500}
+.tgl[aria-checked=true] .tgl__lab--on,.tgl[aria-checked=false] .tgl__lab--off{color:var(--ink);font-weight:750}
 .tgl__body{position:relative;width:28px;height:28px}
 .tgl__body::before{/* focus ring */content:"";position:absolute;inset:-4px;border-radius:50%;opacity:0;pointer-events:none;box-shadow:0 0 0 2px var(--focus),0 0 12px 3px var(--focus-glow);transition:opacity var(--t-fast)}
 .tgl:focus-visible{outline:none}
@@ -572,21 +575,31 @@ a.key{text-decoration:none}
 @keyframes boot-flicker-b{0%{opacity:0}7%{opacity:.85}11%{opacity:.12}19%{opacity:.75}25%{opacity:.35}42%{opacity:1}100%{opacity:1}}
 @keyframes boot-sweep-b{0%{opacity:0;transform:translateY(-110%)}18%{opacity:1}100%{opacity:0;transform:translateY(320%)}}
 @keyframes boot-spill-b{0%,30%{opacity:0}100%{opacity:calc(var(--spill)*var(--s-spill))}}
-.screen.is-booting .glass__content{animation:boot-flicker 720ms linear both;animation-delay:calc(var(--i,0)*120ms)}
-.screen.is-booting .glass__sweep{animation:boot-sweep 640ms var(--e-io) both;animation-delay:calc(var(--i,0)*120ms + 70ms)}
-.screen.is-booting .screen__win::before{animation:boot-spill 1100ms ease-out both;animation-delay:calc(var(--i,0)*120ms)}
+/* the stagger stops at the fifth screen: with ten banks the last one still powers on within ~0.5 s (final QA P2-3) */
+.screen.is-booting .glass__content{animation:boot-flicker 720ms linear both;animation-delay:calc(min(var(--i,0),4)*120ms)}
+.screen.is-booting .glass__sweep{animation:boot-sweep 640ms var(--e-io) both;animation-delay:calc(min(var(--i,0),4)*120ms + 70ms)}
+.screen.is-booting .screen__win::before{animation:boot-spill 1100ms ease-out both;animation-delay:calc(min(var(--i,0),4)*120ms)}
 .screen.is-booting.is-boot-b .glass__content{animation-name:boot-flicker-b}
 .screen.is-booting.is-boot-b .glass__sweep{animation-name:boot-sweep-b}
 .screen.is-booting.is-boot-b .screen__win::before{animation-name:boot-spill-b}
-.screen__legend{flex:1;display:grid;gap:2px;justify-items:center;text-align:center;margin:0;color:var(--ink-2)}
-.screen__legend>span{white-space:nowrap}
+.screen__legend{flex:1;display:grid;gap:2px;justify-items:center;text-align:center;margin:0;color:var(--ink-2);min-width:0}
+/* a line that does not fit wraps inside its own chin, never over the next bank */
+.screen__legend>span{white-space:normal;text-wrap:balance;max-width:100%}
+/* the legend as its own printed row under the banks (when no bank has room for it in its chin) */
+.screens__legend{flex:1 0 100%;display:flex;flex-wrap:wrap;justify-content:center;gap:2px 18px;margin-top:-6px}
 .screen--wide{width:100%}
 .screen--wide .wins{flex-wrap:wrap}
 .screen--insp .g{max-height:min(72vh,720px);overflow:auto;scrollbar-width:thin}
 /* a head never widens its screen (the windows and the tariff set the width, so a new age text never moves the
    bank): an age that does not fit beside the name takes the next line, the DeepSeek age gives way to the mode */
-.screens .g-head{width:0;min-width:100%;flex-wrap:wrap;row-gap:3px}
-.screens .screen--ds .g-head{flex-wrap:nowrap}
+.screens .g-head{width:0;min-width:100%;flex-wrap:wrap;row-gap:3px;position:relative;padding-right:26px}
+/* the name is never cut for the age: the whole age takes the next line first (final QA P1-3); the reels (or the
+   DeepSeek mode) sit at the right of the first line and keep their place */
+.screens .g-head .g-name{flex:0 1 auto;max-width:100%}
+.screens .g-head .g-age{flex:0 0 auto;max-width:100%;white-space:normal;overflow:visible}
+.screens .g-head>.g-reels{position:absolute;right:0;top:1px}
+.screens .screen--ds .g-head{padding-right:calc(14ch + 8px)}
+.screens .screen--ds .g-head>.g-mode{position:absolute;right:0;top:0}
 /* ON-GLASS PRIMITIVES — emissive text: ink (numbers), acc (labels, segments), dim (secondary) */
 .g{padding:8px 12px 10px;font:400 var(--fs-label)/1.25 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink)}
 .g b,.g strong{font-weight:700}
@@ -734,7 +747,8 @@ a.key{text-decoration:none}
 .g-kv>b{color:var(--s-ink);text-align:right;min-width:6ch;font-variant-numeric:tabular-nums}
 .g-kv--btn{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:6px;min-width:0;min-height:24px;cursor:pointer;border-radius:3px}
 .g-kv--btn:focus-visible{outline:2px solid var(--s-ink);outline-offset:1px}
-.g-kv--btn[aria-current=true]>span:first-child{text-decoration:underline;text-underline-offset:3px}
+.g-kv--btn[aria-current=true]>span:first-child{color:var(--s-ink);text-shadow:0 0 6px rgb(var(--s-ink-c)/var(--s-glow))}
+.g-kv--btn[aria-current=true]>span:first-child::before{content:"▸ "}
 .g-score{position:relative;height:6px;border-radius:1px;background:repeating-linear-gradient(90deg,rgb(var(--s-acc-c)/.16) 0 calc(10% - 1.5px),transparent calc(10% - 1.5px) 10%)}
 .g-score>i{position:absolute;inset:0 auto 0 0;width:calc(var(--v,0)*100%);background:repeating-linear-gradient(90deg,var(--s-acc) 0 calc(var(--seg,10%) - 1.5px),transparent calc(var(--seg,10%) - 1.5px) var(--seg,10%));background-size:calc(100%/max(var(--v,0),.001)) 100%}
 /* toast: a small glass above the drawer lip; amber for refusals */
@@ -764,9 +778,10 @@ a.key{text-decoration:none}
 .lanes{display:flex;flex-direction:column;gap:6px}
 /* a lane off screen is not styled, laid out or painted (content-visibility); its remembered height keeps the scroll
    bar honest. overflow-clip-margin lets the raised shadows, LED halos and focus rings of its keys and CUTs paint
-   16px past the lane, so the containment never clips them. */
+   16px past the lane, so the containment never clips them. A theme switch parks the lanes off screen (theme.js). */
 .lane{display:grid;grid-template-columns:var(--key-w) minmax(0,1fr);gap:10px;position:relative;
  content-visibility:auto;contain-intrinsic-block-size:auto 62px;overflow-clip-margin:16px}
+.lane.is-parked{content-visibility:hidden}
 .lane--inherit{contain-intrinsic-block-size:auto 46px}
 /* lane key: printed key-label — index, native role id, LED (green own CUTS · blue agent's own list · off = OMP default) */
 .lane__key{all:unset;box-sizing:border-box;position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;min-height:44px;padding:0 12px;border-radius:var(--r-md);cursor:pointer;
@@ -778,7 +793,8 @@ a.key{text-decoration:none}
 .lane--inherit .lane__key{background:linear-gradient(180deg,var(--pocket-hi),var(--pocket));box-shadow:var(--el-recess-1)}
 .lane--inherit .lane__name{color:var(--ink-2)}
 .lane__groove{position:relative;display:flex;align-items:center;min-height:62px;padding:5px 8px;border-radius:var(--r-md);overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;
- background:linear-gradient(180deg,transparent 0 6px,var(--rail) 6px 7px,transparent 7px calc(100% - 7px),var(--rail) calc(100% - 7px) calc(100% - 6px),transparent 0),linear-gradient(180deg,var(--groove-hi),var(--groove));
+ --groove-bg:linear-gradient(180deg,transparent 0 6px,var(--rail) 6px 7px,transparent 7px calc(100% - 7px),var(--rail) calc(100% - 7px) calc(100% - 6px),transparent 0),linear-gradient(180deg,var(--groove-hi),var(--groove));
+ background:var(--groove-bg);
  box-shadow:var(--el-recess-1)}
 .lane__groove::-webkit-scrollbar{display:none}
 .lane__groove::before{/* empty tape path */content:"";position:absolute;left:8px;right:8px;top:50%;height:1px;background:repeating-linear-gradient(90deg,var(--rail) 0 5px,transparent 5px 9px);pointer-events:none}
@@ -795,6 +811,7 @@ a.key{text-decoration:none}
 .legend{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin:0 -12px;padding:8px 16px 9px;
  background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px,transparent 2px) top/100% 2px no-repeat;font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
 .legend .seam--v{height:14px;align-self:center;margin:0 2px}
+@media (max-width:760px){.legend .seam--v{display:none}}
 .legend .stamp--repl{padding:1px 3px}
 .lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-width:0;max-width:100%}
 .lg>.tag{flex:none}
@@ -958,10 +975,26 @@ button.cut__name.cut__name--split{display:flex}
 .leader b{font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
 .leader small{font:400 var(--fs-label)/1 var(--font-mono);color:var(--silk-2)}
 .leader+.key.patch,.leader+.lane__note{margin-left:8px}
-/* socket: recessed jack for a new CUT; stays pinned to the right edge of a long lane */
-.socket{all:unset;box-sizing:border-box;position:sticky;right:0;z-index:1;flex:none;display:inline-flex;align-items:center;gap:8px;height:42px;min-width:44px;padding:0 14px 0 10px;margin-left:8px;border-radius:var(--r-md);cursor:pointer;
+/* socket: a recessed jack for a new CUT (only its own recess, no cast slab). On a lane it sits in a dock: a sticky
+   end-cap milled from the groove itself — the same material and rails, as tall as the groove — that pins the jack
+   to the right edge of a long lane and hides the CUTS passing under it behind a short fade. On a short lane the dock
+   is just more groove; on a scrolled-to-the-end lane it follows the last CUT, so it never covers it. */
+.socket{all:unset;box-sizing:border-box;position:relative;flex:none;display:inline-flex;align-items:center;gap:8px;height:42px;min-width:44px;padding:0 14px 0 10px;margin:0;border-radius:var(--r-md);cursor:pointer;
  background:linear-gradient(180deg,var(--pocket-lo),var(--pocket));font:650 var(--fs-label)/1 var(--font-sans);
- box-shadow:var(--el-recess-2),-10px 0 12px -4px var(--groove),14px -8px 0 4px var(--groove-hi),14px 8px 0 4px var(--groove);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
+ box-shadow:var(--el-recess-2);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
+/* The dock stops 1px short of the groove's top and bottom, so the groove's own bevel stays whole; its material is the
+   groove's, offset so the rails line up. No edge of its own: on a short lane it is invisible, on a long one the CUTS
+   simply slide under it. (A scroll-state container query could draw the right bevel only while it is stuck, but it
+   re-evaluates every groove after layout: +25% main-thread time on a profile switch with 40 lanes.) */
+.socket-dock{position:sticky;right:-8px;z-index:1;flex:none;align-self:stretch;display:flex;align-items:center;margin:-4px 0;padding:0 0 0 8px;
+ background-image:var(--groove-bg);background-position:0 -1px;background-size:100% calc(100% + 2px);background-clip:content-box}
+.socket-dock>.socket{margin-right:8px}
+/* the 8px lead-in fades the groove material in (a mask on the small lead-in only: a mask on the sticky dock itself
+   would add a compositor mask layer per lane and cost scroll frames) */
+.socket-dock::before{content:"";position:absolute;left:0;top:0;bottom:0;width:8px;background-image:var(--groove-bg);background-position:0 -1px;background-size:100% calc(100% + 2px);pointer-events:none;
+ -webkit-mask-image:linear-gradient(90deg,transparent,#000);mask-image:linear-gradient(90deg,transparent,#000)}
+.socket:active{box-shadow:var(--el-recess-2),inset 1px 2px 4px rgb(var(--sh)/calc(.3*var(--sha)))}
+.socket:active .socket__plus{transform:translateY(.5px)}
 .lane--inherit .socket{height:34px}
 .lane__label{display:grid;gap:2px;min-width:0}
 .lane__sub{font:400 var(--fs-label)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1089,7 +1122,7 @@ button.cut__name.cut__name--split{display:flex}
 /* ordered lists: numbered CUTS, room above for the number; a grid has no splices */
 .tray__grid--seq{grid-template-columns:repeat(auto-fill,minmax(188px,1fr));gap:18px 8px;padding-top:16px}
 .tray__grid .cut+.cut::after{display:none}
-.tray__grid .socket{position:relative;right:auto;margin:0;height:var(--cut-h);justify-content:center;box-shadow:var(--el-recess-2)}
+.tray__grid .socket{height:var(--cut-h);justify-content:center}
 .tray__foot .key{flex:none}
 .tray__foot .seam--v{height:30px;align-self:center;margin:0 2px}   /* sets a destructive key (the last one) apart */
 
@@ -1251,7 +1284,7 @@ button.cut__name.cut__name--split{display:flex}
 .hist__sign.is-new{color:var(--ok-ink)}
 .counter{display:grid;gap:6px;min-width:0}
 /* a tape counter: a drum behind a recessed slot, tabular digits */
-.counter__win{display:flex;align-items:baseline;gap:6px;min-height:48px;padding:10px 12px;border-radius:var(--r-md);
+.counter__win{display:flex;align-items:baseline;gap:6px;min-height:48px;padding:10px 12px;border-radius:var(--r-md);justify-self:start;min-width:10ch;
  background:linear-gradient(180deg,rgb(var(--sh)/calc(.16*var(--sha))),transparent 32%,transparent 68%,rgb(var(--sh)/calc(.18*var(--sha)))),linear-gradient(180deg,var(--cap-lo),var(--cap-hi) 45%,var(--cap-lo));
  box-shadow:var(--el-recess-2)}
 .counter__win b{font:700 22px/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink);letter-spacing:.02em;white-space:nowrap}
@@ -1347,7 +1380,10 @@ button.cut__name.cut__name--split{display:flex}
  .cut{flex:none;margin:0;height:auto;min-height:56px;padding-bottom:14px}
  .cut__name{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
  .cut+.cut::after{left:calc(50% - 18px);top:-6px;bottom:auto;width:36px;height:8px;transform:none}
- .socket{position:relative;right:auto;margin:0;justify-content:center;box-shadow:var(--el-recess-2)}
+ .socket{justify-content:center}
+ .socket-dock{display:contents}
+ .socket-dock::before{display:none}
+ .socket-dock>.socket{margin:0}
  .leader{justify-content:center}
  .fold{grid-template-columns:minmax(0,1fr)}
  .lane__note{display:none}

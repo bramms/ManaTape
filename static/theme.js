@@ -15,11 +15,22 @@
    toggle.title=(theme==='light'?'Світло · вниз — темна тема':'Темно · вгору — світла тема')+' · Space / Enter, ↑ / ↓';
   }
  }
+ // Under the cross-fade only what is on screen restyles: a lane outside the viewport is parked (content-visibility:
+ // hidden) until the transition ends or the page scrolls. The new theme and the View Transition itself (its start and
+ // end each restyle the whole document) then cost the visible lanes only (final QA perf: «світло» hold).
+ function park(){
+  // Only the lanes' own boxes are read (a skipped lane keeps its box; its content is never measured).
+  const parked=[...document.querySelectorAll('.lane')].filter(lane=>{const r=lane.getBoundingClientRect();return r.height&&(r.bottom<0||r.top>innerHeight);});
+  for(const lane of parked)lane.classList.add('is-parked');
+  const release=()=>{removeEventListener('scroll',release);for(const el of parked)el.classList.remove('is-parked');parked.length=0;};
+  addEventListener('scroll',release,{passive:true});return release;
+ }
  // The lever strikes its stop: one cross-fade of the whole page, then the glass powers on.
  function switchTo(theme){
   if(root.dataset.theme===theme)return;
   const run=()=>{apply(theme);window.ManaScreen?.boot();};
-  if(document.startViewTransition&&!reduced.matches&&!document.hidden)document.startViewTransition(run);else run();
+  if(document.startViewTransition&&!reduced.matches&&!document.hidden){const release=park();document.startViewTransition(run).finished.finally(release);}
+  else run();
  }
  // A theme that changes elsewhere (the system, another tab) flips the levers first, as a hand would.
  function follow(theme){

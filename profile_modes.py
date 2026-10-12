@@ -276,6 +276,138 @@ def compile_profile(normal, settings, models, statuses, pools=None, vision_roles
     return {'effective': effective, 'views': views, 'issues': issues, 'skipped': skipped}
 
 
+def collapse_chain(written, tokens, pools, heads=None):
+    """Inverse of the ON expansion for one chain (F5).
+
+    `written` is a chain as a file holds it (pool blocks expanded); `tokens` are the pool blocks the former logical
+    chain held. A block comes back wherever the chain still holds its exact expansion: the same members, order and
+    thinking. `heads` maps an `@role` entry to the block that role starts with: the file keeps `@role` followed by
+    the rest of that block, which folds back into the alias. Returns (chain, kept tokens).
+    """
+    heads = heads or {}
+    remaining, out, kept, i = list(tokens), [], [], 0
+    while i < len(written):
+        value = written[i]
+        hit = next((t for t in remaining if pools.get(pool_name(t)) and list(written[i:i + len(pools[pool_name(t)])]) == list(pools[pool_name(t)])), None)
+        if hit is not None:
+            out.append(hit); kept.append(hit); remaining.remove(hit); i += len(pools[pool_name(hit)])
+            continue
+        members = pools.get(pool_name(heads.get(value))) or [] if isinstance(value, str) else []
+        if len(members) > 1 and list(written[i + 1:i + len(members)]) == list(members[1:]):
+            out.append(value); i += len(members)
+            continue
+        out.append(value); i += 1
+    return out, kept
+
+
+def collapse_pools(written, logical, pools, inherited=None, keys=None):
+    """The logical profile for a file taken as written (F5, «Прийняти файл»).
+
+    FREE pool blocks of the former logical profile stay blocks wherever the file still holds their exact expansion;
+    every other entry is the file's own. `written` and `logical` are one layer (Standard or a preset overlay);
+    `inherited` is the logical Standard a preset inherits. `keys` limits the change to these chains ('role:x',
+    'vibe:w', 'fallback:default'). Returns (profile, kept, lost): [{'key', 'pool'}] for every block of a chain the
+    file still has, kept as a block or not.
+    """
+    out, inherited, pools = copy.deepcopy(written), inherited or {}, {k: list(v or []) for k, v in (pools or {}).items()}
+    kept, lost = [], []
+    def chains(p):
+        return ((p or {}).get('retry') or {}).get('fallbackChains') or {}
+    lr, lc, ir, ic = logical.get('modelRoles') or {}, chains(logical), inherited.get('modelRoles') or {}, chains(inherited)
+    def primary(role):
+        return lr.get(role, ir.get(role))
+    def tail(role, own_default):
+        if role in lc:
+            return list(lc[role] or [])
+        if role in ic:
+            return list(ic[role] or [])
+        return list(own_default) if BUILTIN_ROLES.get(role, {}).get('defaultFallbacks', True) else []
+    heads = {'@' + role: primary(role) for role in set(lr) | set(ir) if pool_name(primary(role)) is not None}
+    def note(key, tokens, got):
+        rest = list(tokens)
+        for token in got:
+            rest.remove(token)
+        kept.extend({'key': key, 'pool': pool_name(t)} for t in got)
+        lost.extend({'key': key, 'pool': pool_name(t)} for t in rest)
+    def wanted(key):
+        return keys is None or key in keys
+    def put(seq, values):
+        seq[:] = values
+    roles, own = out.get('modelRoles') if isinstance(out.get('modelRoles'), dict) else {}, chains(out)
+    # Default first: a role that inherits it compares with the collapsed default.
+    if 'default' in own and 'default' not in roles and isinstance(own['default'], list) and wanted('fallback:default'):
+        tokens = [t for t in lc.get('default', ic.get('default', [])) or [] if pool_name(t) is not None]
+        values, got = collapse_chain(own['default'], tokens, pools, heads)
+        put(own['default'], values); note('fallback:default', tokens, got)
+    default_now = list(own.get('default', ic.get('default', [])) or [])
+    for role in sorted(set(roles) | (set(own) - {'default'})):
+        key = 'role:' + role
+        if not wanted(key):
+            continue
+        head, chain = roles.get(role), own.get(role)
+        if head is not None and not isinstance(head, str) or chain is not None and not isinstance(chain, list):
+            continue
+        logical_tail = tail(role, lc.get('default', ic.get('default', [])) or [])
+        inherits = role not in lc
+        # What this layer's role would inherit without an own chain: Standard's chain (preset) or default.
+        fallback_now = list(ic[role]) if role in ic and role != 'default' else default_now if BUILTIN_ROLES.get(role, {}).get('defaultFallbacks', True) and role != 'default' else []
+        if head is not None:
+            tokens = [t for t in [primary(role), *logical_tail] if pool_name(t) is not None]
+            values, got = collapse_chain([head, *(chain or [])], tokens, pools, heads)
+            roles[role] = values[0]
+            if chain is not None:
+                if inherits and values[1:] == fallback_now:
+                    del own[role]
+                else:
+                    put(chain, values[1:])
+            note(key, tokens, got)
+            continue
+        if chain is None:
+            continue  # A role written without a model (`role:` with no value) has no chain to fold.
+        # A preset chain without its own primary: the primary block comes from Standard and its rest leads the chain.
+        tokens = [t for t in logical_tail if pool_name(t) is not None]
+        members = pools.get(pool_name(primary(role))) or []
+        rest = chain[len(members) - 1:] if len(members) > 1 and list(chain[:len(members) - 1]) == members[1:] else chain
+        values, got = collapse_chain(rest, tokens, pools, heads)
+        if inherits and values == fallback_now:
+            del own[role]
+        else:
+            put(chain, values)
+        note(key, tokens, got)
+    agents = ((out.get('task') or {}).get('agentModelOverrides')) or {}
+    own_agents, inherited_agents = (logical.get('task') or {}).get('agentModelOverrides') or {}, (inherited.get('task') or {}).get('agentModelOverrides') or {}
+    for worker, value in list(agents.items()):
+        if not isinstance(value, list) or not wanted('vibe:' + worker):
+            continue
+        former = own_agents.get(worker, inherited_agents.get(worker))
+        tokens = [t for t in ([former] if isinstance(former, str) else former or []) if pool_name(t) is not None]
+        values, got = collapse_chain(value, tokens, pools, heads)
+        if worker not in own_agents and worker in inherited_agents and values == ([former] if isinstance(former, str) else list(former or [])):
+            del agents[worker]  # A preset agent the writer only spelled out keeps following Standard.
+        elif isinstance(former, str) and values == [former]:
+            agents[worker] = former
+        else:
+            put(value, values)
+        note('vibe:' + worker, tokens, got)
+    # Containers the writer added only for spelled-out chains go when they are empty again and the layer had none.
+    for path in (('retry', 'fallbackChains'), ('task', 'agentModelOverrides')):
+        parent, child = out.get(path[0]), path[1]
+        if isinstance(parent, dict) and parent.get(child) == {} and child not in (logical.get(path[0]) or {}):
+            del parent[child]
+            if not parent and path[0] not in logical:
+                del out[path[0]]
+    return out, kept, lost
+
+
+def chain_entries(profile):
+    """Every chain of one layer by its collapse key, for telling which chains an adoption changed."""
+    roles = profile.get('modelRoles') or {}
+    chains = (profile.get('retry') or {}).get('fallbackChains') or {}
+    out = {('role:' if r in roles or r != 'default' else 'fallback:') + r: [roles.get(r), chains.get(r)] for r in set(roles) | set(chains)}
+    out.update({'vibe:' + w: v for w, v in ((profile.get('task') or {}).get('agentModelOverrides') or {}).items()})
+    return out
+
+
 def tariff_status(now=None):
     now = now or datetime.now(timezone.utc)
     def peak(at):

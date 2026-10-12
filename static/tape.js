@@ -19,7 +19,8 @@ class ForgeHistory {
   if(!from?.length)return null;
   to.push(h.present);h.present=from.pop();return JSON.parse(h.present);
  }
- reset(name,value,dirty=false){this.profiles.set(name,{present:JSON.stringify(value),dirty,past:[],future:[]});}
+ // `past` keeps earlier states one Undo away (a draft replaced by a restored file).
+ reset(name,value,dirty=false,past=[]){this.profiles.set(name,{present:JSON.stringify(value),dirty,past:past.map(v=>JSON.stringify(v)),future:[]});}
  // A draft moved onto a newer file: every step of its history moves the same way, so Undo never brings back the
  // older file's fields.
  rebase(name,fn){const h=this.profiles.get(name);if(!h)return;const map=s=>JSON.stringify(fn(JSON.parse(s)));h.present=map(h.present);h.past=h.past.map(map);h.future=h.future.map(map);}

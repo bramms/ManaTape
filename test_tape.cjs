@@ -96,3 +96,10 @@ test('F2/QA4: CUTS of a lane off screen are never measured (content-visibility w
  const before=context.window.ForgeTape.before(root);
  assert.deepEqual([...before.clips.keys()],['a','b']);assert.deepEqual(reads,['shown','a','b','hidden'],'each lane is read once; hidden CUTS never');
 });
+test('final QA F4: a reset can keep a replaced draft one Undo away',()=>{
+ const h=new ForgeHistory(),restored={v:'file'},draft={v:'draft'};
+ h.reset('p',restored,false,[draft]);h.observe('p',restored,false,restored);
+ assert.deepEqual(h.available('p'),{undo:true,redo:false});
+ assert.deepEqual(h.step('p',-1),draft);h.observe('p',draft,true,restored);
+ assert.deepEqual(h.step('p',1),restored);
+});

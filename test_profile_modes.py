@@ -723,6 +723,88 @@ class ProfileModesTest(unittest.TestCase):
         self.assertEqual(self.app.mode_state['profiles']['standard']['settings'], self.settings)
         self.assertNotIn('# owner note', std.read_text())
 
+    def pooled_standard(self):
+        self.init_pools()
+        on = {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}
+        self.save_mode('standard', on, [{'path': ['modelRoles', 'task'], 'value': 'mana-pool/free-good'},
+            {'path': ['retry', 'fallbackChains', 'task'], 'value': ['mana-pool/free-fast']},
+            {'path': ['task', 'agentModelOverrides', 'task'], 'value': ['@task', 'mana-pool/free-fast']}])
+        return self.app.path('standard')
+
+    def outside_edit(self, path, edit):
+        data = self.app.read(path)
+        edit(data)
+        path.write_text(yaml_dump(data) + '# owner note\n')
+        return path.read_bytes()
+
+    def test_adopt_keeps_pool_blocks_the_file_still_expands_exactly(self):
+        std = self.pooled_standard()
+        self.assertEqual(self.native('standard')['task']['agentModelOverrides']['task'], ['@task', 'demo/deepseek:free', 'demo/b:free'])
+        edited = self.outside_edit(std, lambda d: d['modelRoles'].__setitem__('scout', 'demo/two'))
+        plan = self.app.profile_action({'action': 'adopt-plan', 'profile': 'standard'})
+        self.assertEqual(plan['lost'], [])
+        self.assertEqual(sorted((k['key'], k['pool']) for k in plan['kept']), [('role:task', 'free-fast'), ('role:task', 'free-good'), ('vibe:task', 'free-fast')])
+        self.assertEqual(std.read_bytes(), edited, 'a plan writes nothing')
+        self.app.profile_action({'action': 'adopt', 'profile': 'standard', 'revision': self.app.revision('standard')})
+        self.assertEqual(std.read_bytes(), edited, 'the adopted file stays byte for byte')
+        self.assertEqual(self.app.mode_conflicts(), [])
+        logical = self.app.profiles()[0]
+        self.assertEqual(logical['modelRoles']['task'], 'mana-pool/free-good')
+        self.assertEqual(list(logical['retry']['fallbackChains']['task']), ['mana-pool/free-fast'])
+        self.assertEqual(list(logical['task']['agentModelOverrides']['task']), ['@task', 'mana-pool/free-fast'])
+        self.assertEqual(logical['modelRoles']['scout'], 'demo/two', 'the outside edit is taken')
+        self.assertIn('# owner note', self.app.mode_state['profiles']['standard']['normal'], 'the logical text keeps the file comments')
+        # The blocks stay live: «Зберегти пули» still rewrites Standard.
+        self.pools['free-good'] = ['demo/c:free:low', 'demo/a:free']
+        self.app.save_pools({'revision': self.app.pools_revision(), 'pools': self.pools})
+        self.assertEqual(self.native('standard')['modelRoles']['task'], 'demo/c:free:low')
+        self.assertEqual(self.native('standard')['modelRoles']['scout'], 'demo/two')
+
+    def test_adopt_names_a_pool_block_the_file_no_longer_repeats_and_takes_its_routes(self):
+        std = self.pooled_standard()
+        edited = self.outside_edit(std, lambda d: d['retry']['fallbackChains']['task'].__setitem__(1, 'demo/three'))
+        plan = self.app.profile_action({'action': 'adopt-plan', 'profile': 'standard'})
+        self.assertEqual(plan['lost'], [{'key': 'role:task', 'pool': 'free-fast'}])
+        self.assertEqual(sorted((k['key'], k['pool']) for k in plan['kept']), [('role:task', 'free-good'), ('vibe:task', 'free-fast')])
+        self.app.profile_action({'action': 'adopt', 'profile': 'standard', 'revision': self.app.revision('standard')})
+        self.assertEqual(std.read_bytes(), edited)
+        logical = self.app.profiles()[0]
+        self.assertEqual(logical['modelRoles']['task'], 'mana-pool/free-good')
+        self.assertEqual(list(logical['retry']['fallbackChains']['task']), ['demo/three'], 'the edited run is the file\'s own CUTS')
+        self.assertEqual(list(logical['task']['agentModelOverrides']['task']), ['@task', 'mana-pool/free-fast'])
+
+    def test_adopt_keeps_a_preset_pool_primary_that_inherits_default_fallbacks(self):
+        self.init_pools()
+        on = {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}
+        self.save_mode('high', on, [{'path': ['modelRoles', 'task'], 'value': 'mana-pool/free-good'}])
+        high = self.app.path('high')
+        self.assertEqual(self.native('high')['retry']['fallbackChains']['task'], ['demo/deepseek:free', 'demo/two'])
+        edited = self.outside_edit(high, lambda d: d['modelRoles'].__setitem__('smol', 'demo/three'))
+        self.assertEqual(self.app.profile_action({'action': 'adopt-plan', 'profile': 'high'})['kept'], [{'key': 'role:task', 'pool': 'free-good'}])
+        self.app.profile_action({'action': 'adopt', 'profile': 'high', 'revision': self.app.revision('high')})
+        self.assertEqual(high.read_bytes(), edited)
+        overlay = self.app.profiles()[1]['high']
+        self.assertEqual(overlay['modelRoles']['task'], 'mana-pool/free-good')
+        self.assertNotIn('task', (overlay.get('retry') or {}).get('fallbackChains', {}), 'the role keeps following default')
+        self.assertEqual(overlay['modelRoles']['smol'], 'demo/three')
+
+    def test_collapse_is_the_inverse_of_the_on_expansion(self):
+        from profile_modes import collapse_pools, collapse_chain
+        pools = {'free-good': ['p/a:high', 'p/b'], 'free-fast': ['p/c']}
+        self.assertEqual(collapse_chain(['p/x', 'p/a:high', 'p/b', 'p/c'], ['mana-pool/free-good', 'mana-pool/free-fast'], pools),
+                         (['p/x', 'mana-pool/free-good', 'mana-pool/free-fast'], ['mana-pool/free-good', 'mana-pool/free-fast']))
+        self.assertEqual(collapse_chain(['p/a', 'p/b'], ['mana-pool/free-good'], pools), (['p/a', 'p/b'], []), 'thinking is part of the expansion')
+        self.assertEqual(collapse_chain(['p/a:high', 'p/b'], [], pools), (['p/a:high', 'p/b'], []), 'a run the owner wrote by hand stays his')
+        self.assertEqual(collapse_chain(['@task', 'p/b', 'p/c'], ['mana-pool/free-fast'], pools, {'@task': 'mana-pool/free-good'})[0], ['@task', 'mana-pool/free-fast'])
+        out, kept, lost = collapse_pools({'modelRoles': {'r': 'p/a:high'}, 'retry': {'fallbackChains': {'r': ['p/b', 'p/z']}}},
+                                         {'modelRoles': {'r': 'mana-pool/free-good'}, 'retry': {'fallbackChains': {'r': ['mana-pool/free-fast']}}}, pools)
+        self.assertEqual((out['modelRoles']['r'], out['retry']['fallbackChains']['r']), ('mana-pool/free-good', ['p/z']))
+        self.assertEqual((kept, lost), ([{'key': 'role:r', 'pool': 'free-good'}], [{'key': 'role:r', 'pool': 'free-fast'}]))
+        # Hand-written YAML may leave a role or a chain empty: nothing to fold, nothing breaks.
+        out, kept, lost = collapse_pools({'modelRoles': {'r': None, 'q': 'p/a:high'}, 'retry': {'fallbackChains': {'q': None, 's': ['p/b']}}},
+                                         {'modelRoles': {'q': 'mana-pool/free-good'}}, pools)
+        self.assertEqual((out['modelRoles'], kept), ({'r': None, 'q': 'p/a:high'}, []))
+
     def test_outside_edited_preset_stays_frozen_and_orphans_can_be_forgotten(self):
         self.init_modes()
         self.app.path('other').write_text('modelRoles:\n  smol: demo/two\n')
