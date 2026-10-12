@@ -1,17 +1,43 @@
 
 (async()=>{
  const root=document.getElementById('forge-direct'),win=document.getElementById('forge-window');
+ // Every request has a deadline: a hung server or tunnel becomes «офлайн» or a clear refusal, never a silent wait.
+ function deadline(ms){if(typeof AbortController==='undefined')return undefined;if(AbortSignal.timeout)return AbortSignal.timeout(ms);const c=new AbortController();setTimeout(()=>c.abort(new DOMException('Сервер не відповів','TimeoutError')),ms);return c.signal;}
  const selectedProject=new URLSearchParams(location.search).get('project');
  const endpoint=path=>path+(selectedProject?'?project='+encodeURIComponent(selectedProject):'');
  // The first request is the one index.html preloads (same URL and mode), so it is usually already in flight.
  let source,stateTag='';
- try {const res=await fetch(endpoint('/api/state'));source=await res.json();if(!res.ok)throw Error(source.error);stateTag=res.headers.get('ETag')||'';}catch(e){win.innerHTML='<div class="device"><div class="boot"><div class="screen" data-screen="startup" data-screen-default="27"><div class="screen__win"><div class="screen__gasket"><div class="glass"><div class="glass__content"><div class="g"><div class="g-head"><span class="g-name">Mana Tape</span><span class="g-age">немає зв’язку</span></div><div class="g-msg" data-s="bad"><span>Сервер не відповідає. Перевір підключення.</span></div></div></div></div></div></div></div><button type="button" class="key" id="retry-load"><span class="key__cap">Повторити</span></button></div></div>';window.ManaScreen?.sync();document.getElementById('retry-load').onclick=()=>location.reload();return;}
+ // A boot that waits too long offers «Повторити» on the plate; after 15 s the wait ends on the retry screen (QA4 P0-4).
+ const bootSlow=setTimeout(()=>{const plate=win.querySelector('.boot');if(plate&&!plate.querySelector('#retry-load')){plate.insertAdjacentHTML('beforeend','<button type="button" class="key" id="retry-load"><span class="key__cap">Повторити</span></button>');plate.querySelector('#retry-load').onclick=()=>location.reload();}},5000);
+ try {const res=await fetch(endpoint('/api/state'),{signal:deadline(15000)});source=await res.json();if(!res.ok)throw Error(source.error);stateTag=res.headers.get('ETag')||'';}catch(e){clearTimeout(bootSlow);win.innerHTML='<div class="device"><div class="boot"><div class="screen" data-screen="startup" data-screen-default="27"><div class="screen__win"><div class="screen__gasket"><div class="glass"><div class="glass__content"><div class="g"><div class="g-head"><span class="g-name">Mana Tape</span><span class="g-age">немає зв’язку</span></div><div class="g-msg" data-s="bad"><span>Сервер не відповідає. Перевір підключення.</span></div></div></div></div></div></div></div><button type="button" class="key" id="retry-load"><span class="key__cap">Повторити</span></button></div></div>';window.ManaScreen?.sync();document.getElementById('retry-load').onclick=()=>location.reload();return;}
+ clearTimeout(bootSlow);
 
  const labels=source.ui?.roleLabels||{};
  const providerNames={'opencode-free':'OpenCode Free','commandcode':'CommandCode','opencode-go':'OpenCode Go','openai-codex':'Codex','google-antigravity':'Antigravity','anthropic':'Anthropic','deepseek':'DeepSeek API',...(source.ui?.providerLabels||{})};
  const codes={'opencode-free':'FREE','openrouter':'OR','commandcode':'CC','opencode-go':'GO','openai-codex':'CX','google-antigravity':'AG','anthropic':'AN','deepseek':'DS',...(source.ui?.providerCodes||{})};
- const providerCode=id=>codes[id]||String(id||'?').slice(0,4).toUpperCase();
+ // A provider's tag prints its own code; without one, a code derived from the id that no other provider shares
+ // (colour is never the only carrier): the first four letters, else segment initials with the last segment
+ // («demo-studio» → DSTU), else a numbered one. The set is fixed per snapshot (dataVersion).
+ function providerCode(id){
+  if(codes[id])return codes[id];
+  let memo=providerCode.memo;
+  if(memo?.version!==dataVersion||!memo.map.has(id))memo=providerCode.memo={version:dataVersion,map:assignCodes([...new Set([...(memo?.version===dataVersion?memo.map.keys():[]),...source.providers.map(v=>v.id),...catalog.map(m=>m.provider),id])].sort())};
+  return memo.map.get(id);
+ }
+ function assignCodes(ids){
+  const map=new Map(),taken=new Set(Object.values(codes)),words=id=>String(id||'?').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  const candidates=id=>{const parts=words(id),last=parts.at(-1)||'?',head=parts.slice(0,-1).map(s=>s[0]).join('');return [parts.join('').slice(0,4),(head+last).slice(0,4),(head.slice(0,1)+last).slice(0,4),(parts[0]||'').slice(0,2)+last.slice(0,2)];};
+  let rest=ids.filter(id=>!codes[id]);
+  for(let level=0;level<4&&rest.length;level++){
+   const pick=new Map(rest.map(id=>[id,candidates(id)[level]||''])),count=new Map();for(const c of pick.values())count.set(c,(count.get(c)||0)+1);
+   rest=rest.filter(id=>{const c=pick.get(id);if(!c||count.get(c)>1||taken.has(c))return true;map.set(id,c);taken.add(c);return false;});
+  }
+  for(const id of rest){const base=(candidates(id)[0]||'?').slice(0,3);let n=2;while(taken.has(base+n))n++;map.set(id,base+n);taken.add(base+n);}
+  return map;
+ }
  const prettyProfile=s=>s==='standard'?'Standard':s;
+ // Ukrainian count agreement: 1 зміна · 2 зміни · 5 змін (11–14 take the «many» form).
+ function plural(n,one,few,many){const a=Math.abs(n)%100,b=a%10;return b===1&&a!==11?one:b>=2&&b<=4&&(a<12||a>14)?few:many;}
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  function searchText(value){return String(value??'').normalize('NFKC').toLocaleLowerCase('uk-UA').replace(/[^\p{L}\p{N}]+/gu,' ');}
  function matchesQuery(query,...values){const text=searchText(values.join(' '));return searchText(query).split(' ').filter(Boolean).every(word=>text.includes(word));}
@@ -47,7 +73,7 @@
   if(state.saving||!Object.hasOwn(p().task.agentModelOverrides||{},worker)&&!agentInfo(worker))return;
   const target=p().task.agentModelOverrides,base=state.profile==='standard'?{}:original.standard.task.agentModelOverrides;
   if(Object.hasOwn(base,worker))target[worker]=copy(base[worker]);else delete target[worker];
-  delete modeSettings().overrides['vibe:'+worker];state.picker=null;render();focusLane(worker,'vibe');
+  delete modeSettings().overrides['vibe:'+worker];state.picker=null;state.opFeedback='';render();focusLane(worker,'vibe');
  }
  // After a reset the old control is gone; focus the lane's own first control.
  function focusLane(role,group){[...win.querySelectorAll(`button[data-edit="${CSS.escape(role)}"][data-group="${group}"]`)].find(el=>el.getClientRects().length)?.focus({preventScroll:true});}
@@ -59,13 +85,24 @@
   for(const [target,base] of [[p().modelRoles,inherited.modelRoles||{}],[p().retry.fallbackChains,inherited.retry?.fallbackChains||{}]]){
    if(Object.hasOwn(base,role))target[role]=copy(base[role]);else delete target[role];
   }
-  delete modeSettings().overrides['role:'+role];state.picker=null;render();focusLane(role,'role');
+  delete modeSettings().overrides['role:'+role];state.picker=null;state.opFeedback='';render();focusLane(role,'role');
  }
  function roleFallbacks(role,profile=p()){return profile.retry.fallbackChains[role]||(roleInfo(role)?.defaultFallbacks===false?[]:profile.retry.fallbackChains.default||[]);}
+ // One vision rule everywhere (QA1 B7), the server's: a vision lane (ui.visionRoles) takes only CUTS that read
+ // images, and so does a FREE pool that stands on a vision lane in any profile. An unknown, only-referenced route
+ // is not judged.
+ function readsImages(model){return Array.isArray(model.input)?model.input.includes('image'):!!(model.configuredOnly||model.source==='reference');}
+ function visionRole(id){return (source.ui?.visionRoles||['vision']).includes(id);}
+ function poolVisionLane(name){
+  const token=poolToken(name);
+  for(const set of [original,profiles])for(const [k,pr] of Object.entries(set))for(const role of source.ui?.visionRoles||['vision']){if(pr.modelRoles?.[role]&&[pr.modelRoles[role],...roleFallbacks(role,pr)].includes(token))return role+(k==='standard'?'':' · '+k);}
+  return '';
+ }
  function acceptsRoleModel(role,group,model){
-  if(group==='pool'||group==='alternatives'&&role==='profile')return true;
+  if(group==='pool')return readsImages(model)||!poolVisionLane(role);
+  if(group==='alternatives'&&role==='profile')return true;
   const id=group==='vibe'?(aliasRole(vibeAlias(role))||'task'):group==='alternatives'?role.split(':')[1]:role,info=roleInfo(id),kind=model.kind||'chat';
-  return (info?.kinds||['chat']).includes(kind)&&(id!=='web'||kind!=='chat'||model.webSearch!=null);
+  return (info?.kinds||['chat']).includes(kind)&&(id!=='web'||kind!=='chat'||model.webSearch!=null)&&(!visionRole(id)||readsImages(model));
  }
  const original={standard:copy(source.base),...Object.fromEntries(Object.entries(source.presets).map(([k,v])=>[k,merge(source.base,v)]))},profiles=copy(original),roleKeys=knownRoleKeys(source.base),profileKeys=Object.keys(original);
  const normalizeProfile=profile=>merge({modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}},profile);
@@ -79,7 +116,7 @@
  const catalog=[...catalogMap.values()].sort((a,b)=>a.provider.localeCompare(b.provider)||a.name.localeCompare(b.name));
  const state={view:'profiles',profile:'standard',role:roleKeys[0]||'',query:'',catalogQuery:'',catalogMode:'mine',catalogProvider:'all',page:0,favs:[...referenced].slice(0,8),picker:null,modal:null,changes:0,toast:''};
  let favWrites=Promise.resolve(),favSaved=[];
- let timer,drag=null,modalShown=false,modalFit='',modalReturnFocus='',composing=false,renderCache=null,pointerHeld=false,nativeSelectBusy=false;
+ let timer,drag=null,modalShown=false,formShown='',modalFit='',modalReturnFocus='',composing=false,renderCache=null,pointerHeld=false,nativeSelectBusy=false;
  let backgroundRefreshPending=false,backgroundReloading=false,pendingRender=false,backgroundTimer,writeEpoch=0,activeWrites=0,renderedAt=0;
  const pendingModeResults=new Map(),resetsSeen=new Set();
  // dataVersion names the current snapshot + catalogue; caches of derived per-model data are keyed by it.
@@ -91,9 +128,11 @@
  const regions=createRegions(win);
  // The phone layout (device.css ≤ 760px): lanes turn vertical, the drawer steps aside after a CUT is chosen.
  const narrowSurface=()=>win.clientWidth<=760;
- // Folded runs of inherited lanes that the user opened; remembered locally (per browser).
- const openFolds=new Set((()=>{try{const v=JSON.parse(localStorage.getItem('mana-folds')||'[]');return Array.isArray(v)?v.filter(x=>typeof x==='string'):[];}catch{return [];}})());
- function storeFolds(){try{localStorage.setItem('mana-folds',JSON.stringify([...openFolds]));}catch{}}
+ // Folded runs of inherited lanes that the user opened, remembered per lane and per project in this browser: a run
+ // is open while any of its lanes is, so a fold that an edit splits stays open in both halves (QA1 B6).
+ const openFolds=new Set((()=>{try{const v=JSON.parse(localStorage.getItem(storageKey('folds'))??localStorage.getItem('mana-folds')??'[]');return Array.isArray(v)?v.filter(x=>typeof x==='string'):[];}catch{return [];}})());
+ function storeFolds(){try{localStorage.setItem(storageKey('folds'),JSON.stringify([...openFolds]));}catch{}}
+ function foldOpen(fold){return fold.some(role=>openFolds.has(role));}
  // Scroll an element to the middle of the page area that the drawer does not cover.
  function revealInPage(el){
   const r=el.getBoundingClientRect(),lip=parseFloat(getComputedStyle(win.querySelector('.tray-port')||document.documentElement).getPropertyValue('--lip'))||46;
@@ -105,7 +144,7 @@
  const coarsePointer=()=>matchMedia('(pointer: coarse)').matches||narrowSurface();
  const scrollToControl=el=>el?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
  // The search field takes the focus only on a keyboard/mouse device; a touch opens the list without the keyboard.
- function focusPicker(){const picker=win.querySelector('[data-picker]');if(!picker)return;const target=state.picker?.actionsOnly?picker.querySelector('[role=menuitem]:not(:disabled)')||picker.querySelector('[data-action=picker-close]'):coarsePointer()?picker.querySelector('.is-current,[data-pick]')||picker.querySelector('#picker-search'):picker.querySelector('#picker-search');target?.focus({preventScroll:true});}
+ function focusPicker(){const picker=win.querySelector('[data-picker]');if(!picker)return;const target=state.picker?.thinking?picker.querySelector('[role=menuitemradio][aria-checked=true]:not(:disabled)')||picker.querySelector('[role=menuitemradio]:not(:disabled)')||picker.querySelector('[data-action=picker-close]'):state.picker?.actionsOnly?picker.querySelector('[role=menuitem]:not(:disabled)')||picker.querySelector('[data-action=picker-close]'):coarsePointer()?picker.querySelector('.is-current,[data-pick]')||picker.querySelector('#picker-search'):picker.querySelector('#picker-search');target?.focus({preventScroll:true});}
  function trayFocusSelector(el){return el?.dataset.edit?`[data-edit="${CSS.escape(el.dataset.edit)}"][data-index="${el.dataset.index}"][data-group="${el.dataset.group}"]`:el?.dataset.modeScope?`[data-mode-scope="${CSS.escape(el.dataset.modeScope)}"]`:el?.dataset.poolOpen?'[data-pool-open]':'[data-action="mode-panel"]';}
  // Open or close an editor in the drawer. Opening lands the focus in the editor; closing returns it to the key (or the
  // CUT, the ⇄ mark) that opened it. The drawer then goes back to the collection if it was open, or slides away.
@@ -123,7 +162,7 @@
  const poolNames={'free-good':'FREE GOOD','free-fast':'FREE FAST'},poolToken=name=>'mana-pool/'+name,poolName=route=>Object.keys(poolNames).find(name=>poolToken(name)===route);
  let poolOriginal=copy(source.freePools||{'free-good':[],'free-fast':[]}),poolDraft=copy(poolOriginal),poolRevision=source.poolsRevision;
  const poolsDirty=()=>JSON.stringify(poolDraft)!==JSON.stringify(poolOriginal);
- function poolStep(direction){if(state.saving)return;const value=editHistory.step('@free-pools',direction);if(value){poolDraft=value;state.picker=null;render();win.querySelector('[data-action='+ (direction<0?'pool-undo':'pool-redo') +']')?.focus({preventScroll:true});}}
+ function poolStep(direction){if(state.saving)return;const value=editHistory.step('@free-pools',direction);if(value){poolDraft=value;state.picker=null;state.editorMsg=direction<0?'Останню дію з пулами скасовано':'Дію з пулами повторено';render();win.querySelector('[data-action='+ (direction<0?'pool-undo':'pool-redo') +']')?.focus({preventScroll:true});}}
  async function savePools(){
   if(state.saving||!poolsDirty())return;state.saving=true;state.poolError='';render();
   try{await api('/api/free-pools',{revision:poolRevision,pools:poolDraft});poolOriginal=copy(poolDraft);editHistory.reset('@free-pools',poolDraft);await reload(false,true);notify('Спільні пули збережено · усі доріжки оновлено');}
@@ -133,7 +172,7 @@
  // Pool keys on the deck: a stack of tapes with the pool's name and size; dragging or arming moves the whole pool.
  function poolShelf(){
   const keys=Object.entries(poolNames).map(([name,label])=>{const n=source.freePools?.[name]?.length||0,armed=state.armedCut===poolToken(name);return `<button type="button" class="key poolkey" data-cut="${poolToken(name)}"${armed?' aria-pressed="true"':''} ${n?'':'disabled'} title="${label} · обери пул і місце на доріжці або перетягни весь пул" aria-label="${label} · ${n} CUTS · спільний пул"><span class="key__cap"><span class="stack${name==='free-fast'?' stack--fast':''}" aria-hidden="true"></span><span class="key__txt"><b>${label}</b><span class="key__sub"><span class="rd rd--l" style="--rd:2ch">${n}</span> CUTS</span></span></span></button>`;}).join('');
-  return `${keys}<button type="button" class="key" data-pool-open="free-good" aria-expanded="${!!state.poolPanel}" aria-controls="pool-editor"><span class="key__cap">${led(state.poolPanel,'orange')}Пули · <span class="rd" style="--rd:1ch">2</span></span></button><span class="silk silk--2 deck__note">спільні для всіх профілів${poolsDirty()?' · є чернетка пулів':''}</span>`;
+  return `${keys}<button type="button" class="key" data-pool-open="free-good" aria-expanded="${!!state.poolPanel}" aria-controls="pool-editor"><span class="key__cap">${led(state.poolPanel,'orange')}Пули <span class="rd key__count" style="--rd:1ch">2</span></span></button><span class="silk silk--2 deck__note">спільні для всіх профілів${poolsDirty()?' · є чернетка пулів':''}</span>`;
  }
  // EDITORS live in the drawer (DESIGN «FREE GOOD / FREE FAST», «Заміни»): its front becomes the editor's head
  // (orange LED, title, tabs or scope, the transport with its scope, ×) and its body holds the ordered list next to
@@ -158,7 +197,7 @@
  root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||state.saving)return;if(b.dataset.poolOpen)editTray('pool',!state.poolPanel,b);if(b.dataset.poolTab){selectPoolTab(b.dataset.poolTab);}if(b.dataset.action==='pool-close')editTray('pool',false);if(b.dataset.action==='pool-save')savePools();if(b.dataset.action==='pool-reset'){try{await reload();poolOriginal=copy(source.freePools);poolDraft=copy(poolOriginal);poolRevision=source.poolsRevision;editHistory.reset('@free-pools',poolDraft);state.poolError='';state.editorMsg='Пули скинуто до збережених';render();win.querySelector('#pool-editor')?.focus({preventScroll:true});}catch(error){state.poolError=error.message;render();}}if(b.dataset.action==='pool-undo'||b.dataset.action==='pool-redo')poolStep(b.dataset.action==='pool-undo'?-1:1);if(b.dataset.action==='replace-pool'){state.picker.actionsOnly=false;render();focusPicker();}});
 
  function clipKey(role,r,i,group){return esc(group+'|'+role+'|'+r+'|'+chain(role,group).slice(0,i).filter(v=>v===r).length);}
- function historyStep(direction){if(state.saving)return;const value=editHistory.step(state.profile,direction);if(!value)return;profiles[state.profile]=value;ForgeTape.intent(direction<0?'undo':'edit');state.picker=null;state.opFeedback=direction<0?'Останню дію скасовано.':'Дію повторено.';render();win.querySelector(`[data-action=${direction<0?'undo':'redo'}]`)?.focus({preventScroll:true});}
+ function historyStep(direction){if(state.saving)return;const value=editHistory.step(state.profile,direction);if(!value)return;profiles[state.profile]=value;ForgeTape.intent(direction<0?'undo':'edit');state.picker=null;state.editorMsg='';state.opFeedback=direction<0?'Останню дію скасовано.':'Дію повторено.';render();win.querySelector(`[data-action=${direction<0?'undo':'redo'}]`)?.focus({preventScroll:true});}
  function p(){return profiles[state.profile];}
  function workers(profile=p()){return [...new Set([...knownAgents().map(a=>a.id),...Object.keys(profile?.task?.agentModelOverrides||{})])];}
  function agentValues(worker,profile=p()){const value=profile.task?.agentModelOverrides?.[worker];return (Array.isArray(value)?value:[value]).filter(Boolean);}
@@ -190,7 +229,7 @@
  function agentSectionHead(){const warn=source.agentWarnings?.length;return `<div class="subhead"><span class="silk">Агенти</span><span class="print">прив’язки до ролей або власні списки</span>${warn?`<span class="chip chip--warn" role="status" title="${esc(source.agentWarnings.join('\n'))}">пропущено файлів агентів: ${warn}</span>`:''}<span class="subhead__rule"></span><button type="button" class="key key--sm" data-sync-vibe aria-pressed="${!!state.syncVibe}" title="Після зміни резервів ролі оновлює власні списки агентів із початковим @role, які до зміни точно повторювали ці резерви. Списки з власними CUTS не змінюються. Успадковані ролі оновлюються завжди. Увімкнення саме по собі не змінює списків."><span class="key__cap">${led(state.syncVibe,'green')}Копіювати резерви після змін ролей</span></button></div>`;}
  // A patch key scrolls the role's lane into the page area above the drawer and blinks its LED.
  function focusAgentRole(role){
-  state.role=role;state.picker=null;const fold=foldOf(role);if(fold&&!openFolds.has(fold)){openFolds.add(fold);storeFolds();}
+  state.role=role;state.picker=null;const fold=laneGroups().find(g=>g.fold?.includes(role))?.fold;if(fold&&!foldOpen(fold)){fold.forEach(r=>openFolds.add(r));storeFolds();}
   render();store();
   const lane=win.querySelector(`.lane[data-role="${CSS.escape(role)}"]`),target=lane?.querySelector('.lane__key');
   target?.focus({preventScroll:true});if(lane){revealInPage(lane);flashLane(lane);}
@@ -215,7 +254,7 @@
  function modeOff(){return modeSettings().mode==='no-deepseek';}
  function deepseek(value){return ManaOperator.isPaidDeepSeek(value,catalogMap.get(split(value).raw));}
  function modeList(key){const s=modeSettings();return [...(key==='profile'?s.alternatives:s.overrides[key]??s.alternatives)];}
- function modeBody(name=state.profile){return {profile:name,revision:source.revisions[name],changes:diff(name).filter(c=>!c.path[0].startsWith('forge')),modeSettings:copy(modeSettings(name))};}
+ function modeBody(name=state.profile){return {profile:name,revision:baseRevision(name),changes:diff(name).filter(c=>!c.path[0].startsWith('forge')),modeSettings:copy(modeSettings(name))};}
  function modeKey(name=state.profile){if(renderCache?.keys.has(name))return renderCache.keys.get(name);const key=JSON.stringify([modeBody(name),state.modeRefresh?.[name]||0]);renderCache?.keys.set(name,key);return key;}
  function activePlan(){const row=state.modePlans?.[state.profile];return row?.key===modeKey()?row:null;}
  function modeView(role,group='role'){
@@ -244,7 +283,8 @@
   Promise.resolve().then(async()=>{
    let result;
    try{result={key,data:await api('/api/profile-preview',body)};}
-   catch(e){result={key,error:e.message};}
+   // A stale revision is found now, not at the next 15-s poll: the reload rebases the draft or marks the conflict.
+   catch(e){result={key,error:e.message};if(e.code==='revision'){backgroundRefreshPending=true;scheduleBackgroundWork();}}
    if(state.modePlans[name]!==pending)return;
    if(interactionBusy(true)){pendingModeResults.set(name,result);scheduleBackgroundWork();return;}
    state.modePlans[name]=result;
@@ -254,7 +294,7 @@
  function modeTag(role,group='role'){
   const v=modeView(role,group);if(!v?.paused?.length&&!v?.substituted)return '';
   const scope=modeScope(role,group),count=v.paused.length;
-  return `<button type="button" class="key key--sm lane__mode" aria-label="Заміни DeepSeek: ${esc(role)}" data-mode-scope="${esc(scope)}" title="${esc(v.substituted?'Замість '+v.original:count+' входжень DeepSeek призупинено')}"><span class="key__cap">${v.substituted?'⇄':'−'+count}</span></button>`;
+  return `<button type="button" class="key key--sm lane__mode" aria-label="Заміни DeepSeek: ${esc(role)}" data-mode-scope="${esc(scope)}" title="${esc(v.substituted?'Замість '+v.original:count+' '+plural(count,'входження','входження','входжень')+' DeepSeek призупинено')}"><span class="key__cap">${v.substituted?'⇄':'−'+count}</span></button>`;
  }
  // Tariff 24 h inside the DeepSeek glass. Ticks follow local hours (also in half-hour time zones); the bars follow
  // the UTC tariff hours, positioned on the same axis: height = price (peak is tall and hatched), not only hue.
@@ -285,7 +325,7 @@
  function modeChin(id){
   const settings=modeSettings();
   return [box('p/mode-slide',`<button type="button" class="slide" role="switch" data-profile-mode="${modeOff()?'deepseek':'no-deepseek'}" aria-checked="${!modeOff()}" aria-label="DeepSeek у профілі: ON — оригінал, OFF — заміни" title="${modeOff()?'Увімкнути DeepSeek · повернути на доріжки':'Вимкнути платний DeepSeek · FREE CUTS залишаються'}" ${state.saving?'disabled':''}>`,[leaf('p/mode-slide/face',SLIDE_FACE)]),
-   leaf('p/mode-keys',`<button type="button" class="key" data-action="mode-panel" aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives" aria-label="Заміни DeepSeek · ${settings.alternatives.length} CUTS"><span class="key__cap">${led(modeOff(),'amber')}Заміни · <span class="rd" style="--rd:2ch">${settings.alternatives.length}</span></span></button>${key(SVG.refresh,'mode-refresh','key--sq','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни"'+(modeOff()?'':' disabled'))}`),
+   leaf('p/mode-keys',`<button type="button" class="key" data-action="mode-panel" aria-expanded="${!!state.modePanel}" aria-controls="mode-alternatives" aria-label="Заміни DeepSeek · ${settings.alternatives.length} CUTS"><span class="key__cap">${led(!!state.modePanel,'orange',' data-latch')}Заміни <span class="rd key__count" style="--rd:2ch">${settings.alternatives.length}</span></span></button>${key(SVG.refresh,'mode-refresh','key--sq','aria-label="Перевірити доступність і оновити заміни" title="Перевірити доступність і оновити заміни"'+(modeOff()?'':' disabled'))}`),
    leaf(id+'/grow','<span class="strip__grow"></span>'),leaf(id+'/enc',hueEncoder(id,'DeepSeek',SCREEN_HUE.ds))];
  }
  // Problems that are not the DeepSeek mode's own line: preview blockers without a DeepSeek screen, outside edits
@@ -306,7 +346,8 @@
  // Replacements in the drawer: numbered CUTS in priority order (left to right, then the next row), the preview's
  // state on one reserved line, and every CUT the preview had to skip marked in place with its reason.
  function modeScopes(){const settings=modeSettings();return [['profile','Увесь профіль'],...roleKeys.map(r=>['role:'+r,r+' · '+(labels[r]||r)]),...workers().map(w=>['vibe:'+w,'Агент '+w])].map(([k,t])=>[k,t+(Object.hasOwn(settings.overrides,k)?' · власні':'')]);}
- function modeSkipped(key=state.modeScope||'profile'){const plan=activePlan(),preview=plan?.data||(plan?.pending?plan.previous:null);return [...new Map((preview?.skipped||[]).filter(x=>key==='profile'||x.key===key).map(x=>[x.route+'|'+x.reason,x])).values()];}
+ // One row per skipped CUT and reason; `keys` names every lane where the preview skipped it.
+ function modeSkipped(key=state.modeScope||'profile'){const plan=activePlan(),preview=plan?.data||(plan?.pending?plan.previous:null),rows=new Map();for(const x of preview?.skipped||[]){if(key!=='profile'&&x.key!==key)continue;const id=x.route+'|'+x.reason,row=rows.get(id)||{...x,keys:[]};if(x.key&&!row.keys.includes(x.key))row.keys.push(x.key);rows.set(id,row);}return [...rows.values()];}
  function modePanel(){
   const scopeKey=state.modeScope||'profile',settings=modeSettings(),list=modeList(scopeKey),own=scopeKey!=='profile'&&Object.hasOwn(settings.overrides,scopeKey);
   const alias=scopeKey.startsWith('vibe:')?vibeAlias(scopeKey.slice(5)):'',plan=activePlan(),skipped=modeSkipped(scopeKey),dirty=diff(state.profile).length>0;
@@ -319,22 +360,28 @@
  }
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b||state.saving)return;
-  if(b.dataset.profileMode){state.poolPanel=false;modeSettings().mode=b.dataset.profileMode;state.picker=null;render();return;}
+  if(b.dataset.profileMode){state.poolPanel=false;modeSettings().mode=b.dataset.profileMode;state.picker=null;state.opFeedback='';state.editorMsg='';render();return;}
   if(b.dataset.modeScope){state.modeScope=b.dataset.modeScope;editTray('alternatives',true,b);return;}
   const a=b.dataset.action;
   if(a==='mode-panel'){state.modeScope='profile';editTray('alternatives',!state.modePanel,b);}
   if(a==='mode-close')editTray('alternatives',false);
   if(a==='mode-alias-scope'){state.modeScope=b.dataset.aliasScope;render();}
-  if(a==='mode-reset-scope'){delete modeSettings().overrides[state.modeScope];render();}
-  if(a==='mode-refresh'){state.modeRefresh={...state.modeRefresh,[state.profile]:(state.modeRefresh?.[state.profile]||0)+1};render();}
-  if(a==='make-permanent'){
-   const x=state.picker,route=chain(x.role,x.group)[x.index],scope=modeScope(x.role,x.group);
-   // An agent never rewrites its @role: the replacement becomes the agent's own primary.
-   if(x.group==='vibe'){const values=agentValues(x.role);values[0]=route;p().task.agentModelOverrides[x.role]=values;if(scope==='vibe:'+x.role)delete modeSettings().overrides[scope];closePicker();notify('Тепер це постійна основна модель агента '+x.role+'. Роль не змінена.');return;}
-   const role=scope.slice(scope.indexOf(':')+1),normal=baseChain(role);normal[0]=route;oldSetChain(role,normal);delete modeSettings().overrides[scope];closePicker();notify('Тепер це постійна основна модель профілю');
-  }
+  if(a==='mode-reset-scope'){delete modeSettings().overrides[state.modeScope];state.editorMsg='';render();}
+  if(a==='mode-refresh'){state.modeRefresh={...state.modeRefresh,[state.profile]:(state.modeRefresh?.[state.profile]||0)+1};state.editorMsg='';render();}
+  if(a==='make-permanent'){const text=pinReplacement(state.picker);if(text){closePicker();notify(text);}}
  });
- root.addEventListener('change',e=>{if(e.target.id==='mode-scope'){state.modeScope=e.target.value;render();}});
+ // «Закріпити» (QA1 B3): the ⇄ CUT takes the place of the DeepSeek it stands in for — never another primary — and
+ // stands once in the lane. A role goes through the normal lane edit (thinking, role kinds, agent sync). An agent
+ // never rewrites its @role: a substituted @role head becomes the agent's own primary. Returns the line to print.
+ function pinReplacement(x){
+  const route=chain(x.role,x.group)[x.index],scope=modeScope(x.role,x.group),view=modeView(x.role,x.group),raw=split(route).raw;
+  const base=x.group==='vibe'?agentValues(x.role):baseChain(x.role),aliasHead=x.group==='vibe'&&x.index===0&&!!view?.alias&&!!view.substituted,host=aliasHead?0:view?.paused?.[0]?.index??0;
+  const next=[...base];next[host]=route;const list=next.filter((r,i)=>i===host||split(resolveAlias(r)).raw!==raw),at=list.indexOf(route);
+  if(x.group==='vibe'){state.opFeedback='';p().task.agentModelOverrides[x.role]=list;}else if(!setChain(x.role,list,'role',{base:true}))return '';
+  if(scope===x.group+':'+x.role&&!list.some(r=>deepseek(resolveAlias(r))))delete modeSettings().overrides[scope];
+  return aliasHead?'Тепер це власна основна модель агента '+x.role+'. Роль не змінена.':'Закріплено на місці DeepSeek · '+(x.group==='vibe'?'агент ':'')+x.role+' · '+(at===0?'основна':'резерв '+at);
+ }
+ root.addEventListener('change',e=>{if(e.target.id==='mode-scope'){state.modeScope=e.target.value;state.editorMsg='';render();}});
 
  function short(id){return String(id).replaceAll('-',' ');}
  function cutTitle(route){const m=split(route);return ManaOperator.displayModelName(m.id,catalogMap.get(m.raw)?.name);}
@@ -364,10 +411,19 @@
   if(values.length===1&&values[0].startsWith('@')&&!(before.length===1&&before[0]===values[0]))chainNotes.push(worker+' тепер успадковує '+values[0]+' разом із резервами ролі');
  }
  function options(value,raw){const m=catalogMap.get(raw);const levels=Array.isArray(m?.thinking)&&m.thinking.length?['',...new Set(['off',...m.thinking])]:m?.reasoning===false?['','off']:['','off','minimal','low','medium','high','xhigh','max'];if(value&&!levels.includes(value))levels.push(value);return levels.map(e=>`<option value="${esc(e)}" ${e===value?'selected':''}>${esc(e||'типово')}</option>`).join('');}
- // Thinking on the tape: a small detented selector (24px target); omitted where the role has no thinking.
- function thinkSelect(m,role,i,group,label){const id=group==='alternatives'&&String(role).startsWith('role:')?role.slice(5):role;if(group!=='vibe'&&group!=='pool'&&roleInfo(id)?.thinking===false)return '';return `<select class="cut__think" data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-label="${esc(label)}">${options(m.effort,m.raw)}</select>`;}
+ // Thinking on the tape: a small key that prints the level (24px target) and opens ONE shared thinking menu; a
+ // native <select> per CUT cost ≈23 UA-shadow nodes each (39% of the page at owner scale, QA4 P0-1). Omitted where
+ // the role has no thinking.
+ function thinkSelect(m,role,i,group,label){const id=group==='alternatives'&&String(role).startsWith('role:')?role.slice(5):role;if(group!=='vibe'&&group!=='pool'&&roleInfo(id)?.thinking===false)return '';const level=m.effort||'типово';return `<button type="button" class="cut__think" data-effort-role="${esc(role)}" data-index="${i}" data-group="${group}" aria-haspopup="menu" aria-expanded="false" aria-label="${esc((label||'Thinking')+': '+level)}" title="Thinking · ${esc(level)}">${esc(level)}</button>`;}
  function providerName(id){return providerNames[id]||source.providers.find(v=>v.id===id)?.name||id;}
- function routeMatches(route){const m=split(route),model=catalogMap.get(m.raw);return !!state.query.trim()&&matchesQuery(state.query,m.id,model?.name,short(m.id));}
+ // Role search marks CUTS in place (QA4 P0-3): a keystroke toggles .is-match on the CUTS already on screen and never
+ // rebuilds a lane. Region strings carry no match state; settleRegions() marks the CUTS a patch inserts.
+ function routeSearchText(route){const memo=routeSearchText.memo??=new Map(),key=dataVersion+'|'+route;let text=memo.get(key);if(text==null){const m=split(route);text=searchText([m.id,catalogMap.get(m.raw)?.name,short(m.id)].join(' '));if(memo.size>4000)memo.clear();memo.set(key,text);}return text;}
+ function markMatches(scopes=[win]){
+  const words=queryWords(state.query);if(!words.length&&!markMatches.on)return;
+  for(const scope of scopes)for(const el of scope.matches?.('.cut[data-route]')?[scope]:scope.querySelectorAll('.cut[data-route]')){const on=!!words.length&&matchesWords(words,routeSearchText(el.dataset.route));if(el.classList.contains('is-match')!==on)el.classList.toggle('is-match',on);}
+  if(scopes.length===1&&scopes[0]===win)markMatches.on=!!words.length;else if(words.length)markMatches.on=true;
+ }
  // Per-snapshot derived data: keyed by dataVersion (bumped by rebuild()), so a new snapshot or catalogue
  // never meets an old value and nothing has to be invalidated by hand.
  function priceInfo(m){const memo=priceMemo.get(m);if(memo?.version===dataVersion)return memo.info;const info=priceFor(m);priceMemo.set(m,{version:dataVersion,info});return info;}
@@ -390,13 +446,24 @@
  }
  // Provider identity on the tape: the edge colour and the code chip. Local GPU, FREE-only and DeepSeek providers
  // have fixed identities; any other provider gets a stable slot from its id. The chip always prints the real code.
+ // A code with its own token keeps it (STU → stu, CLD → cld); everyone else takes the first free slot in the
+ // order of their ids, and only when every slot is taken falls back to a stable hash.
  function providerSlot(provider){
   if(isLocal(provider))return 'gpu';
-  const memo=providerSlot.memo??=new Map(),k=dataVersion+'|'+provider;if(memo.has(k))return memo.get(k);
-  const models=catalog.filter(m=>m.provider===provider),slots=['stu','cld','p5','p6','p7'];
-  let slot=/deepseek/i.test(provider)?'ds':models.length&&models.every(m=>priceInfo(m).kind==='free')?'free':'';
-  if(!slot){let h=0;for(const c of String(provider))h=(h*31+c.charCodeAt(0))>>>0;slot=slots[h%slots.length];}
-  if(memo.size>400)memo.clear();memo.set(k,slot);return slot;
+  let memo=providerSlot.memo;
+  if(memo?.version!==dataVersion||!memo.map.has(provider))memo=providerSlot.memo={version:dataVersion,map:assignSlots([...new Set([...(memo?.version===dataVersion?memo.map.keys():[]),...source.providers.map(v=>v.id),...catalog.map(m=>m.provider),provider])].sort())};
+  return memo.map.get(provider);
+ }
+ function assignSlots(ids){
+  const slots=['stu','cld','p5','p6','p7'],map=new Map(),used=new Set(),models=new Map();
+  for(const m of catalog){const row=models.get(m.provider)||{n:0,free:0};row.n++;if(priceInfo(m).kind==='free')row.free++;models.set(m.provider,row);}
+  const fixed=id=>{if(isLocal(id))return 'gpu';if(/deepseek/i.test(id))return 'ds';const row=models.get(id);if(row?.n&&row.free===row.n)return 'free';const token=String(providerCode(id)).toLowerCase();return slots.slice(0,2).includes(token)?token:'';};
+  const rest=[];for(const id of ids){const slot=fixed(id);if(slot&&!(slots.includes(slot)&&used.has(slot))){map.set(id,slot);used.add(slot);}else rest.push(id);}
+  // Providers the saved profiles use come first, then connected ones: the slots go to what is on the tape.
+  const info=new Map(source.providers.map(v=>[v.id,v])),rank=id=>info.get(id)?.used?.length?0:info.get(id)?.connected?1:2;
+  rest.sort((a,b)=>rank(a)-rank(b));
+  for(const id of rest){const free=slots.find(s=>!used.has(s));if(free){map.set(id,free);used.add(free);continue;}let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;map.set(id,slots[h%slots.length]);}
+  return map;
  }
  const HEALTH_VIEW={local:['gpu','◆'],healthy:['ok','●'],risk:['low','△'],empty:['zero','∅'],unknown:['unk','?'],unavailable:['off','⊘']};
  // HEALTH is drawn in every CUT; .health-off on the deck or drawer hides the glyph and the bar, never FREE.
@@ -415,10 +482,11 @@
   const dash=text.match(/^(.{6,}?)(-(?:v?\d[\w.]*|free|pro|mini|max|lite|flash))$/i);
   return dash?[dash[1],dash[2]]:[text,''];
  }
- // The shared namespace («DEMO · », «org/», «Vendor: ») gives way before the family, so «DEMO · Aurora 01 Free» and
- // «DEMO · Swift 01 Free» shrink to «…Aurora 01 Free» / «…Swift 01 Free», never to the same «DEMO · … 01 Free».
+ // One rule on every CUT: the shared namespace («DEMO · », «org/», «Vendor: ») is never printed (the provider tag
+ // and the tooltip carry it), so «DEMO · Aurora 01 Free» and «DEMO · Swift 01 Free» read «Aurora 01 Free» /
+ // «Swift 01 Free» at any width — never a 1–4 letter stub of the namespace. The family then takes the ellipsis.
  function nameSpace(head){const text=String(head),m=text.match(/^(.{1,24}?(?: · | — | – |: |\/))(?=\S)/u);return m&&text.length-m[1].length>=3?[m[1].trimEnd(),text.slice(m[1].length)]:['',text];}
- const nameMarkup=name=>{const [head,tail]=nameParts(name),[ns,family]=nameSpace(head);return `${ns?`<span class="cut__ns">${esc(ns)}</span>`:''}<span class="cut__head">${esc(family)}</span>${tail?`<span class="cut__tail">${esc(tail)}</span>`:''}`;};
+ const nameMarkup=name=>{const [head,tail]=nameParts(name),[,family]=nameSpace(head);return `<span class="cut__head">${esc(family)}</span>${tail?`<span class="cut__tail">${esc(tail)}</span>`:''}`;};
  function freeRoute(route){const m=catalogMap.get(split(route).raw);return !!m&&priceInfo(m).kind==='free';}
  function laneIndex(role,group){const keys=group==='vibe'?workers():roleKeys;return Math.max(0,keys.indexOf(role));}
  // One CUT on every surface: lane, editors, drawer. A lane CUT is a container whose name is the <button data-edit>.
@@ -428,12 +496,12 @@
   const replacement=temporarySlot(role,i,group),inherited=inheritedSlot(role,i,group),deleted=deletedCut(r),free=!deleted&&freeRoute(r),warn=!deleted&&routeWarning(m.raw);
   const skipped=group==='alternatives'?modeSkipped(role).filter(x=>split(x.route).raw===m.raw):[];
   const more=slotActionKey(role,i,group),health=healthMarks(r),title=cutTitle(r),alias=group==='vibe'&&i===0&&vibeAlias(role)?vibeAlias(role)+' · ':'',provider=providerName(m.provider);
-  const classes=['cut',free&&'cut--free',more&&'cut--more',deleted&&'cut--deleted',before!==r&&!inherited&&'is-changed',replacement&&'is-replaced',skipped.length&&'is-skipped',routeMatches(r)&&'is-match'].filter(Boolean).join(' ');
-  const notes=[inherited?'резерв успадковано з default':before!==r?(before?'до зміни: '+before:'новий CUT'):'',warn?'маршрут зараз недоступний: провайдер вимкнений або прострочений':'',deleted?'DELETED — відсутній у провайдера':'',...skipped.map(x=>'пропущено'+(x.key&&x.key!==role?' у '+x.key.replace(/^(role|vibe):/,''):'')+': '+x.reason)].filter(Boolean);
+  const classes=['cut',free&&'cut--free',more&&'cut--more',deleted&&'cut--deleted',before!==r&&!inherited&&'is-changed',replacement&&'is-replaced',skipped.length&&'is-skipped'].filter(Boolean).join(' ');
+  const notes=[inherited?'резерв успадковано з default':before!==r?(before?'до зміни: '+before:'новий CUT'):'',warn?'маршрут зараз недоступний: провайдер вимкнений або прострочений':'',deleted?'DELETED — відсутній у провайдера':'',...skipped.map(x=>{const where=(x.keys||[x.key]).filter(k=>k&&k!==role).map(k=>k.replace(/^(role|vibe):/,''));return 'пропущено'+(where.length?' у '+where.join(', '):'')+': '+x.reason;})].filter(Boolean);
   // One tooltip per CUT: the full name (the visible one may be shortened), the exact route, HEALTH and changes.
   const tip=[alias+title+' · '+provider,r,health.text,...notes].filter(Boolean).join('\n');
   const label=`Змінити CUT ${i+1}, ${group==='pool'?poolNames[role]:role}: ${alias}${title} · ${provider}${m.effort?' · thinking '+m.effort:''}${free?' · FREE':''}${inherited?' · успадковано з default':''}${deleted?' · DELETED — відсутній у провайдера':''}${replacement?' · заміна DeepSeek':''}${skipped.length?' · пропущено':''}${health.text?' · '+health.text:''}`;
-  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}<span class="cut__edge"></span><button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title)}</button><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`)}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl">⇄ заміна</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${more}${health.bar}</div>`;
+  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-route="${esc(r)}" data-clip-key="${clipKey(role,r,i,group)}" data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"${inherited?' data-inherited="default"':''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}<span class="cut__edge"></span><button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title)}</button><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`)}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl" title="заміна DeepSeek" aria-hidden="true">⇄</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${more}${health.bar}</div>`;
  }
  function stepCount(){
   if(renderCache?.steps!=null)return renderCache.steps;
@@ -461,16 +529,19 @@
  // Transport on the drawer front: Undo / Redo / save state / Зберегти. The scope is printed when an editor owns it.
  function transportParts(){
   const pool=poolActionContext(),h=editHistory.available(pool?'@free-pools':state.profile),dirty=pool?poolsDirty():state.changes,scope=pool?'пули':state.view==='profiles'&&state.modePanel?'заміни':'';
-  const plan=activePlan(),blocked=!pool&&(plan?.pending||plan?.error||plan?.data?.issues?.length||source.modeConflicts?.length||source.modeRecovery);
+  // Save waits for a pending preview and refuses what the server would refuse (QA2 B6: only Standard's or this
+  // profile's outside edit blocks). A failed preview does not block: Save previews again and says why.
+  const plan=activePlan(),stale=!pool&&!!dirty&&staleDrafts.has(state.profile),blocked=!pool&&!stale&&!!(plan?.pending||plan?.data?.issues?.length||saveBlocker());
   const area=pool?'FREE пули':scope==='заміни'?'Заміни · профіль':'Профіль '+prettyProfile(state.profile);
-  const text=state.saving?'Збереження…':dirty?(pool?'Пули змінено':dirty+' '+(dirty%10===1&&dirty%100!==11?'зміна':[2,3,4].includes(dirty%10)&&![12,13,14].includes(dirty%100)?'зміни':'змін')):'Збережено';
-  const note=state.saving?'Записую файл':blocked&&dirty?(plan?.pending?'Чекає розрахунку замін':'Збереження заблоковане'):dirty?(pool?'Спільні пули · не збережено':'Котушка '+prettyProfile(state.profile)+' · не збережено'):'Для нових запусків OMP';
+  const text=state.saving?'Збереження…':dirty?(pool?'Пули змінено':dirty+' '+plural(dirty,'зміна','зміни','змін')):'Збережено';
+  const note=state.saving?'Записую файл':stale?'Файл змінився · вирішити конфлікт':blocked&&dirty?(plan?.pending?'Чекає розрахунку замін':'Збереження заблоковане'):dirty?(pool?'Спільні пули · не збережено':'Котушка '+prettyProfile(state.profile)+' · не збережено'):'Для нових запусків OMP';
   return {pool,scope,
    scopeHtml:scope?`<span class="transport__scope">${scope}</span>`:'',
    undo:`<button type="button" class="key key--sq" data-action="${pool?'pool-undo':'undo'}" aria-label="Скасувати зміну: ${esc(area)}" title="Скасувати · ⌘/Ctrl Z" ${!h.undo||state.saving?'disabled':''}><span class="key__cap">${SVG.undo}</span></button>`,
    redo:`<button type="button" class="key key--sq" data-action="${pool?'pool-redo':'redo'}" aria-label="Повторити зміну: ${esc(area)}" title="Повторити · ⌘/Ctrl Shift Z" ${!h.redo||state.saving?'disabled':''}><span class="key__cap">${SVG.redo}</span></button>`,
-   state:`<div class="transport__state" role="status" aria-live="polite" title="${esc(text+' · '+note)}"><b>${led(true,state.saving?'amber':dirty?(blocked?'red':'amber'):'green')}<span>${esc(text)}</span></b><small>${esc(note)}</small></div>`,
-   save:`<button type="button" class="key key--action" data-action="${pool?'pool-save':'save'}" aria-label="${pool?'Зберегти пули':'Зберегти профіль '+esc(prettyProfile(state.profile))}" title="⌘/Ctrl S" ${!dirty||state.saving||blocked?'disabled':''}><span class="key__cap">Зберегти${pool?'<span class="key__more"> пули</span>':''}</span></button>`};
+   state:`<div class="transport__state" role="status" aria-live="polite" title="${esc(text+' · '+note)}"><b>${led(true,state.saving?'amber':dirty?(blocked||stale?'red':'amber'):'green')}<span>${esc(text)}</span></b><small>${esc(note)}</small></div>`,
+   // A draft on an older file never dead-ends: its Save key becomes «Конфлікт…», the same choice as ⌘S.
+   save:stale?`<button type="button" class="key key--action" data-action="conflict-open" aria-label="Конфлікт: файл профілю ${esc(prettyProfile(state.profile))} змінився · вирішити" title="Файл змінився після початку чернетки · ⌘/Ctrl S"><span class="key__cap">Конфлікт…</span></button>`:`<button type="button" class="key key--action" data-action="${pool?'pool-save':'save'}" aria-label="${pool?'Зберегти пули':'Зберегти профіль '+esc(prettyProfile(state.profile))}" title="⌘/Ctrl S" ${!dirty||state.saving||blocked?'disabled':''}><span class="key__cap">Зберегти${pool?'<span class="key__more"> пули</span>':''}</span></button>`};
  }
  function slotActionKey(role,index,group){return chain(role,group).length>1||group==='pool'||group==='alternatives'||poolName(chain(role,group)[index])||temporarySlot(role,index,group)?`<button type="button" class="cut__more" data-slot-actions="${esc(role)}" data-index="${index}" data-group="${group}" aria-haspopup="menu" aria-expanded="false" aria-label="Дії з CUT: ${esc(role)}, слот ${index+1}" title="Дії з CUT">⋯</button>`:'';}
  // Монтаж: one deck pocket. Tools (pool keys, Пули, search), notices, editors, ruler, the lanes (a run of
@@ -495,7 +566,7 @@
  // The printed legend at the bottom of the deck; HEALTH entries hide with the switch (CSS), so it never re-renders for it.
  function legendMarkup(){
   const hs=[['ok','●','запас'],['low','△','малий'],['zero','∅','нуль'],['unk','?','немає виміру'],['off','⊘','недоступна'],['gpu','◆','GPU']];
-  return `<div class="legend"><span class="silk lg--h">HEALTH</span>${hs.map(([c,g,t])=>`<span class="lg lg--h"><span class="lg__sw hb--${c}"><i${c==='low'?' style="right:55%"':''}></i></span>${g} ${t}</span>`).join('')}<span class="lg lg--off">HEALTH вимкнено · чиста плівка</span><span class="seam seam--v"></span>${referencedProviders.map(v=>`<span class="lg"><b class="tag" data-p="${providerSlot(v)}">${esc(providerCode(v))}</b>${esc(providerName(v))}</span>`).join('')}<span class="seam seam--v"></span><span class="lg"><span class="lg__inh" aria-hidden="true"></span>резерв з default</span><span class="lg"><span class="stamp stamp--repl">⇄</span>заміна DeepSeek</span><span class="lg">${led(true,'blue')}власний список агента</span><span class="print lg__note">Збереження — для нових запусків OMP; активні сесії зберігають свої налаштування</span></div>`;
+  return `<div class="legend"><span class="silk lg--h">HEALTH</span>${hs.map(([c,g,t])=>`<span class="lg lg--h"><span class="lg__sw hb--${c}"><i${c==='low'?' style="right:55%"':''}></i></span>${g} ${t}</span>`).join('')}<span class="lg lg--off">HEALTH вимкнено · чиста плівка</span><span class="seam seam--v"></span>${referencedProviders.map(v=>`<span class="lg"><b class="tag" data-p="${providerSlot(v)}">${esc(providerCode(v))}</b><span class="lg--name">${esc(providerName(v))}</span></span>`).join('')}<span class="seam seam--v"></span><span class="lg"><span class="lg__inh" aria-hidden="true"></span>резерв з default</span><span class="lg"><span class="stamp stamp--repl">⇄</span>заміна DeepSeek</span><span class="lg">${led(true,'blue')}власний список агента</span><span class="print lg__note">Збереження — для нових запусків OMP; активні сесії зберігають свої налаштування</span></div>`;
  }
  // Runs of three or more consecutive unconfigured lanes fold into one printed row («Показати N»); `default` never
  // folds. The open state is remembered locally per run.
@@ -510,8 +581,8 @@
   const children=[];
   for(const g of laneGroups()){
    if(g.role){children.push(leaf('p/row:'+g.role,graphRow(g.role,roleKeys.indexOf(g.role))));continue;}
-   const first=g.fold[0],open=openFolds.has(first),from=roleKeys.indexOf(first)+1,to=from+g.fold.length-1,range=String(from).padStart(2,'0')+'–'+String(to).padStart(2,'0');
-   children.push(leaf('p/fold:'+first,`<div class="fold"><button type="button" class="key key--wide" data-fold-toggle="${esc(first)}" aria-expanded="${open}" aria-controls="fold-${esc(first)}"><span class="key__cap"><span class="lane__idx">${range}</span>${open?'Сховати':'Показати'} <span class="rd" style="--rd:2ch">${g.fold.length}</span></span></button><div class="fold__print"><b>${g.fold.length} доріжок · типово в OMP</b><span>${g.fold.map(esc).join(' · ')}</span></div></div>`));
+   const first=g.fold[0],open=foldOpen(g.fold),from=roleKeys.indexOf(first)+1,to=from+g.fold.length-1,range=String(from).padStart(2,'0')+'–'+String(to).padStart(2,'0');
+   children.push(leaf('p/fold:'+first,`<div class="fold"><button type="button" class="key key--wide" data-fold-toggle="${esc(first)}" aria-expanded="${open}" aria-controls="fold-${esc(first)}"><span class="key__cap"><span class="lane__idx">${range}</span>${open?'Сховати':'Показати'} <span class="rd" style="--rd:2ch">${g.fold.length}</span></span></button><div class="fold__print"><b>${g.fold.length} ${plural(g.fold.length,'доріжка','доріжки','доріжок')} · типово в OMP</b><span>${g.fold.map(esc).join(' · ')}</span></div></div>`));
    children.push(box('p/foldlanes:'+first,`<div class="fold__lanes${open?' is-open':''}" id="fold-${esc(first)}">`,g.fold.map(r=>leaf('p/row:'+r,graphRow(r,roleKeys.indexOf(r))))));
   }
   return box('p/lanes','<div class="lanes">',children);
@@ -535,6 +606,13 @@
  function pickerMarkup(){
   const x=state.picker;if(!x)return leaf('picker','');
   const list=chain(x.role,x.group),current=list[x.index],pos=`style="top:${x.top}px;left:${x.left}px"`;
+  if(x.thinking){
+   // The shared thinking menu: one latched key per level the model lists, «типово» and «off» always.
+   const m=current&&!poolName(current)?split(current):null,waiting=pickerActionsPending(),off=waiting?' disabled':'';
+   const levels=m?[...options(m.effort,m.raw).matchAll(/value="([^"]*)"[^>]*>([^<]*)</g)].map(o=>[o[1],o[2]]):[];
+   const rows=levels.map(([value,text])=>`<button type="button" class="key key--menu" role="menuitemradio" aria-checked="${value===m.effort}" data-action="set-effort" data-value="${value}"${off}><span class="key__cap">${led(value===m.effort,'green')}${text}</span></button>`).join('');
+   return leaf('picker',`<div class="menu menu--tools menu--think" data-picker role="menu" aria-label="Thinking · ${esc(pickerTitle(x))}" aria-busy="${waiting}" ${pos}><div class="menu__head"><span class="silk">Thinking · ${esc(pickerTitle(x))}</span>${MENU_CLOSE('Закрити thinking')}</div><div class="menu__bed">${rows||'<p class="menu__note">Немає рівнів thinking для цього CUT</p>'}</div>${waiting?'<p class="menu__note">Чекає розрахунку замін…</p>':''}</div>`);
+  }
   if(x.actionsOnly){
    const sequence=x.group==='alternatives'||x.group==='pool',isPool=poolName(current),canRemove=sequence||x.index>0||isPool&&list.length>1,waiting=pickerActionsPending(),off=waiting?' disabled':'';
    const item=(cap,action,attr='',cls='')=>`<button type="button" class="key key--menu${cls}" role="menuitem" data-action="${action}"${attr}${off}><span class="key__cap">${cap}</span></button>`;
@@ -574,7 +652,7 @@
   target?.focus({preventScroll:true});return !!target;
  }
  // Focus goes back to what opened the menu: the ⋯ key for CUT tools, the CUT (or socket) for the quick pick.
- function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(!restore||!x)return;const more=x.actionsOnly&&[...win.querySelectorAll(`[data-slot-actions="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);if(more)more.focus({preventScroll:true});else pickerFocus(x);}
+ function closePicker(restore=true){const x=state.picker;state.picker=null;render();if(!restore||!x)return;const more=x.actionsOnly&&[...win.querySelectorAll(`[${x.thinking?'data-effort-role':'data-slot-actions'}="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].find(el=>el.getClientRects().length);if(more)more.focus({preventScroll:true});else pickerFocus(x);}
  // A changed OFF profile waits for its projection; a failed preview shows the real chain instead.
  function projectionPending(){if(!modeOff()||!diff(state.profile).length)return false;const plan=activePlan();return !plan?.data&&!plan?.error;}
  function pickerActionsPending(){const x=state.picker;return !!(x&&x.group!=='alternatives'&&x.group!=='pool'&&projectionPending());}
@@ -587,7 +665,7 @@
  function focusPickerMove(direction){(win.querySelector(`.menu--tools [data-action=move-node][data-direction="${direction}"]:not(:disabled)`)||win.querySelector('.menu--tools [data-action=move-node]:not(:disabled)')||win.querySelector('.menu--tools [role=menuitem]:not(:disabled)'))?.focus({preventScroll:true});}
 
  function notify(s){state.toast=s;render();clearTimeout(timer);timer=setTimeout(()=>{state.toast='';paintRegions([leaf('toast','')]);},2700);}
- function openPicker(role,index,group,el,actionsOnly=false){
+ function openPicker(role,index,group,el,actionsOnly=false,thinking=false){
   if(!actionsOnly&&poolName(chain(role,group)[index])){state.poolTab=poolName(chain(role,group)[index]);editTray('pool',true,el);return;}
   if(group!=='pool')state.poolPanel=false;
   if((group||'role')==='role')state.role=role;
@@ -595,7 +673,7 @@
   if(!actionsOnly&&Number(index)>=chain(role,group).length&&group!=='alternatives'&&group!=='pool'&&!(Number(index)===0&&((group||'role')==='role'&&!p().modelRoles[role]||group==='vibe'&&!agentValues(role).length))){state.poolPanel=false;state.modePanel=false;state.cuts=true;state.cutTarget={role,index:Number(index),group:group||'role'};render();(coarsePointer()?win.querySelector('.tray [data-cut]')||win.querySelector('#cuts-resize'):win.querySelector('#cut-query'))?.focus({preventScroll:true});return;}
 
   if(!actionsOnly&&temporarySlot(role,index,group)){const route=chain(role,group)[index],key=modeScope(role,group),candidate=modeList(key).findIndex(v=>split(v).raw===split(route).raw);if(candidate>=0){role=key;group='alternatives';index=candidate;}}
-  const b=el.getBoundingClientRect();state.picker={role,index:Number(index),group:group||'role',query:'',provider:'all',scope:'mine',limit:20,actionsOnly,anchor:{top:b.top,bottom:b.bottom},top:Math.max(12,b.bottom+7),left:Math.max(12,Math.min(b.left,innerWidth-(actionsOnly?264:432)))};render();
+  const b=el.getBoundingClientRect();state.picker={role,index:Number(index),group:group||'role',query:'',provider:'all',scope:'mine',limit:20,actionsOnly,thinking,inTray:!!el.closest('.tray'),anchor:{top:b.top,bottom:b.bottom},top:Math.max(12,b.bottom+7),left:Math.max(12,Math.min(b.left,innerWidth-(actionsOnly?264:432)))};render();
   focusPicker();
  }
 
@@ -603,7 +681,9 @@
  // One read after it is mounted; its size never follows the results, so typing or an empty result never moves it.
  function fitPicker(){
   const el=win.querySelector('[data-picker]'),x=state.picker;if(!el||!x||narrowSurface())return;
-  const box=el.getBoundingClientRect(),floor=innerHeight-12;
+  // A menu from the page stays above the drawer (open) or its lip (closed); one from inside the drawer may use it.
+  const tray=!x.inTray&&win.querySelector('.tray'),covered=tray?(drawerShown()?tray.getBoundingClientRect().height:parseFloat(getComputedStyle(win.querySelector('.tray-port')).getPropertyValue('--lip'))||46):0;
+  const box=el.getBoundingClientRect(),floor=innerHeight-12-covered;
   if(x.anchor&&x.top+box.height>floor&&x.anchor.top-7-box.height>=12)x.top=x.anchor.top-7-box.height;
   x.top=Math.max(12,Math.min(x.top,floor-box.height));x.anchor=null;x.left=Math.max(12,Math.min(x.left,innerWidth-box.width-12));el.style.top=x.top+'px';el.style.left=x.left+'px';
  }
@@ -612,9 +692,9 @@
   // and only result regions are repainted.
   const previousCache=renderCache;renderCache={diffs:new Map(),keys:new Map()};
   try{
-   if(id==='role-query'){regions.reopen('p/deck',deckOpen());paintRegions([laneGraph(),agentList(),...(editorKind()?[leaf('drawer/editor',state.poolPanel?poolEditor():modePanel())]:[])],[leaf('p/role-search',roleSearch())]);}
+   if(id==='role-query'){regions.reopen('p/deck',deckOpen());regions.adopt(leaf('p/role-search',roleSearch()));markMatches();}
    if(id==='picker-search'&&state.picker&&!state.picker.actionsOnly){const results=leaf('picker/results',pickerResults());paintRegions([results,leaf('picker/count',pickerCount())],[leaf('picker/search',pickerSearch())]);}
-   if(id==='cut-query'&&drawerShown()&&drawerMode()!=='form'){const cuts=collectionCuts();paintRegions([leaf('drawer/count',drawerCount(cuts)),leaf('drawer/results',drawerResults(cuts))],[leaf('drawer/search',drawerSearch())]);}
+   if(id==='cut-query'&&drawerShown()&&drawerMode()!=='form'){const cuts=collectionCuts();paintRegions([leaf(editorKind()?'drawer/srchead/count':'drawer/title/count',drawerCount(cuts)),...(editorKind()?[]:[leaf('drawer/hint',drawerHint(cuts.length))]),leaf('drawer/results',drawerResults(cuts))],[leaf('drawer/search',drawerSearch())]);}
    if(id==='catalog-query'&&state.view==='models'){const data=catalogData();paintRegions(catalogBody(data),[leaf('m/source',catalogSearch(data))]);}
   }finally{renderCache=previousCache;}
  }
@@ -632,12 +712,12 @@
  root.addEventListener('click',e=>{if(e.target.closest('.menu--tools [data-action]:not([data-action=picker-close])')&&pickerActionsPending()){e.preventDefault();e.stopImmediatePropagation();}},true);
  root.addEventListener('click',e=>{if(e.target.closest('.dock__menu .menu button'))win.querySelector('.dock__menu')?.removeAttribute('open');},true);
  root.addEventListener('toggle',e=>{const menu=e.target;if(menu.matches?.('.dock__menu')&&menu.open&&(!menu.contains(document.activeElement)||document.activeElement.matches('summary'))){menu.querySelector('.menu')?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});menu.querySelector('[role=menuitem]:not(:disabled)')?.focus({preventScroll:true});}},true);
- root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const prior=previous?.effort||'',old=carryEffort(prior,b.dataset.pick);a[x.index]=b.dataset.pick+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
+ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){const n=e.target.closest('[data-node-role]');if(n&&!e.target.closest('select,.cut__think'))openPicker(n.dataset.nodeRole,n.dataset.index,n.dataset.group,n);return;}if(b.dataset.view){state.view=b.dataset.view;state.picker=null;state.armedCut=null;state.cutTarget=null;state.poolPanel=false;state.modePanel=false;state.query='';state.page=0;render();store();return;}if(b.dataset.slotActions){openPicker(b.dataset.slotActions,b.dataset.index,b.dataset.group,b,true);return;}if(b.dataset.effortRole){const x=state.picker;if(x?.thinking&&x.role===b.dataset.effortRole&&x.index===Number(b.dataset.index)&&x.group===b.dataset.group)closePicker();else openPicker(b.dataset.effortRole,b.dataset.index,b.dataset.group,b,true,true);return;}if(b.dataset.catalogProvider){state.catalogProvider=b.dataset.catalogProvider;state.analyze=null;state.page=0;render();return;}if(b.dataset.edit){openPicker(b.dataset.edit,b.dataset.index,b.dataset.group,b);return;}if(b.dataset.resetAgent){resetAgent(b.dataset.resetAgent);return;}if(b.dataset.agentCopy){copyAgentRole(b.dataset.agentCopy);return;}if(b.dataset.agentRole){focusAgentRole(b.dataset.agentRole);return;}if(b.dataset.focusRole){state.role=b.dataset.focusRole;render();store();return;}if(b.dataset.fav){const r=b.dataset.fav,next=state.favs.includes(r)?state.favs.filter(x=>x!==r):[...state.favs,r];state.favs=next;render();favWrites=favWrites.then(async()=>{try{await api('/api/favorites',{values:next});favSaved=next;}catch(e){if(state.favs===next){state.favs=[...favSaved];render();}notify(e.message);}});return;}if(b.dataset.pick){const x=state.picker,a=chain(x.role,x.group),previous=a[x.index]?split(a[x.index]):null;if(previous?.raw===b.dataset.pick){closePicker();return;}const prior=previous?.effort||'',old=carryEffort(prior,b.dataset.pick);a[x.index]=b.dataset.pick+(old?':'+old:'');const ok=setChain(x.role,a,x.group);closePicker();if(ok&&prior&&!old&&!thinkingOff(x.role,x.group))notify('Thinking → типово: '+prior+' не підтверджено для нової моделі.');return;}
 
- const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;render();}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('#picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('#picker-results').scrollTop=offset;}if(a==='picker-clear'){state.picker.query='';state.picker.limit=20;render();win.querySelector('#picker-search')?.focus({preventScroll:true});}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){state.page+=a==='next-page'?1:-1;render();}if(a==='provider-add')openForm('provider',{editProvider:null});if(a==='provider-create'){await saveProvider();}
+ const a=b.dataset.action;if(a==='reset-agent'){resetAgent(state.picker.role);return;}if(a==='reset-role'){resetRole(state.picker.role);return;}if(a==='save'){await save();}if(a==='undo'||a==='redo')historyStep(a==='undo'?-1:1);if(a==='reset-draft'){state.poolPanel=false;profiles[state.profile]=copy(original[state.profile]);state.picker=null;state.opFeedback='Чернетку '+prettyProfile(state.profile)+' скинуто · можна скасувати ↶';render();win.querySelector('.dock__menu summary')?.focus({preventScroll:true});}if(a==='picker-close')closePicker();if(a==='picker-more'){const offset=win.querySelector('#picker-results').scrollTop;state.picker.limit+=40;render();win.querySelector('#picker-results').scrollTop=offset;}if(a==='picker-clear'){state.picker.query='';state.picker.limit=20;render();win.querySelector('#picker-search')?.focus({preventScroll:true});}if(a==='move-node'){movePickerCut(Number(b.dataset.direction));return;}if(a==='set-effort'){const x=state.picker,list=x&&chain(x.role,x.group);if(!list?.[x.index])return;list[x.index]=split(list[x.index]).raw+(b.dataset.value?':'+b.dataset.value:'');setChain(x.role,list,x.group);closePicker();return;}if(['remove-node','promote-node'].includes(a)){const x=state.picker;if(!x||x.index===0&&x.group!=='alternatives'&&x.group!=='pool'&&!(poolName(chain(x.role,x.group)[0])&&chain(x.role,x.group).length>1))return;const list=chain(x.role,x.group);if(a==='remove-node')list.splice(x.index,1);else{list.unshift(list.splice(x.index,1)[0]);x.index=0;}setChain(x.role,list,x.group);closePicker();}if(a==='prev-page'||a==='next-page'){turnCatalogPage(a==='next-page'?1:-1,a);}if(a==='provider-add')openForm('provider',{editProvider:null});if(a==='provider-create'){await saveProvider();}
 
  });
- root.addEventListener('change',e=>{const el=e.target;if(el.id==='profile-choice'){state.poolPanel=false;state.profile=el.value;state.picker=null;state.armedCut=null;state.cutTarget=null;render();store();}if(el.dataset.effortRole){el.focus({preventScroll:true});const role=el.dataset.effortRole,g=el.dataset.group,a=chain(role,g),i=Number(el.dataset.index);a[i]=split(a[i]).raw+(el.value?':'+el.value:'');setChain(role,a,g);render();}if(el.id==='catalog-provider'){state.catalogProvider=el.value;state.analyze=null;state.page=0;render();}if(el.id==='picker-provider'){state.picker.scope=el.value==='*'?'all':'mine';state.picker.provider=el.value==='*'?'all':el.value;state.picker.limit=20;render();if(coarsePointer())win.querySelector('#picker-provider')?.focus({preventScroll:true});else focusPicker();}if(el.id==='picker-effort'){el.focus({preventScroll:true});const x=state.picker,list=chain(x.role,x.group);list[x.index]=split(list[x.index]).raw+(el.value?':'+el.value:'');setChain(x.role,list,x.group);render();}});
+ root.addEventListener('change',e=>{const el=e.target;if(el.id==='profile-choice'){state.poolPanel=false;state.profile=el.value;state.picker=null;state.opFeedback='';state.armedCut=null;state.cutTarget=null;render();store();}if(el.id==='catalog-provider'){state.catalogProvider=el.value;state.analyze=null;state.page=0;render();}if(el.id==='picker-provider'){state.picker.scope=el.value==='*'?'all':'mine';state.picker.provider=el.value==='*'?'all':el.value;state.picker.limit=20;render();if(coarsePointer())win.querySelector('#picker-provider')?.focus({preventScroll:true});else focusPicker();}if(el.id==='picker-effort'){el.focus({preventScroll:true});const x=state.picker,list=chain(x.role,x.group);list[x.index]=split(list[x.index]).raw+(el.value?':'+el.value:'');setChain(x.role,list,x.group);render();}});
 
  function onKeydown(e){
   const clip=e.target.closest('[data-edit]');
@@ -660,6 +740,8 @@
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'&&['profiles','models'].includes(state.view)&&!state.modal){e.preventDefault();const poolContext=e.target.closest('#pool-editor')||state.picker?.group==='pool'||poolActionContext();if(state.picker)closePicker();(poolContext?savePools:save)();return;}
   if(e.key==='Escape'&&win.querySelector('.dock__menu[open]')){const menu=win.querySelector('.dock__menu');menu.removeAttribute('open');menu.querySelector('summary').focus();return;}
   if(e.key==='Escape'&&(e.defaultPrevented||e.target.closest('select')&&(CSS.supports('selector(select:open)')?e.target.closest('select').matches(':open'):true)))return;
+  // Escape in a filled search field clears the field first; the next Escape closes the editor or the drawer.
+  if(e.key==='Escape'&&e.target.matches?.('input[type=search]:not(#picker-search)')&&e.target.value){e.preventDefault();e.target.value='';searchInput(e.target);return;}
   if(e.key==='Escape'&&(state.picker||state.modal)){e.preventDefault();if(state.picker){closePicker();return;}const back=state.modal==='confirm'&&state.confirm?.back;if(back)openForm(back);else closeForm();return;}
   if(e.key==='Escape'&&!state.picker&&!state.modal&&(state.poolPanel||state.modePanel)){e.preventDefault();editTray(state.poolPanel?'pool':'alternatives',false);return;}
   if(e.key==='Enter'&&e.target.closest('#new-provider')&&!e.target.matches('textarea,select')){e.preventDefault();win.querySelector('[data-action=provider-create]')?.click();}
@@ -674,12 +756,13 @@
   if(e.target.matches?.('[data-history-bin]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const n=win.querySelectorAll('[data-history-bin]').length,i=Number(e.target.dataset.historyBin),next=e.key==='Home'?0:e.key==='End'?n-1:Math.max(0,Math.min(n-1,i+(e.key==='ArrowRight'?1:-1)));scrubHistory(next,true);win.querySelector(`[data-history-bin="${next}"]`)?.focus({preventScroll:true});return;}
   // Menus: arrows walk the enabled keys (wrapping), Home / End jump; Escape is handled above.
   const menu=e.target.closest?.('[role=menu]');
-  if(menu&&e.target.matches('[role=menuitem]')&&['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();const items=[...menu.querySelectorAll('[role=menuitem]:not(:disabled)')],n=items.length,i=items.indexOf(e.target);items[e.key==='Home'?0:e.key==='End'?n-1:(i+(e.key==='ArrowDown'?1:-1)+n)%n]?.focus();return;}
+  if(menu&&e.target.matches('[role=menuitem],[role=menuitemradio]')&&['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();const items=[...menu.querySelectorAll('[role=menuitem]:not(:disabled),[role=menuitemradio]:not(:disabled)')],n=items.length,i=items.indexOf(e.target);items[e.key==='Home'?0:e.key==='End'?n-1:(i+(e.key==='ArrowDown'?1:-1)+n)%n]?.focus();return;}
   // Tabs (FREE GOOD / FREE FAST): arrows move between them and select.
   if(e.target.matches('[role=tab][data-pool-tab]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const tabs=Object.keys(poolNames),i=tabs.indexOf(e.target.dataset.poolTab),n=tabs.length;selectPoolTab(tabs[e.key==='Home'?0:e.key==='End'?n-1:(i+(e.key==='ArrowRight'?1:-1)+n)%n]);return;}
   if(state.picker&&e.target.closest('[data-picker]')){
    const rows=[...win.querySelectorAll('#picker-results [data-pick]')];
    if(['ArrowDown','ArrowUp'].includes(e.key)&&(e.target.id==='picker-search'||e.target.hasAttribute('data-pick'))){e.preventDefault();const i=rows.indexOf(e.target),next=i<0?(e.key==='ArrowDown'?0:rows.length-1):Math.max(0,Math.min(rows.length-1,i+(e.key==='ArrowDown'?1:-1)));rows[next]?.focus();}
+   if(['Home','End'].includes(e.key)&&e.target.hasAttribute('data-pick')){e.preventDefault();rows[e.key==='Home'?0:rows.length-1]?.focus();}
    if(e.key==='Enter'&&e.target.id==='picker-search'){e.preventDefault();if(state.picker.query.trim())rows[0]?.click();else win.querySelector('#picker-results .is-current')?.click();}
   }
  }
@@ -729,14 +812,28 @@
   d.node.classList.add('is-src');win.querySelector('#profile-tracks')?.classList.add('is-dragging');
   if(fromTray&&!editing)tray?.classList.add('is-retracted');
  }
+ // Edge autoscroll is armed, never instant (QA1 B1). A drag that lifts inside an edge zone (a lane just above the
+ // lip, the top of the page) does not roll the page until the pointer has left the zone or moved 24px toward its
+ // edge; then it has to rest in the zone for a short dwell, and the page starts slowly. A sideways reorder near the
+ // lip therefore never scrolls. Returns px per frame, or null while the dwell is still running.
+ function edgeVelocity(d,now){
+  const EDGE=72,DWELL=320,MAX=24,zone=d.y<EDGE?-1:d.y>d.floor-EDGE&&!(d.overTray&&d.y>d.floor)?1:0;
+  if(d.edgeArmed===undefined)d.edgeArmed=!zone;
+  if(!zone){d.edgeArmed=true;d.edgeSince=0;return 0;}
+  if(!d.edgeArmed&&(zone<0?d.y0-d.y:d.y-d.y0)>=24)d.edgeArmed=true;
+  if(!d.edgeArmed)return 0;
+  if(d.edgeZone!==zone||!d.edgeSince){d.edgeZone=zone;d.edgeSince=now;}
+  const held=now-d.edgeSince-DWELL;if(held<0)return null;
+  return zone*MAX*(zone<0?Math.min(1,(EDGE-d.y)/EDGE):Math.min(1.5,(d.y-(d.floor-EDGE))/EDGE))*Math.min(1,.25+held/600);
+ }
  function dragFrame(){
   const d=drag;if(!d?.active)return;d.frame=0;
   markTarget(d,dropTarget(d,d.x,d.y));
-  const EDGE=72,MAX=24;let v=0;
-  if(d.y<EDGE)v=-MAX*Math.min(1,(EDGE-d.y)/EDGE);else if(d.y>d.floor-EDGE&&!(d.overTray&&d.y>d.floor))v=MAX*Math.min(1.5,(d.y-(d.floor-EDGE))/EDGE);
+  const v=edgeVelocity(d,performance.now());
   d.ghost.style.transform=`translate3d(${d.rect.left+d.x-d.x0}px,${d.rect.top+d.y-d.y0}px,0) rotate(-1.6deg) scale(1.04)`;
-  // Keep rolling while the pointer is held at an edge.
-  if(v){const next=Math.max(0,Math.min(d.maxScroll,d.scroll+Math.round(v)));if(next!==d.scroll){d.scroll=next;window.scrollTo(0,next);d.frame=requestAnimationFrame(dragFrame);}}
+  // Wait out the dwell, then keep rolling while the pointer is held at an edge.
+  if(v===null){d.frame=requestAnimationFrame(dragFrame);return;}
+  if(v){const next=Math.max(0,Math.min(d.maxScroll,d.scroll+(Math.round(v)||Math.sign(v))));if(next!==d.scroll){d.scroll=next;window.scrollTo(0,next);d.frame=requestAnimationFrame(dragFrame);}}
  }
  function endDrag(cancel=false){
   const d=drag;drag=null;if(!d)return null;cancelAnimationFrame(d.frame);
@@ -803,15 +900,43 @@
  document.addEventListener('pointerup',()=>{if(suppressClipClick)setTimeout(()=>{suppressClipClick=false;},0);},true);
 
 
+ // The editable fields of a profile: what diff() reports and what a rebase moves, one path per role, chain and agent.
+ function profilePaths(...list){return [...[...new Set(list.flatMap(x=>Object.keys(x.modelRoles||{})))].map(r=>['modelRoles',r]),...[...new Set(list.flatMap(x=>Object.keys(x.retry?.fallbackChains||{})))].map(r=>['retry','fallbackChains',r]),...[...new Set(list.flatMap(x=>workers(x)))].map(r=>['task','agentModelOverrides',r]),['disabledProviders'],['forgeMode']];}
  function diff(name){
   if(renderCache?.diffs.has(name))return renderCache.diffs.get(name);
   const a=original[name],b=profiles[name],out=[];
-  for(const path of [...[...new Set([...Object.keys(a.modelRoles),...Object.keys(b.modelRoles)])].map(r=>['modelRoles',r]),...[...new Set([...Object.keys(a.retry.fallbackChains),...Object.keys(b.retry.fallbackChains)])].map(r=>['retry','fallbackChains',r]),...[...new Set([...workers(a),...workers(b)])].map(r=>['task','agentModelOverrides',r]),['disabledProviders'],['forgeMode']]){
+  for(const path of profilePaths(a,b)){
    const get=o=>path.reduce((v,k)=>v?.[k],o),v=get(b);
    if(JSON.stringify(get(a))!==JSON.stringify(v))out.push(v===undefined?{path,remove:true}:{path,value:v});
   }
   renderCache?.diffs.set(name,out);return out;
  }
+ // A draft made on an older file moves onto the current one: every field the draft changed keeps its value and
+ // every other field takes the file's. A field both sides changed differently is a conflict: `auto` reports it
+ // and changes nothing, `mine` keeps the draft's value, `theirs` takes the file's.
+ function rebaseValue(old,next,mine,mode='auto'){
+  const out=copy(next),conflicts=[];
+  for(const path of profilePaths(old,next,mine)){
+   const get=o=>path.reduce((v,k)=>v?.[k],o),m=get(mine),was=JSON.stringify(get(old)),now=JSON.stringify(get(next)),own=JSON.stringify(m);
+   if(own===was)continue;
+   if(now!==was&&now!==own){conflicts.push(path);if(mode!=='mine')continue;}
+   const parent=path.slice(0,-1).reduce((x,k)=>x[k]??={},out);if(m===undefined)delete parent[path.at(-1)];else parent[path.at(-1)]=copy(m);
+  }
+  return {value:out,conflicts};
+ }
+ // Drafts that still stand on an older revision of their file (name → {revision, conflicts}). The server's
+ // revision stays in source.revisions; a save, a preview and the stored draft send the draft's own base.
+ const staleDrafts=new Map();
+ function baseRevision(name){return staleDrafts.get(name)?.revision??source.revisions?.[name];}
+ function freshProfile(name,from=source){const raw=name==='standard'?copy(from.base):merge(from.base,from.presets?.[name]||{}),out=normalizeProfile(raw);out.forgeMode=copy(from.profileModes?.[name]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});return out;}
+ // Moves a draft onto `next`; with `auto` and a conflict it stays where it is and the conflict is returned.
+ function rebaseDraft(name,next,mode='auto'){
+  const old=original[name],{value,conflicts}=rebaseValue(old,next,profiles[name],mode);
+  if(mode==='auto'&&conflicts.length)return conflicts;
+  editHistory.rebase(name,entry=>rebaseValue(old,next,entry,mode==='theirs'?'theirs':'mine').value);
+  original[name]=copy(next);profiles[name]=value;staleDrafts.delete(name);return [];
+ }
+ function pathLabel([a,b,c]){return a==='modelRoles'?b+' · основна':a==='retry'?c+' · резерви':a==='task'?'агент '+c:a==='disabledProviders'?'провайдери профілю':a==='forgeMode'?'режим DeepSeek':[a,b,c].filter(Boolean).join('.');}
  // Server problems with a code get a clear line instead of the generic «змінились вихідні дані» dialog.
  const PROBLEM_CODES=new Set(['mode-recovery','symlink','mode-conflict']);
  function problemText(d){
@@ -823,7 +948,13 @@
  }
  async function api(path,body){
   const writes=path!=='/api/profile-preview';if(writes){writeEpoch++;activeWrites++;}
-  try{const r=await fetch(endpoint(path),{method:'POST',headers:{'Content-Type':'application/json','X-Forge-CSRF':source.csrf},body:JSON.stringify(body)});const d=await r.json();if(!r.ok){const e=Error(problemText(d));e.status=r.status;e.code=d.code||'';e.files=d.files||d.profiles||[];throw e;}return d;}
+  try{const r=await fetch(endpoint(path),{method:'POST',headers:{'Content-Type':'application/json','X-Forge-CSRF':source.csrf},body:JSON.stringify(body),signal:deadline(writes?30000:20000)});const d=await r.json();if(!r.ok){const e=Error(problemText(d));e.status=r.status;e.code=d.code||'';e.files=d.files||d.profiles||[];throw e;}return d;}
+  catch(e){
+   // No answer in time: a write may or may not have landed, so the state is read again as soon as possible.
+   if(e?.name==='TimeoutError'||e?.name==='AbortError'){const t=Error(writes?'Сервер не відповів за 30 с. Невідомо, чи зміни записано: чернетка лишилась у вікні, стан перечитується.':'Сервер не відповів вчасно. Спробуй ще раз.');t.status=0;t.code='timeout';if(writes)backgroundRefreshPending=true;throw t;}
+   if(e instanceof TypeError&&!e.status){const t=Error('Немає зв’язку із сервером. Чернетка лишилась у вікні.');t.status=0;t.code='offline';throw t;}
+   throw e;
+  }
   finally{if(writes){writeEpoch++;activeWrites--;scheduleBackgroundWork();}}
  }
  function interactionBusy(preview=false){
@@ -873,7 +1004,7 @@
   if(background&&backgroundReloading)return;const epoch=writeEpoch;if(background)backgroundReloading=true;
   try{
   // A poll revalidates with the snapshot's ETag: 304 is an unchanged snapshot without a body or a parse.
-  const r=await fetch(endpoint('/api/state'),background&&stateTag?{cache:'no-store',headers:{'If-None-Match':stateTag}}:{cache:'no-store'});
+  const r=await fetch(endpoint('/api/state'),{cache:'no-store',...(background&&stateTag?{headers:{'If-None-Match':stateTag}}:{}),signal:deadline(background?10000:15000)});
   const ageChanged=snapshot=>(snapshot.insights?.usage?.reports||[]).some(report=>!report.stale&&report.at&&((Date.now()/1000-report.at>900)!==(renderedAt/1000-report.at>900)));
   if(r.status===304){if(state.offline||ageChanged(source)){state.offline=false;pendingRender=true;scheduleBackgroundWork();}return;}
   if(!r.ok)throw Error('Немає зв’язку із сервером');const fresh=await r.json(),tag=r.headers?.get?.('ETag')||'';
@@ -884,15 +1015,25 @@
   stateTag=tag;
   const next={standard:copy(fresh.base),...Object.fromEntries(Object.entries(fresh.presets).map(([k,v])=>[k,merge(fresh.base,v)]))};
   for(const [k,v] of Object.entries(next))v.forgeMode=copy(fresh.profileModes?.[k]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});
-  for(const k of Object.keys(profiles))if(!next[k]&&(discard||!diff(k).length)){delete profiles[k];delete original[k];}
-  for(const [k,v]of Object.entries(next)){if(!discard&&profiles[k]&&diff(k).length){if(!rebasePools||JSON.stringify(v)!==JSON.stringify(original[k]))fresh.revisions[k]=source.revisions[k];continue;}profiles[k]=copy(v);original[k]=copy(v);}
+  for(const k of Object.keys(profiles))if(!next[k]&&(discard||!diff(k).length)){delete profiles[k];delete original[k];staleDrafts.delete(k);}
+  // A draft whose file moved on is rebased at once (QA1 B2): its own fields stay, the rest follows the file. Only a
+  // field changed on both sides keeps it on its old revision, and «Конфлікт…» on the lip offers the choice.
+  for(const [k,v]of Object.entries(next)){
+   if(!discard&&profiles[k]&&diff(k).length){const base=baseRevision(k);if(base===fresh.revisions?.[k]){staleDrafts.delete(k);continue;}const conflicts=rebaseDraft(k,v,'auto');if(conflicts.length)staleDrafts.set(k,{revision:base,conflicts});continue;}
+   profiles[k]=copy(v);original[k]=copy(v);staleDrafts.delete(k);
+  }
   if(discard||!poolsDirty()){poolOriginal=copy(fresh.freePools);poolDraft=copy(poolOriginal);poolRevision=fresh.poolsRevision;}
   source=fresh;profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));roleKeys.splice(0,roleKeys.length,...knownRoleKeys(fresh.base));
   if(!profiles[state.profile])state.profile='standard';state.favs=favSaved=fresh.favs||[];rebuild();state.offline=false;render();
   }finally{if(background)backgroundReloading=false;}
  }
+ // What stops a profile save before any request: a file changed outside Mana Tape (this profile or Standard) or an
+ // interrupted save. A pending or failed preview does not: save() runs its own preview.
+ function saveBlocker(){const outside=(source.modeConflicts||[]).filter(n=>n==='standard'||n===state.profile);return source.modeRecovery?'Збереження заблоковане: незавершене збереження режимів':outside.length?'Збереження заблоковане: файл '+outside.map(prettyProfile).join(', ')+' змінено поза Mana Tape · «Прийняти файл»':'';}
  async function save(){
   if(state.saving)return;const name=state.profile,saved=copy(profiles[name]);if(!diff(name).length)return;
+  if(staleDrafts.has(name)){openForm('conflict',{error:''});return;}
+  const blocker=saveBlocker();if(blocker){notify(blocker);return;}
   const displayed=activePlan()?.data;state.saving=true;render();
   try{
    const body=modeBody(name),preview=await api('/api/profile-preview',body);
@@ -902,7 +1043,10 @@
    await api('/api/profile',{...body,previewToken:preview.token});
    original[name]=saved;state.opFeedback='Профіль збережено для нових запусків OMP.';delete state.modePlans[name];editHistory.reset(name,original[name]);
    await reload();notify('Збережено · '+(saved.forgeMode.mode==='no-deepseek'?'Без DeepSeek':'З DeepSeek'));
-  }catch(e){if(e.status===409&&!PROBLEM_CODES.has(e.code)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:e.message});modalFit='';}else state.error=e.message;render();}
+  }catch(e){
+   // The file moved on under the draft: rebase it now; only a field changed on both sides asks (QA1 B2).
+   if(e.code==='revision'){try{await reload();}catch{}if(staleDrafts.has(name)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:''});modalFit='';}else notify('Файл змінився поза цим вікном. Чернетку перенесено на актуальний файл: перевір і збережи ще раз.');}
+   else if(e.status===409&&!PROBLEM_CODES.has(e.code)){Object.assign(state,{modal:'conflict',modalError:'',modalCode:'',formErrors:{},error:e.message});modalFit='';}else state.error=e.message;render();}
   finally{state.saving=false;render();}
  }
  let chainNotes=[];
@@ -913,13 +1057,16 @@
  function setChain(role,list,group='role',hint={}){
   chainNotes=[];
   if(state.saving)return false;
+  // Each edit speaks for itself: an older line (a copy, an Undo, a save) never outlives the next edit.
+  state.opFeedback='';state.editorMsg='';
   if(thinkingOff(role,group)){
    // Roles without chat-thinking reject an effort suffix; strip it from every inserted or replaced CUT.
    const current=chain(role,group),next=list.map(r=>current.includes(r)||poolName(r)||String(r).startsWith('@')?r:split(r).raw);
    if(next.some((r,i)=>r!==list[i]))chainNotes.push('thinking прибрано: '+(group==='role'?role:role.slice(5))+' не використовує thinking');
    list=next;
   }
-  if(list.some(r=>!poolName(r)&&catalogMap.has(split(r).raw)&&!acceptsRoleModel(role,group,catalogMap.get(split(r).raw)))){notify('Цей CUT не підтримує роль '+role+'.');return false;}
+  const unfit=list.find(r=>!poolName(r)&&catalogMap.has(split(r).raw)&&!acceptsRoleModel(role,group,catalogMap.get(split(r).raw)));
+  if(unfit){const m=catalogMap.get(split(unfit).raw),vision=group==='pool'?poolVisionLane(role):'';notify(vision?poolNames[role]+' стоїть на доріжці зору ('+vision+'): '+cutTitle(unfit)+' не читає зображень.':cutTitle(unfit)+' не підтримує роль '+(group==='alternatives'?String(role).replace(/^role:/,''):role)+(!readsImages(m)&&acceptsRoleModel(role,group,{...m,input:['image']})?' · потрібен зір':'')+'.');return false;}
   if(group!=='pool')state.poolPanel=false;
   if(group==='pool'){if(list.some(r=>!ManaOperator.isFreeModel(catalogMap.get(split(r).raw)||{}))){notify('До пулу можна додавати лише підтверджені FREE CUTS.');return false;}poolDraft[role]=[...new Map(list.map(v=>[split(v).raw,v])).values()];return true;}
   if(group==='alternatives'){
@@ -930,10 +1077,13 @@
   // An index-based edit must read the projection it was made on.
   if(projectionPending()){notify('Ще розраховується режим DeepSeek. Спробуй за мить.');return false;}
   const view=modeView(role,group),before=group==='role'?baseChain(role).slice(1):null,inherited=group==='role'&&inheritsDefault(role);
-  if(view?.refs){if(!applyModeEdit(role,list,group,view,hint))return false;}
+  // Roles that inherit default's reserves change with it; their agents' copies follow too (QA1 B8).
+  const heirs=group==='role'&&role==='default'&&state.syncVibe?roleKeys.filter(r=>inheritsDefault(r)).map(r=>[r,baseChain(r).slice(1)]):[];
+  if(view?.refs&&!hint.base){if(!applyModeEdit(role,list,group,view,hint))return false;}
   else oldSetChain(role,list,group);
   if(inherited&&Object.hasOwn(p().retry.fallbackChains,role))chainNotes.push(roleFallbacks(role).length?'Резерви default скопійовано в '+role+'; доріжка більше не слідує за default':role+' більше не бере резерви default');
   if(group==='role'&&state.syncVibe)syncAgentTails(role,before);
+  for(const [heir,was] of heirs)if(inheritsDefault(heir))syncAgentTails(heir,was);
   if(chainNotes.length)state.opFeedback=chainNotes.join(' · ');
   return true;
  }
@@ -946,7 +1096,10 @@
  // DeepSeek OFF edits a projection. Every CUT returns to its source: ⇄ replacements stay in the
  // replacement list (their slots, their order); any other CUT, including a new one, joins the real chain.
  function applyModeEdit(role,list,group,view,{moved=-1,inserted=-1}={}){
-  const old=view.routes||[],refs=view.refs,scope=modeScope(role,group),base=group==='vibe'?agentValues(role):baseChain(role),used=new Set();
+  const old=view.routes||[],scope=modeScope(role,group),base=group==='vibe'?agentValues(role):baseChain(role),used=new Set();
+  // An agent's substituted @role head shows the role's replacement: an edit of it edits that replacement list and
+  // keeps the @role link (QA1 B4); it cannot be moved away from the head in OFF.
+  const headRef=group==='vibe'&&view.alias&&view.substituted&&view.refs[0]?.kind==='base'?{kind:'replacement',route:old[0],key:scope}:null,refs=headRef?[headRef,...view.refs.slice(1)]:view.refs;
   const items=list.map(route=>({route,ref:null,from:-1,same:false}));
   items.forEach((item,i)=>{if(i===inserted)return;const j=old.findIndex((r,k)=>!used.has(k)&&r===item.route);if(j>=0){used.add(j);Object.assign(item,{ref:refs[j],from:j,same:true});}});
   // A replacement in place (pick, thinking, collection) keeps the position's source.
@@ -954,6 +1107,7 @@
   // A dropped CUT that already stood among the ⇄ replacements joins the real chain; the replacement stays.
   const kept=inserted>=0?refs.findIndex((r,k)=>!used.has(k)&&r.kind==='replacement'&&split(old[k]).raw===split(list[inserted]).raw):-1;
   const replacement=item=>item.ref?.kind==='replacement'&&(item.ref.key||scope)===scope;
+  if(headRef&&moved>=0&&items[0]?.ref!==headRef){notify('Агент бере основну з '+view.alias+'. У режимі OFF її місце не змінюється: порядок — в ON, заміни — у «Заміни» ролі '+view.alias.slice(1)+'.');return false;}
   const firstOld=refs.findIndex(r=>r.kind==='replacement'),first=items.findIndex(replacement),last=items.findLastIndex(replacement);
   if(moved>=0&&replacement(items[moved]||{})&&items.slice(first+1,last).some(item=>!replacement(item)&&item.same)){notify('Заміни DeepSeek ідуть одним блоком на місці DeepSeek. Їхній порядок — у «Заміни».');return false;}
   const ahead=[],behind=[];let crossed=false;
@@ -990,7 +1144,7 @@
   const routes=[...new Map(replaced.filter(v=>v!==undefined).map(v=>[split(v).raw,v])).values()];
   if(routes.some(r=>!poolName(r)&&deepseek(r))){notify('Заміна має бути без платного DeepSeek. FREE DeepSeek можна.');return false;}
   if(next.length&&JSON.stringify(next)!==JSON.stringify(base)){if(group==='vibe')writeAgent(role,next);else oldSetChain(role,next,group);}
-  if(JSON.stringify(routes)!==JSON.stringify(own))modeSettings().overrides[scope]=routes;
+  if(JSON.stringify(routes)!==JSON.stringify(own)){modeSettings().overrides[scope]=routes;if(group==='vibe'&&scope.startsWith('role:'))chainNotes.push('Заміни ролі '+scope.slice(5)+' змінено: '+role+' бере їх через @'+scope.slice(5)+', доріжка ролі теж');}
   return true;
  }
  function store(){try{localStorage.setItem(storageKey('forge-view'),JSON.stringify({view:state.view,profile:state.profile,role:state.role,syncVibe:state.syncVibe}));}catch{}}
@@ -1077,6 +1231,10 @@
     body:`<form id="new-provider" class="form" autocomplete="off" novalidate>${fields.join('')}${formFoot(`${v?key(led(true,'red')+'Видалити','delete-provider','key--danger',busy?'disabled':''):''}${cancel}${key(state.providerSaving?'Збереження…':'Зберегти провайдера','provider-create','key--action',state.providerSaving?'disabled':'')}`,'Активні сесії OMP не змінюються. Прострочене підключення в профілях позначиться для заміни.')}</form>`};
   }
   if(kind==='details')return {title:'Дані CUT',sub:cutTitle(state.detail),focus:'[data-action=modal-close]',wide:true,body:detailsMarkup()+formFoot(`<button type="button" class="key key--sm" data-fav="${esc(state.detail)}" aria-pressed="${state.favs.includes(state.detail)}"><span class="key__cap">${state.favs.includes(state.detail)?'★ В обраних':'☆ До обраних'}</span></button>${key('Закрити','modal-close')}`)};
+  // A draft on an older file: the fields both sides changed, and one choice for them. Every other change of the
+  // draft moves onto the current file whichever key is pressed (the same dialog opens from the lip and from ⌘S).
+  const stale=kind==='conflict'&&staleDrafts.get(state.profile);
+  if(stale){const fields=stale.conflicts.length?stale.conflicts.map(path=>`<b>${esc(pathLabel(path))}</b>`).join(', '):'';return {title:'Конфлікт із файлом',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<div class="msg" data-s="warn">${led(true,'amber')}<span>Файл профілю ${esc(prettyProfile(state.profile))} змінився після початку цієї чернетки</span></div><p class="print">${fields?'Обидві сторони змінили: '+fields+'. ':''}Решта твоїх змін переноситься на актуальний файл у будь-якому разі. «Лишити мої» бере твої значення цих полів, «Взяти з файлу» — значення з файлу.</p>${formFoot(`${cancel}${key('Експорт чернеток','export-draft')}${key('Взяти з файлу','conflict-theirs')}${key('Лишити мої','conflict-mine','key--action')}${key(led(true,'red')+'Скинути чернетку','conflict-discard','key--danger')}`)}`};}
   if(kind==='conflict')return {title:'Змінились вихідні дані',focus:'[data-action=export-draft]',body:`<div class="msg" data-s="warn">${led(true,'amber')}<span>${esc(state.error||'Конфігурацію змінено зовні.')}</span></div><p class="print">Твоя чернетка лишилась у вікні. Експортуй її перед завантаженням актуального профілю.</p>${formFoot(`${key('Експорт чернеток','export-draft')}${key(led(true,'red')+'Скинути чернетки й оновити','discard-reload','key--danger')}`)}`};
   if(kind==='history'){const ok=source.restorable.includes(state.profile);return {title:'Попереднє збереження',sub:prettyProfile(state.profile),focus:'[data-action=modal-close]',body:`<p class="print">Кожне збереження створює резервну копію. Відновлення поверне попередні налаштування та режим DeepSeek профілю <b>${esc(prettyProfile(state.profile))}</b>; поточна версія лишиться в резервних.</p>${ok?'':'<div class="msg" data-s="warn">'+led(true,'amber')+'<span>Для цього профілю ще немає попередньої версії</span></div>'}${formFoot(`${cancel}${key(led(ok,'amber')+'Відновити попередню','restore-profile','',ok&&!busy?'':'disabled')}`)}`};}
   if(kind==='rename')return {title:'Перейменувати котушку',sub:prettyProfile(state.profile),focus:'#f-name',body:`<form id="rename-form" class="form form--one" novalidate>${formField('name','Нова назва',`<input ${formAttrs('name','required maxlength="64" autocomplete="off" spellcheck="false"')} value="${esc(state.renameName??state.profile)}">`,{note:profileNameHint(state.renameName??state.profile,true),hint:true})}${formFoot(`${cancel}${key(state.profileBusy?'Збереження…':'Перейменувати','rename-confirm','key--action',state.profileBusy?'disabled':'')}`,'Налаштування та чернетка збережуться')}</form>`};
@@ -1101,6 +1259,8 @@
   const value=n=>String(f.elements[n]?.value||'').trim(),out={},editing=state.editProvider?source.providers.find(x=>x.id===state.editProvider):null;
   if(!value('name'))out.name='Вкажи назву';
   if(!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value('id')))out.id='ID: малі латинські літери, цифри, дефіс, до 64 знаків';
+  // «+ Провайдер» only creates (QA2 B1): a taken ID is refused here and by the server; editing is «Підключення…».
+  else if(!editing&&source.providers.some(v=>v.id===value('id')))out.id='Цей ID уже має провайдер. Змінити його можна через «Підключення…».';
   let url=null;try{url=new URL(value('url'));}catch{}
   if(!url||!/^https?:$/.test(url.protocol)||url.username||url.password||url.search||url.hash)out.url='Потрібна HTTP(S)-адреса без ключів, логіна чи параметрів';
   if(f.elements.auth.value==='apiKey'&&!value('key')&&!(editing?.hasKey&&url&&editing.url===value('url')))out.key=editing?.hasKey?'Для нової адреси введи ключ заново':'Потрібен API-ключ';
@@ -1114,7 +1274,7 @@
   const problems=providerProblems(f);
   if(Object.keys(problems).length){state.formErrors=problems;state.modalError='';regions.invalidate('drawer/form');render();win.querySelector('.tray__form .field.is-bad input,.tray__form .field.is-bad select,.tray__form .field.is-bad textarea')?.focus();return;}
   const d=new FormData(f);state.providerSaving=true;state.formErrors={};
-  const body={id:d.get('id'),name:d.get('name'),url:d.get('url'),api:d.get('api'),auth:d.get('auth'),key:d.get('key'),discovery:d.get('discovery'),models:String(d.get('models')).split('\n').map(s=>s.trim()).filter(Boolean),days:Number(d.get('days')),revision:source.providerRevision};
+  const body={id:d.get('id'),name:d.get('name'),url:d.get('url'),api:d.get('api'),auth:d.get('auth'),key:d.get('key'),discovery:d.get('discovery'),models:String(d.get('models')).split('\n').map(s=>s.trim()).filter(Boolean),days:Number(d.get('days')),revision:source.providerRevision,mode:state.editProvider?'edit':'create'};
   regions.invalidate('drawer/form');render();
   try{await api('/api/provider',body);state.modal=null;state.modalError='';await reload();notify('Провайдер збережений. Каталог оновлюється.');}
   catch(e){const field=providerField(e.message);state.modalError=e.message;state.modalCode=errorCode(e);if(field)state.formErrors={[field]:e.message};}
@@ -1249,7 +1409,7 @@
  const GRIP='<div class="tray__grip" id="cuts-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="cuts-collection" aria-label="Висота лотка" title="Тягни вгору або вниз · ↑ / ↓ · Home / End · Enter відкриває й закриває"></div>';
  function drawerFilters(mode){
   const pool=mode==='pool';
-  return box('drawer/controls','<div class="tray__filters">',[leaf('drawer/provider',selWin('cut-provider','Провайдер',state.cutProvider,opProviderItems())),pool?leaf('drawer/free','<span class="chip chip--ok tray__only">лише FREE</span>'):switchRegion('drawer/free','free','FREE CUTS',state.freeCuts,'Лише підтверджені FREE CUTS'),leaf('drawer/health',selWin('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames).filter(([k])=>k!=='unavailable')])),leaf('drawer/search',drawerSearch())]);
+  return box('drawer/controls','<div class="tray__filters">',[leaf('drawer/provider',selWin('cut-provider','Провайдер',state.cutProvider,pool?opProviderItems().filter(([id])=>id==='all'||id===state.cutProvider||catalog.some(m=>m.provider===id&&ManaOperator.isFreeModel(m))):opProviderItems())),pool?leaf('drawer/free','<span class="chip chip--ok tray__only">лише FREE</span>'):switchRegion('drawer/free','free','FREE CUTS',state.freeCuts,'Лише підтверджені FREE CUTS'),leaf('drawer/health',selWin('cut-health','Запас',state.cutHealth,[['all','Будь-який'],...Object.entries(healthNames).filter(([k])=>k!=='unavailable')])),leaf('drawer/search',drawerSearch())]);
  }
  function editorTitle(mode){
   if(mode==='pool')return `<div class="tray__title tray__title--ed">${led(true,'orange')}<span class="silk silk--ink">Пули</span><span class="tray__count">спільні для всіх профілів</span></div>`;
@@ -1266,15 +1426,16 @@
   const close=(action,label)=>leaf('drawer/close',key(SVG.close,action,'key--sq tray__close',`aria-label="${esc(label)}" title="Закрити · Esc"`));
   const lip=form?[leaf('drawer/grip',''),leaf('drawer/ftitle',formTitle(f)),transport,close('modal-close','Закрити: '+f.title)]
    :editor?[leaf('drawer/grip',GRIP),leaf('drawer/etitle',editorTitle(mode)),leaf('drawer/etabs',editorTabs(mode)),leaf('drawer/armed',armedMarkup()),transport,close(mode==='pool'?'pool-close':'mode-close',mode==='pool'?'Закрити редактор пулів':'Закрити заміни DeepSeek')]
-   :[leaf('drawer/grip',GRIP),box('drawer/title',`<button type="button" class="tray__title" data-action="cuts-toggle" aria-expanded="${open}" aria-controls="tray-body">`,[leaf('drawer/title/face',`${led(false,'blue',' data-latch')}<span class="silk">Колекція CUTS</span>`),leaf('drawer/count',drawerCount(cuts)),leaf('drawer/hint',drawerHint())]),
+   :[leaf('drawer/grip',GRIP),box('drawer/title',`<button type="button" class="tray__title" data-action="cuts-toggle" aria-expanded="${open}" aria-controls="tray-body">`,[leaf('drawer/title/face',`${led(false,'blue',' data-latch')}<span class="silk">Колекція CUTS</span>`),leaf('drawer/title/count',drawerCount(cuts)),leaf('drawer/hint',drawerHint(cuts.length))]),
     leaf('drawer/armed',armedMarkup()),leaf('drawer/pull','<span class="tray__pull" aria-hidden="true"></span>'),transport,leaf('drawer/chev','<span class="tray__chev" aria-hidden="true"></span>')];
   const results=form?null:leaf('drawer/results',body&&!(editor&&state.sourceLater)?drawerResults(cuts):'<div class="tray__grid"></div>');
   const content=form?[leaf('drawer/form',formMarkup(f))]
-   :editor?[leaf('drawer/editor',mode==='pool'?poolEditor():modePanel()),box('drawer/source','<section class="tray__source" aria-label="Колекція CUTS · джерело для редактора">',[box('drawer/srchead','<div class="tray__srchead">',[leaf('drawer/srclabel',sourceHead(mode)),leaf('drawer/count',drawerCount(cuts))]),drawerFilters(mode),results])]
+   :editor?[leaf('drawer/editor',mode==='pool'?poolEditor():modePanel()),box('drawer/source','<section class="tray__source" aria-label="Колекція CUTS · джерело для редактора">',[box('drawer/srchead','<div class="tray__srchead">',[leaf('drawer/srclabel',sourceHead(mode)),leaf('drawer/srchead/count',drawerCount(cuts))]),drawerFilters(mode),results])]
    :[drawerFilters(mode),results];
   return box('drawer','<div class="tray-port">',[box('drawer/tray',trayOpen(),[box('drawer/lip','<div class="tray__lip">',lip),box('drawer/body',`<div class="tray__body${editor?' tray__body--ed':form?' tray__body--form':''}" id="tray-body">`,content)])]);
  }
- function drawerHint(){const t=state.cutTarget;return t?`<span class="tray__hint tray__hint--target">· місце: ${esc(t.role)} · ${t.index===0?'основна':'резерв '+t.index}</span>`:`<span class="tray__hint">· ${narrowSurface()?'обери CUT і торкнись гнізда':'перетягни CUT на доріжку або обери CUT і місце'}</span>`;}
+ // With nothing to drag (an empty catalogue or no result) the lip keeps its place but prints no drag hint.
+ function drawerHint(count=1){const t=state.cutTarget;if(!count&&!t)return '<span class="tray__hint"></span>';return t?`<span class="tray__hint tray__hint--target">· місце: ${esc(t.role)} · ${t.index===0?'основна':'резерв '+t.index}</span>`:`<span class="tray__hint">· ${narrowSurface()?'обери CUT і торкнись гнізда':'перетягни CUT на доріжку або обери CUT і місце'}</span>`;}
  function armedMarkup(){const r=state.armedCut;if(!r)return '<span class="tray__armed" aria-live="polite"></span>';const name=poolNames[poolName(r)]||cutTitle(r);return `<span class="tray__armed" aria-live="polite">${led(true,'blue')}<span class="tray__armed-txt"><small>Обрано · торкнись CUT для заміни або гнізда «+»</small><b title="${esc(name+(poolName(r)?'':' · '+providerName(split(r).provider)))}">${esc(name)}</b></span><button type="button" class="key" data-action="cancel-cut"><span class="key__cap">Скасувати</span></button></span>`;}
  function drawerSearch(){return `<label class="search">${SVG.search}<input id="cut-query" type="search" aria-label="Знайти CUT у колекції" placeholder="Знайти CUT…" value="${esc(state.cutQuery)}" autocomplete="off"></label>`;}
  function drawerCount(cuts){return `<span class="tray__count"><span class="rd" style="--rd:3ch">${cuts.length}</span> CUTS</span>`;}
@@ -1287,9 +1448,12 @@
   const attrs=pick?`data-pick="${esc(route)}" data-cut-route="${esc(route)}" aria-pressed="${!!pick.current}"`:`data-cut="${esc(route)}" aria-pressed="${armed}"`;
   return `<button type="button" class="cut${free?' cut--free':''}${deleted?' cut--deleted':''}${armed?' is-armed':''}${pick?.current?' is-current':''}" data-p="${providerSlot(m.provider)}" ${attrs} aria-label="${esc(title+' · '+provider+(free?' · FREE':'')+(note?' · '+note:'')+' · '+route+(health.text?' · '+health.text:''))}" title="${esc([title+' · '+provider,route,health.text].filter(Boolean).join('\n'))}"><span class="cut__edge"></span><span class="cut__name cut__name--split">${nameMarkup(title)}</span><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b><span class="cut__think">${esc(think)}</span>${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${health.bar}</button>`;
  }
+ // No model at all (Колекція), or none reachable to place (the drawer): the empty state says so and offers the
+ // provider form instead of blaming the filters.
+ function catalogEmpty(reachable=false){return reachable?!source.models.some(m=>m.available||source.providers.find(v=>v.id===m.provider)?.connected):!source.models.length;}
  function drawerResults(cuts){
   const shown=cuts.slice(0,state.cutLimit||60),key=esc(JSON.stringify([state.cutProvider,state.cutHealth,state.freeCuts,state.cutQuery]));
-  if(!shown.length)return `<div class="tray__grid is-empty" data-filter-key="${key}"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${state.cutQuery.trim()?`Нічого не знайдено за «<b>${esc(state.cutQuery.trim())}</b>»`:'Немає CUTS за цими фільтрами'}</span>${state.cutQuery.trim()?'<button type="button" class="key key--sm" data-action="cuts-clear"><span class="key__cap">Очистити</span></button>':''}</div></div>`;
+  if(!shown.length)return `<div class="tray__grid is-empty" data-filter-key="${key}"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${state.cutQuery.trim()?`Нічого не знайдено за «<b>${esc(state.cutQuery.trim())}</b>»`:catalogEmpty(true)?'Каталог порожній · додай провайдера':'Немає CUTS за цими фільтрами'}</span>${state.cutQuery.trim()?'<button type="button" class="key key--sm" data-action="cuts-clear"><span class="key__cap">Очистити</span></button>':catalogEmpty(true)?'<button type="button" class="key key--sm" data-action="provider-add"><span class="key__cap">+ Провайдер</span></button>':''}</div></div>`;
   return `<div class="tray__grid" data-filter-key="${key}">${shown.map(m=>drawerCut(m)).join('')}${cuts.length>shown.length?`<div class="tray__more"><button type="button" class="key key--sm" data-action="cuts-more"><span class="key__cap">Ще ${Math.min(60,cuts.length-shown.length)}</span></button></div>`:''}</div>`;
  }
  let drawerGesture=null,drawerClosing=0,drawerOpenShown=false,drawerLastMode='cuts';
@@ -1318,7 +1482,8 @@
  // The write pass: port, drawer, spacer and the page's scroll padding take their sizes directly; no inherited
  // custom property changes, so a resize restyles these few elements instead of the whole window.
  function setDrawerHeight({port,tray,grip,spacer},height,{viewport,lip,max,min,left,width},remember=false){
-  const mode=drawerMode(),preferred=Number.isFinite(height)?height:mode==='cuts'?Math.min(290,viewport*.43):mode==='form'?Math.min(480,viewport*.6):width<=760?max:Math.min(470,viewport*.55);
+  // A phone opens the collection at its full allowed height (the page above keeps its ≈220px).
+  const mode=drawerMode(),preferred=Number.isFinite(height)?height:mode==='cuts'?(width<=760?max:Math.min(290,viewport*.43)):mode==='form'?Math.min(480,viewport*.6):width<=760?max:Math.min(470,viewport*.55);
   height=Math.round(Math.max(min,Math.min(max,preferred)));
   if(remember&&mode!=='form')state[heightKey()]=height;
   port.style.left=left+'px';port.style.width=width+'px';port.style.height=(height+40)+'px';tray.style.height=height+'px';
@@ -1328,18 +1493,25 @@
   document.documentElement.style.setProperty('scroll-padding-bottom',(shown+12)+'px');
   if(grip){grip.setAttribute('aria-valuemin',min);grip.setAttribute('aria-valuemax',max);grip.setAttribute('aria-valuenow',height);grip.setAttribute('aria-valuetext',height+' пікселів');}
  }
+ // The port only clips the drawer; a programmatic scroll (focus, find-in-page) must never leave it half-scrolled
+ // with a ghost of an open drawer under a closed lip.
+ root.addEventListener('scroll',e=>{if(e.target.matches?.('.tray-port')&&e.target.scrollTop)e.target.scrollTop=0;},true);
+ // Lane grooves the user (or a restore) scrolled sideways; render() keeps their position without reading the others.
+ const scrolledGrooves=new Set();
+ root.addEventListener('scroll',e=>{if(e.target.classList?.contains('lane__groove'))scrolledGrooves.add(e.target);},true);
  function finishDrawerResize(cancel=false){
   const g=drawerGesture;if(!g)return;drawerGesture=null;if(g.frame)cancelAnimationFrame(g.frame);g.parts.tray.classList.remove('is-resizing');
-  if(cancel){state[g.key]=g.preferred;resizeDrawer(preferredHeight());}else{if(g.next!=null)setDrawerHeight(g.parts,g.next,g.limits,true);storeOperator();}
+  // A cancelled gesture leaves everything as it was, including a drawer it opened.
+  if(cancel){state[g.key]=g.preferred;if(g.opened)state.cuts=false;resizeDrawer(preferredHeight());}else{if(g.next!=null)setDrawerHeight(g.parts,g.next,g.limits,true);storeOperator();}
   if(root.hasPointerCapture(g.pointer))root.releasePointerCapture(g.pointer);render();
  }
  root.addEventListener('pointerdown',e=>{
   const grip=e.target.closest('#cuts-resize');if(!grip||e.button!==0||drawerGesture)return;
   e.preventDefault();grip.focus({preventScroll:true});
   // The grip of a closed drawer opens it; geometry is then read once per gesture.
-  if(!drawerShown()){state.cuts=true;render();}
+  const opened=!drawerShown();if(opened){state.cuts=true;render();}
   const parts=drawerParts();if(!parts)return;
-  drawerGesture={pointer:e.pointerId,y:e.clientY,height:parts.tray.getBoundingClientRect().height,key:heightKey(),preferred:preferredHeight(),parts,limits:drawerLimits(parts),next:null,frame:0};
+  drawerGesture={opened,pointer:e.pointerId,y:e.clientY,height:parts.tray.getBoundingClientRect().height,key:heightKey(),preferred:preferredHeight(),parts,limits:drawerLimits(parts),next:null,frame:0};
   parts.tray.classList.add('is-resizing');root.setPointerCapture(e.pointerId);
  });
  // A move only records the height; it is written at most once per frame.
@@ -1398,13 +1570,20 @@
   if(group==='alternatives'&&!poolName(route)&&deepseek(route)){notify('Заміна має бути без платного DeepSeek. FREE DeepSeek можна.');return;}
   if(modeOff()&&deepseek(route)){notify('Для платного DeepSeek увімкни режим «Із DeepSeek».');return;}
   if(!poolName(route)&&routeWarning(route)){notify('Цей маршрут зараз недоступний. Обери CUT іншого провайдера.');return;}
-  const list=chain(role,group),old=list[index]?split(list[index]):null,effort=carryEffort(old?.effort,route);
-  const existing=list.findIndex(r=>split(r).raw===route);if(existing>=0){const [cut]=list.splice(existing,1);list.splice(Math.min(index,list.length),0,cut);}else{list[index]=route+(effort?':'+effort:'');}
+  // An editor list (a pool, the replacements) is an ordered priority list: a drop inserts at that place and moves
+  // nothing out (replacing is the explicit «Заміна» of the CUT itself). A lane drop on a CUT replaces it.
+  const sequence=group==='pool'||group==='alternatives',list=chain(role,group),before=JSON.stringify(list),old=!sequence&&list[index]?split(list[index]):null,effort=poolName(route)?'':carryEffort(old?.effort,route);
+  const existing=list.findIndex(r=>split(r).raw===route),at=Math.min(index,list.length-(existing>=0?1:0));
+  if(existing>=0){const [cut]=list.splice(existing,1);list.splice(at,0,cut);}else if(sequence)list.splice(at,0,route);else list[index]=route+(effort?':'+effort:'');
+  const name=poolNames[poolName(route)]||cutTitle(route);
+  state.cutTarget=null;state.armedCut=null;
+  if(JSON.stringify(list)===before){if(sequence)state.editorMsg='Уже на цьому місці · '+name;else state.opFeedback='Без змін · '+name+' уже стоїть тут на '+role;render();return;}
   if(list.length>(group==='pool'?Infinity:group==='vibe'?30:group==='alternatives'?12:31)){notify('Доріжка вже має максимальну кількість CUTS.');return;}
-  if(!setChain(role,list,group,existing>=0?{inserted:Math.min(index,list.length-1)}:{}))return;
-  state.cutTarget=null;state.armedCut=null;if(narrowSurface())state.cuts=false;
-  if(group==='pool'||group==='alternatives')state.editorMsg='Вставлено · '+cutTitle(route)+' · '+String(Math.min(index,list.length-1)+1).padStart(2,'0');
-  state.opFeedback=withNotes('Вставлено '+short(split(route).id)+' · '+providerName(split(route).provider)+' → '+role+(old?.effort&&!effort&&existing<0&&!thinkingOff(role,group)?' · thinking → типово':''));render();if(narrowSurface()){pickerFocus({role,index,group});scrollToControl(document.activeElement);}
+  if(!setChain(role,list,group,existing>=0||sequence?{inserted:at}:{}))return;
+  if(narrowSurface())state.cuts=false;
+  if(sequence)state.editorMsg=(existing>=0?'Переставлено · ':'Вставлено · ')+name+' · '+String(at+1).padStart(2,'0');
+  else state.opFeedback=withNotes((existing>=0?'Переставлено ':'Вставлено ')+(poolName(route)?name:short(split(route).id)+' · '+providerName(split(route).provider))+' → '+role+(old?.effort&&!effort&&existing<0&&!poolName(route)&&!thinkingOff(role,group)?' · thinking → типово':''));
+  render();if(narrowSurface()){pickerFocus({role,index:sequence?at:index,group});scrollToControl(document.activeElement);}
  }
  function contextTokens(n){return n>=1e6?num(n/1e6)+'M':num(n/1e3)+'K';}
  function opPriceValue(m){const q=priceInfo(m);return q.kind==='free'?0:Number.isFinite(m.cost?.input)&&Number.isFinite(m.cost?.output)&&(m.cost.input||m.cost.output)?(m.cost.input+m.cost.output)/2:null;}
@@ -1476,15 +1655,15 @@
   return `${selWin('catalog-provider','Провайдер',state.catalogProvider,analyticalProviders())}${selWin('op-scope','Колекція',state.catalogMode,[['mine','Мої'],['all','Увесь каталог'],['free','FREE CUTS'],['used','У профілях'],['fav','Обрані'],['changes','Нові / зниклі']])}${selWin('op-role','Роль',state.role,roleKeys.map(r=>[r,labels[r]&&labels[r]!==r?r+' · '+labels[r]:r]))}${selWin('op-sort','Порядок',state.catalogSort,[['score','Топ за балом ролі'],['evidence','Покриття тестами'],['price','Нижча ціна'],['value','Тести / API $'],['name','За назвою']])}<span class="seam seam--v coll__seam"></span>${selWin('op-source','Бал ролі',state.benchSource,[['Artificial Analysis','Artificial Analysis'],['LiveBench','LiveBench']])}${selWin('op-release','Зріз',state.benchRelease,releases.length?releases.map(r=>[r,r]):[['','—']],'sel--sm',releases.length?'':'disabled')}${selWin('op-evidence','Дані',state.catalogEvidence||'all',[['all','Усі'],['independent','Незалежні'],['developer','Лише заяви'],['unknown','Без даних']])}${key('+ Провайдер','provider-add','coll__add')}`;
  }
  function catalogSearch(){return `<label class="search coll__search">${SVG.search}<input id="catalog-query" type="search" value="${esc(state.catalogQuery)}" placeholder="CUT або провайдер" aria-label="Знайти CUT у колекції" autocomplete="off"></label>`;}
- function ledgerRow(m,selected){
+ function ledgerRow(m,selected,tabbable=selected){
   const route=m.provider+'/'+m.id,q=opEvidence(m),h=opHealth(m),[hcls,glyph]=HEALTH_VIEW[h.kind]||HEALTH_VIEW.unknown,price=priceInfo(m),title=cutTitle(route);
-  return `<button type="button" class="list__row coll__row" role="option" aria-selected="${selected}" tabindex="${selected?0:-1}" data-analyze="${esc(route)}" title="${esc(title+'\n'+route)}">${led(selected,'blue')}<span class="coll__name"><b>${esc(title)}</b><small>${esc(providerName(m.provider))} · ${esc(m.id)}${m.status==='missing'?' · DELETED':''}</small><span class="coll__ev">${evidenceChips(m)}</span></span><span class="coll__score"><b class="rd" style="--rd:4ch">${q?num(q.score):'—'}</b><small>${q?esc(q.record.effort||'типово'):{independent:'немає бала',developer:'лише заяви',unknown:'немає даних'}[evidenceCoverage(m).kind]}</small></span><span class="coll__price">${price.kind==='free'?'<span class="stamp stamp--free">FREE</span>':`<b>${esc(price.label)}</b>`}<small>${price.kind==='free'?'безкоштовно':price.subscription?'підписка · API-тариф':price.variable?'змінний тариф':price.kind==='paid'?'вхід / вихід':price.kind==='local'?'власний GPU':'немає тарифу'}</small></span><span class="coll__ctx"><b class="rd" style="--rd:5ch">${m.contextWindow?contextTokens(m.contextWindow):'—'}</b><small><span class="hs hs--${hcls}" aria-hidden="true">${glyph}</span> ${esc(h.label)}</small></span></button>`;
+  return `<button type="button" class="list__row coll__row" role="option" aria-selected="${selected}" tabindex="${tabbable?0:-1}" data-analyze="${esc(route)}" title="${esc(title+'\n'+route)}">${led(selected,'blue')}<span class="coll__name"><b>${esc(title)}</b><small>${esc(providerName(m.provider))} · ${esc(m.id)}${m.status==='missing'?' · DELETED':''}</small><span class="coll__ev">${evidenceChips(m)}</span></span><span class="coll__score"><b class="rd" style="--rd:4ch">${q?num(q.score):'—'}</b><small>${q?esc(q.record.effort||'типово'):{independent:'немає бала',developer:'лише заяви',unknown:'немає даних'}[evidenceCoverage(m).kind]}</small></span><span class="coll__price">${price.kind==='free'?'<span class="stamp stamp--free">FREE</span>':`<b>${esc(price.label)}</b>`}<small>${price.kind==='free'?'безкоштовно':price.subscription?'підписка · API-тариф':price.variable?'змінний тариф':price.kind==='paid'?'вхід / вихід':price.kind==='local'?'власний GPU':'немає тарифу'}</small></span><span class="coll__ctx"><b class="rd" style="--rd:5ch">${m.contextWindow?contextTokens(m.contextWindow):'—'}</b><small><span class="hs hs--${hcls}" aria-hidden="true">${glyph}</span> ${esc(h.label)}</small></span></button>`;
  }
  function catalogBody({rows,shown,selected,per}=catalogData()){
   const pick=state.analyze||(rows[0]?rows[0].provider+'/'+rows[0].id:''),q=state.catalogQuery.trim(),pages=Math.max(1,Math.ceil(rows.length/per));
-  const ledger=shown.length?`<div class="coll__lhead" aria-hidden="true"><span>CUT · провайдер · дані</span><span>бал / 100</span><span>$ / 1M</span><span>контекст</span></div><div class="list coll__list" role="listbox" aria-label="CUTS · ${esc(labels[state.role]||state.role)} · сторінка ${state.page+1} з ${pages}">${shown.map(m=>ledgerRow(m,m.provider+'/'+m.id===pick)).join('')}</div><div class="coll__goto"><button type="button" class="key key--sm" data-action="coll-details"><span class="key__cap">Дані обраного CUT ↓</span></button></div>`
-   :`<div class="list coll__list"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${q?`Нічого не знайдено за «<b>${esc(q)}</b>»`:'Немає CUTS за цими фільтрами'}</span>${q?'<button type="button" class="key key--sm" data-action="catalog-clear"><span class="key__cap">Очистити</span></button>':''}</div></div>`;
-  const cartridge=selected?`<div class="bay coll__cart">${led(true,selected.expired?'red':selected.connected?'green':'amber')}<span class="coll__cartname"><b>${esc(providerName(selected.id))}</b><small>${selected.count} моделей · ${selected.expired?'термін минув':selected.connected?'доступний в OMP':'доступ не підтверджено'}${selected.expires?' · до '+esc(timeLabel(selected.expires)):''}</small></span><button type="button" class="key key--sm" data-provider-toggle="${esc(selected.id)}" aria-pressed="${!(p().disabledProviders||[]).includes(selected.id)}"><span class="key__cap">${led(false,'green',' data-latch')}У профілі</span></button>${selected.custom||selected.managed?`<button type="button" class="key key--sm" data-edit-provider="${esc(selected.id)}"><span class="key__cap">Підключення…</span></button>`:''}<span class="print">${rows.filter(m=>opEvidence(m)).length} тестованих маршрутів для ${esc(state.role)}</span></div>`:'';
+  const ledger=shown.length?`<div class="coll__lhead" aria-hidden="true"><span>CUT · провайдер · дані</span><span>бал / 100</span><span>$ / 1M</span><span>контекст</span></div><div class="list coll__list" role="listbox" aria-label="CUTS · ${esc(labels[state.role]||state.role)} · сторінка ${state.page+1} з ${pages}">${shown.map((m,i,rows)=>ledgerRow(m,m.provider+'/'+m.id===pick,m.provider+'/'+m.id===pick||i===0&&!rows.some(x=>x.provider+'/'+x.id===pick))).join('')}</div><div class="coll__goto"><button type="button" class="key key--sm" data-action="coll-details"><span class="key__cap">Дані обраного CUT ↓</span></button></div>`
+   :`<div class="list coll__list"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>${q?`Нічого не знайдено за «<b>${esc(q)}</b>»`:catalogEmpty()?'Каталог порожній · додай провайдера':'Немає CUTS за цими фільтрами'}</span>${q?'<button type="button" class="key key--sm" data-action="catalog-clear"><span class="key__cap">Очистити</span></button>':catalogEmpty()?key('+ Провайдер','provider-add','key--sm'):''}</div></div>`;
+  const cartridge=selected?`<div class="bay coll__cart">${led(true,selected.expired?'red':selected.connected?'green':'amber')}<span class="coll__cartname"><b>${esc(providerName(selected.id))}</b><small>${selected.count} ${plural(selected.count,'модель','моделі','моделей')} · ${selected.expired?'термін минув':selected.connected?'доступний в OMP':'доступ не підтверджено'}${selected.expires?' · до '+esc(timeLabel(selected.expires)):''}</small></span><button type="button" class="key key--sm" data-provider-toggle="${esc(selected.id)}" aria-pressed="${!(p().disabledProviders||[]).includes(selected.id)}"><span class="key__cap">${led(false,'green',' data-latch')}У профілі</span></button>${selected.custom||selected.managed?`<button type="button" class="key key--sm" data-edit-provider="${esc(selected.id)}"><span class="key__cap">Підключення…</span></button>`:''}<span class="print">${rows.filter(m=>opEvidence(m)).length} ${plural(rows.filter(m=>opEvidence(m)).length,'тестований маршрут','тестовані маршрути','тестованих маршрутів')} для ${esc(state.role)}</span></div>`:'';
   return [leaf('m/coverage',`<div class="coll__cov"><p class="print">${evidenceCoverageLine(rows)}</p><p class="print print--hint">тест — незалежний тест · Arena — людські уподобання (рейтинг) · заява — заява розробника</p></div>`),leaf('m/cartridge',cartridge),leaf('m/fits',providerFitStrip(rows)),
    box('m/layout','<div class="coll__layout">',[box('m/main','<div class="coll__main">',[leaf('m/plot',analyzerPlot(rows)),leaf('m/ledger',`<div class="coll__ledger">${ledger}</div>`),leaf('m/pagination',rows.length>per?`<div class="keybed coll__pager" role="group" aria-label="Сторінки">${key('←','prev-page','key--sm key--sq',`aria-label="Попередня сторінка"${state.page===0?' disabled':''}`)}<span class="coll__page"><span class="rd" style="--rd:9ch">${state.page*per+1}–${Math.min((state.page+1)*per,rows.length)} / ${rows.length}</span></span>${key('→','next-page','key--sm key--sq',`aria-label="Наступна сторінка"${(state.page+1)*per>=rows.length?' disabled':''}`)}</div>`:'')]),leaf('m/inspector',analyzerDetail(rows))]),
    leaf('m/note',`<p class="print print--hint coll__note">Порівняння в одному джерелі й зрізі. У каталозі — найкращий доступний тестований режим; його назва біля бала. Ціни невідомого типу й безкоштовні маршрути не ранжуються за «тести / $».</p>`)];
@@ -1536,7 +1715,7 @@
    historyScreen(data),
    leaf('h/counters',`<div class="hist__sum"><span class="silk">Увесь період звіту</span><div class="hist__counters" role="group" aria-label="Увесь період звіту">${counter('Запитів',num(o.totalRequests))}${counter('Помилки',num(o.failedRequests),o.errorRate!=null?num(o.errorRate*100)+'%':'')}${counter('Кеш',o.cacheRate!=null?num(o.cacheRate*100)+'%':'—')}${counter('Перший токен',o.avgTtft!=null?num(o.avgTtft/1000):'—',o.avgTtft!=null?'с':'')}${counter('Швидкість',num(o.avgTokensPerSecond),'ток/с')}</div></div>`),
    leaf('h/sort',`<div class="hist__head"><span class="silk">Внесок моделей · весь період</span><span class="subhead__rule"></span>${radioKeys('history-sort','Вимір внеску',state.historySort,HISTORY_SORTS)}</div>`),
-   leaf('h/mixdown',models.length?`<div class="list hist__mix" role="list" aria-label="Внесок моделей">${models.map(m=>`<div class="hist__row" role="listitem"><span class="hist__name"><b title="${esc(m.provider+'/'+m.model)}">${esc(cutTitle(m.provider+'/'+m.model))}</b><small>${esc(providerName(m.provider))}${split(m.model).effort?' · '+esc(split(m.model).effort):''}</small></span><span class="hist__bar" style="--v:${((m[state.historySort]||0)/max).toFixed(3)}" aria-hidden="true"><i></i></span><b class="rd hist__val" style="--rd:7ch">${num(m[state.historySort])}${unitFor[state.historySort]?' <small>'+unitFor[state.historySort]+'</small>':''}</b><span class="print print--hint hist__detail">${num(m.failedRequests)} помилок · ${num(m.avgTokensPerSecond)} ток/с · ${m.avgTtft!=null?num(m.avgTtft/1000)+' с':'—'}</span></div>`).join('')}</div>`:'<div class="list hist__mix"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>Статистика ще не зібрана</span></div></div>'),
+   leaf('h/mixdown',models.length?`<div class="list hist__mix" role="list" aria-label="Внесок моделей">${models.map(m=>`<div class="hist__row" role="listitem"><span class="hist__name"><b title="${esc(m.provider+'/'+m.model)}">${esc(cutTitle(m.provider+'/'+m.model))}</b><small>${esc(providerName(m.provider))}${split(m.model).effort?' · '+esc(split(m.model).effort):''}</small></span><span class="hist__bar" style="--v:${((m[state.historySort]||0)/max).toFixed(3)}" aria-hidden="true"><i></i></span><b class="rd hist__val" style="--rd:7ch">${num(m[state.historySort])}${unitFor[state.historySort]?' <small>'+unitFor[state.historySort]+'</small>':''}</b><span class="print print--hint hist__detail">${num(m.failedRequests)} ${plural(m.failedRequests||0,'помилка','помилки','помилок')} · ${num(m.avgTokensPerSecond)} ток/с · ${m.avgTtft!=null?num(m.avgTtft/1000)+' с':'—'}</span></div>`).join('')}</div>`:'<div class="list hist__mix"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>Статистика ще не зібрана</span></div></div>'),
    leaf('h/splices',`<div class="hist__head"><span class="silk">Зміни колекції</span><span class="subhead__rule"></span></div>${source.changes.length?`<div class="list hist__changes" role="list">${source.changes.slice(-8).reverse().map(c=>`<div class="hist__change" role="listitem"><span class="hist__sign${c.kind==='new'?' is-new':''}" aria-label="${c.kind==='new'?'нова':'зникла'}">${c.kind==='new'?'+':'−'}</span><b>${esc(cutTitle(c.route))}</b><small>${esc(providerName(split(c.route).provider))} · ${esc(timeLabel(c.at))}</small></div>`).join('')}</div>`:'<div class="list hist__changes"><div class="empty"><span class="empty__glyph" aria-hidden="true">∅</span><span>Після першого знімка змін немає</span></div></div>'}`),
    leaf('h/note',`<p class="print print--hint hist__note">${source.demo?'Синтетичні дані DEMO.':'Реальні агрегати OMP, не журнал окремих задач.'} Погодинний вибір змінює екран; внесок моделей — за весь період. API $ — оцінка за тарифами, не платіж підписки. ${esc(stats.error||'')}</p>`)
   ]);
@@ -1550,7 +1729,7 @@
   if(commit)store();
  }
  root.addEventListener('keydown',e=>{
-  if(e.key==='Escape'&&!e.defaultPrevented&&!state.modal&&!state.picker&&!e.target.matches('select')&&state.armedCut){e.preventDefault();state.armedCut=null;state.cutTarget=null;state.opFeedback='Вставку скасовано.';render();(win.querySelector('#cut-query')||win.querySelector('[data-op-switch=cuts]'))?.focus({preventScroll:true});return;}
+  if(e.key==='Escape'&&!e.defaultPrevented&&!state.modal&&!state.picker&&!e.target.matches('select')&&state.armedCut){e.preventDefault();state.armedCut=null;state.cutTarget=null;state.opFeedback='Вставку скасовано.';render();((drawerShown()&&win.querySelector('#cut-query'))||win.querySelector('[data-op-switch=cuts]'))?.focus({preventScroll:true});return;}
  });
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
@@ -1563,16 +1742,16 @@
    }else{if(name==='cuts'){toggleDrawer(!drawerShown());win.querySelector('[data-op-switch="cuts"]')?.focus({preventScroll:true});return;}if(name==='free')state.freeCuts=!state.freeCuts;render();}
    storeOperator();win.querySelector(`[data-op-switch="${name}"]`)?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-toggle'){toggleDrawer(!drawerShown());win.querySelector('.tray__title')?.focus({preventScroll:true});return;}
-  if(b.dataset.foldToggle!==undefined){const k=b.dataset.foldToggle;if(openFolds.has(k))openFolds.delete(k);else openFolds.add(k);storeFolds();render();win.querySelector(`[data-fold-toggle="${CSS.escape(k)}"]`)?.focus({preventScroll:true});return;}
+  if(b.dataset.foldToggle!==undefined){const k=b.dataset.foldToggle,fold=laneGroups().find(g=>g.fold?.[0]===k)?.fold||[k],open=foldOpen(fold);for(const r of fold)if(open)openFolds.delete(r);else openFolds.add(r);storeFolds();render();win.querySelector(`[data-fold-toggle="${CSS.escape(k)}"]`)?.focus({preventScroll:true});return;}
   if(b.hasAttribute('data-sync-vibe')){state.syncVibe=!state.syncVibe;store();render();win.querySelector('[data-sync-vibe]')?.focus({preventScroll:true});return;}
   if(b.dataset.cut&&editorKind()&&b.closest('.tray__source')){appendToEditor(b.dataset.cut,b);return;}
   if(b.dataset.cut){if(b.closest('.ghost'))return;if(state.cutTarget)placeCut(b.dataset.cut,state.cutTarget);else if(state.armedCut===b.dataset.cut){state.armedCut=null;render();}else{state.armedCut=b.dataset.cut;state.opFeedback='CUT обрано. Торкнись CUT для заміни або гнізда «+», щоб вставити.';if(state.view!=='profiles')state.view='profiles';if(narrowSurface())state.cuts=false;render();if(narrowSurface())win.querySelector('.tray__armed [data-action=cancel-cut]')?.focus({preventScroll:true});}return;}
-  if(b.dataset.action==='cancel-cut'){state.armedCut=null;state.cutTarget=null;render();win.querySelector('[data-op-switch=cuts]')?.focus({preventScroll:true});return;}
+  if(b.dataset.action==='cancel-cut'){state.armedCut=null;state.cutTarget=null;state.opFeedback='Вставку скасовано.';render();win.querySelector('[data-op-switch=cuts]')?.focus({preventScroll:true});return;}
   if(b.dataset.action==='cuts-clear'){state.cutQuery='';render();win.querySelector('#cut-query')?.focus({preventScroll:true});return;}
   if(b.dataset.analyze){selectCatalogRow(b.dataset.analyze,!b.closest('.coll__row'));return;}
   if(b.dataset.providerToggle){const id=b.dataset.providerToggle;p().disabledProviders=(p().disabledProviders||[]).filter(x=>x!==id);if(b.getAttribute('aria-pressed')==='true')p().disabledProviders.push(id);render();win.querySelector(`[data-provider-toggle="${CSS.escape(id)}"]`)?.focus({preventScroll:true});return;}
   if(b.dataset.action==='coll-details'){const panel=win.querySelector('#coll-inspector');panel?.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});panel?.focus({preventScroll:true});return;}
-  if(b.dataset.action==='coll-back'){const row=win.querySelector('.coll__row[aria-selected=true]');row?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});row?.focus({preventScroll:true});return;}
+  if(b.dataset.action==='coll-back'){const row=win.querySelector('.coll__row[aria-selected=true]')||win.querySelector('.coll__row');row?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});row?.focus({preventScroll:true});return;}
   if(b.dataset.action==='catalog-clear'){state.catalogQuery='';state.page=0;state.analyze=null;render();win.querySelector('#catalog-query')?.focus({preventScroll:true});return;}if(b.dataset.action==='all-editions'){state.allEditions=!state.allEditions;render();return;}
   if(b.hasAttribute('data-history-bin')){const i=Number(b.dataset.historyBin);scrubHistory(i,true);win.querySelector(`[data-history-bin="${i}"]`)?.focus({preventScroll:true});return;}
   if(b.dataset.radio){const field={'history-metric':'historyMetric','history-sort':'historySort'}[b.dataset.radio];if(field){state[field]=b.dataset.value;store();render();win.querySelector(`[data-radio="${b.dataset.radio}"][data-value="${CSS.escape(b.dataset.value)}"]`)?.focus({preventScroll:true});}return;}
@@ -1581,10 +1760,17 @@
  });
  // Click-to-place provides the same operation without dragging (phone / keyboard).
  root.addEventListener('click',e=>{if(!state.armedCut||e.target.closest('[data-cut],[data-slot-actions],select,.cut__think'))return;const target=e.target.closest('[data-edit]');if(!target||target.disabled)return;e.preventDefault();e.stopImmediatePropagation();const d=target.dataset;placeCut(state.armedCut,{role:d.edit,index:Number(d.index),group:d.group||'role'});},true);
- root.addEventListener('change',e=>{const id=e.target.id,value=e.target.value;if(id==='history-position'){scrubHistory(Number(value),true);return;}const map={'cut-provider':'cutProvider','cut-health':'cutHealth','op-role':'role','op-sort':'catalogSort','op-scope':'catalogMode','op-source':'benchSource','op-release':'benchRelease','op-evidence':'catalogEvidence'};if(map[id]){state[map[id]]=value;state.page=0;if(id==='op-scope')state.catalogProvider='all';if(id==='op-source')state.benchRelease=[...new Set(source.insights.benchmarks.records.filter(b=>b.source===value).map(b=>b.release))].sort().at(-1)||'';state.analyze=null;store();render();win.querySelector('#'+id)?.focus({preventScroll:true});}});
+ root.addEventListener('change',e=>{const id=e.target.id,value=e.target.value;if(id==='history-position'){scrubHistory(Number(value),true);return;}const map={'cut-provider':'cutProvider','cut-health':'cutHealth','op-role':'role','op-sort':'catalogSort','op-scope':'catalogMode','op-source':'benchSource','op-release':'benchRelease','op-evidence':'catalogEvidence'};if(map[id]){state[map[id]]=value;if(id==='op-scope')state.catalogProvider='all';if(id==='op-source')state.benchRelease=[...new Set(source.insights.benchmarks.records.filter(b=>b.source===value).map(b=>b.release))].sort().at(-1)||'';if(id.startsWith('op-')){state.page=0;state.analyze=null;}store();render();win.querySelector('#'+id)?.focus({preventScroll:true});}});
  root.addEventListener('input',e=>{if(e.target.id==='history-position')scrubHistory(Number(e.target.value));});
  // Selecting a CUT in Колекція: the row lights (LED + pressed strip), the inspector follows; focus stays where the
  // selection was made (the row, a plot point, an EDITION on the inspector).
+ // A page turn selects the first CUT of the new page, so the list keeps one tabbable row and «Дані обраного CUT»
+ // shows what is on screen; a pager key that just disabled hands its focus to the other one (QA2 B9).
+ function turnCatalogPage(step,action){
+  const rows=analyticalModels(),page=Math.max(0,Math.min(Math.ceil(rows.length/12)-1,state.page+step)),first=rows[page*12];
+  state.page=page;if(first)state.analyze=first.provider+'/'+first.id;state.allEditions=false;render();
+  const key=win.querySelector(`[data-action="${action}"]`);if(key&&!key.disabled)key.focus({preventScroll:true});else (win.querySelector(`[data-action="${action==='next-page'?'prev-page':'next-page'}"]:not(:disabled)`)||win.querySelector('.coll__row[aria-selected=true]'))?.focus({preventScroll:true});
+ }
  function selectCatalogRow(route,keepFocus=false){
   state.analyze=route;state.allEditions=false;const rows=analyticalModels(),at=rows.findIndex(m=>m.provider+'/'+m.id===route);if(at>=0)state.page=Math.floor(at/12);render();
   if(!keepFocus)win.querySelector(`.coll__row[data-analyze="${CSS.escape(route)}"]`)?.focus({preventScroll:true});
@@ -1595,8 +1781,8 @@
  // picker closes or moves on. Decorations outside the region strings, re-applied after every patch.
  function markEditing(){
   const x=state.picker,next=x?[...win.querySelectorAll(`[data-edit="${CSS.escape(x.role)}"][data-index="${x.index}"][data-group="${x.group}"]`)].map(el=>el.closest('.cut')).filter(Boolean):[];
-  for(const el of editingNodes)if(!next.includes(el)){el.classList.remove('is-selected');el.querySelector('.cut__more')?.setAttribute('aria-expanded','false');}
-  for(const el of next){if(!el.classList.contains('is-selected'))el.classList.add('is-selected');if(x.actionsOnly)el.querySelector('.cut__more')?.setAttribute('aria-expanded','true');}
+  for(const el of editingNodes)if(!next.includes(el)){el.classList.remove('is-selected');for(const k of el.querySelectorAll('.cut__more,button.cut__think'))k.setAttribute('aria-expanded','false');}
+  for(const el of next){if(!el.classList.contains('is-selected'))el.classList.add('is-selected');for(const k of el.querySelectorAll('.cut__more,button.cut__think'))k.setAttribute('aria-expanded',String(!!x.actionsOnly&&k.matches(x.thinking?'.cut__think':'.cut__more')));}
   editingNodes=next;
  }
 
@@ -1747,6 +1933,8 @@
    modalReturnFocus=view.focused?.closest('.dock__menu')?'.dock__menu summary':attribute?`[${attribute}="${CSS.escape(view.focused.getAttribute(attribute))}"]`:'[data-view][aria-current=page]';
   }
   modalShown=!!state.modal;
+  // A new form (also one form replacing another) takes the focus at its own first control (QA2 B10).
+  const formKey=state.modal?state.modal+'|'+(state.confirm?.action||'')+'|'+(state.editProvider||''):'',newForm=!!formKey&&formKey!==formShown;formShown=formKey;
   editHistory.observe(state.profile,p(),!!diff(state.profile).length,original[state.profile]);editHistory.observe('@free-pools',poolDraft,poolsDirty(),poolOriginal);
   const dirty=profileKeys.filter(k=>diff(k).length);
   const out=regions.render(windowRegions(dirty));
@@ -1758,12 +1946,16 @@
   settleDrawer(out);
   if(state.modal)win.querySelector('.dock__menu[open]')?.removeAttribute('open');else if(view.menuOpen)win.querySelector('.dock__menu')?.setAttribute('open','');
   for(const child of win.children){const inert=!!state.modal&&!child.matches('.tray-port,.toast');if(child.inert!==inert)child.inert=inert;}
+  // A closed drawer shows its lip only: nothing behind it takes the focus (or scrolls the port to reach it).
+  const trayBody=win.querySelector('#tray-body'),closedTray=!drawerShown();if(trayBody&&trayBody.inert!==closedTray)trayBody.inert=closedTray;
   restoreScroll(view,out,motion.context===context);
   if(state.modal&&touched(out,'drawer')){
    const layer=win.querySelector('.tray--form'),scroller=layer?.querySelector('.tray__body'),form=layer?.querySelector('.tray__form form');
    if(layer){
     if(form!==oldForm){scroller.scrollTop=layerScroll;if(form&&form.getAttribute('id')===oldForm?.getAttribute('id'))for(const saved of formValues){const el=form.elements.namedItem(saved.name);if(el){el.value=saved.value;if(typeof saved.checked==='boolean')el.checked=saved.checked;}}}
-    const target=modalFocus&&!view.focused?.isConnected?layer.querySelector(modalFocus):!wasModal?layer.querySelector(formSpecFocus()||'input,button'):null;
+    // The form's own body first: the lip × carries the same action as «Скасувати» (QA2 B11).
+    const pick=selector=>selector?layer.querySelector('.tray__body')?.querySelector(selector)||layer.querySelector(selector):null;
+    const target=newForm?pick(formSpecFocus()||'input,button'):modalFocus&&!view.focused?.isConnected?pick(modalFocus)||pick(formSpecFocus()||'input,button'):null;
     target?.focus({preventScroll:true});if(target&&view.selection&&typeof target.setSelectionRange==='function')target.setSelectionRange(...view.selection);
     fitForm(layer);
    }
@@ -1772,7 +1964,9 @@
   if(!state.modal)restoreFocus(view);
   ForgeTape.after(win,motion,frame);
   if(!state.modal&&view.focused?.matches('.menu--tools [data-action=move-node]')&&!view.focused.isConnected)focusPickerMove(state.picker?.focusDirection||1);
-  if(!state.modal&&wasModal)[...win.querySelectorAll(modalReturnFocus||'[data-view][aria-current=page]')].find(el=>el.getClientRects().length)?.focus({preventScroll:true});
+  // Focus returns to the form's opener; when the action removed it (an adopted file, a deleted provider), to the
+  // control that owns the surface: the provider selector in Колекція, the reel ⋯ on Монтаж.
+  if(!state.modal&&wasModal)[modalReturnFocus,state.view==='models'?'#catalog-provider':'.dock__menu summary','[data-view][aria-current=page]'].filter(Boolean).map(selector=>[...win.querySelectorAll(selector)].find(el=>el.getClientRects().length&&!el.disabled)).find(Boolean)?.focus({preventScroll:true});
   storeDrafts(dirty);
   renderedAt=Date.now();
   }finally{renderCache=null;}
@@ -1783,7 +1977,10 @@
   const focused=document.activeElement,selector=win.contains(focused)?focusSelector(focused):'';
   const scrollers=['#picker-results','.tray__source .tray__grid,.tray__body>.tray__grid','.tray__editor .tray__grid'].map(selector=>{const el=win.querySelector(selector);return el?{selector,el,left:el.scrollLeft,top:el.scrollTop,key:el.dataset.filterKey}:null;}).filter(Boolean);
   // Long lanes scroll on their own; a rebuilt lane keeps its horizontal position within the same profile.
-  const grooves=[...win.querySelectorAll('.lane__groove')].filter(el=>el.scrollLeft).map(el=>({el,lane:el.parentElement.dataset.role+'|'+el.parentElement.dataset.laneGroup,left:el.scrollLeft}));
+  // Only grooves that were actually scrolled are read: a layout read inside a lane that content-visibility skips
+  // would force that lane's layout (≈100 forced layouts per render at owner scale).
+  for(const el of scrolledGrooves)if(!el.isConnected)scrolledGrooves.delete(el);
+  const grooves=[...scrolledGrooves].filter(el=>el.scrollLeft).map(el=>({el,lane:el.parentElement.dataset.role+'|'+el.parentElement.dataset.laneGroup,left:el.scrollLeft}));
   return {focused,selector,selection:focused?.selectionStart!=null?[focused.selectionStart,focused.selectionEnd,focused.selectionDirection]:null,scrollers,grooves,menuOpen:!!win.querySelector('.dock__menu[open]')};
  }
  function restoreScroll(view,out,sameContext){
@@ -1807,6 +2004,7 @@
  function settleRegions(out){
   markEditing();if(state.view==='dashboard')markHistoryBin();
   const fresh=out.all?[win]:out.inserted;
+  markMatches(fresh);
   for(const top of fresh)paintTimes(top);
   if(out.all||out.inserted.some(el=>el.matches(SCREEN_PARTS)||el.querySelector(SCREEN_PARTS)))ManaScreen.sync();
   const toast=out.inserted.find(el=>el.matches('.toast'));if(toast)requestAnimationFrame(()=>toast.classList.add('is-in'));
@@ -1832,7 +2030,7 @@
  }
  function storeDrafts(dirty){
   try{
-   const pools=poolsDirty()?JSON.stringify({original:poolOriginal,value:poolDraft,revision:poolRevision}):'',drafts=JSON.stringify(Object.fromEntries(dirty.map(k=>[k,{original:original[k],value:profiles[k],revision:source.revisions[k]}])));
+   const pools=poolsDirty()?JSON.stringify({original:poolOriginal,value:poolDraft,revision:poolRevision}):'',drafts=JSON.stringify(Object.fromEntries(dirty.map(k=>[k,{original:original[k],value:profiles[k],revision:baseRevision(k)}])));
    if(pools!==storedDrafts.pools){if(pools)sessionStorage.setItem(storageKey('forge-pool-draft'),pools);else sessionStorage.removeItem(storageKey('forge-pool-draft'));storedDrafts.pools=pools;}
    if(drafts!==storedDrafts.drafts){sessionStorage.setItem(storageKey('forge-drafts'),drafts);storedDrafts.drafts=drafts;}
   }catch{}
@@ -1851,8 +2049,11 @@
    if(action==='modal-close'){const back=state.modal==='confirm'&&state.confirm?.back;if(back){openForm(back);return;}closeForm();return;}
    if(action==='confirm-cancel'){const back=state.confirm?.back;if(back)openForm(back);else closeForm();return;}
    if(action==='confirm-run'){const c=state.confirm;if(!c||state.profileBusy)return;state.profileBusy=true;render();try{await CONFIRM_ACTIONS[c.action]?.(c);}finally{state.profileBusy=false;if(state.modal==='confirm')render();}return;}
+   if(action==='conflict-open')openForm('conflict',{error:''});
+   if(action==='conflict-mine'||action==='conflict-theirs'){const name=state.profile;if(!staleDrafts.has(name))return closeForm();rebaseDraft(name,freshProfile(name),action==='conflict-mine'?'mine':'theirs');closeForm();state.opFeedback=(action==='conflict-mine'?'Твої значення лишились':'Взято значення з файлу')+' · чернетку перенесено на актуальний файл '+prettyProfile(name)+'. Перевір і збережи.';render();return;}
+   if(action==='conflict-discard'){askConfirm({action:'conflict-discard',back:'conflict',danger:true,title:'Скинути чернетку',sub:prettyProfile(state.profile),label:'Скинути чернетку',text:`Незбережені зміни профілю <b>${esc(prettyProfile(state.profile))}</b> буде скинуто, панель покаже поточний файл. Інші профілі й пули не зміняться.`});return;}
    if(action==='clone-profile')openForm('clone',{cloneName:''});
-   if(action==='clone-create'){const f=win.querySelector('#clone-form');if(state.profileBusy||!f)return;const q=checkProfileName(f,true);if(q.error){f.elements.name.focus();return;}let name=q.name;state.cloneName=f.elements.name.value;state.profileBusy=true;regions.invalidate('drawer/form');render();try{const result=await api('/api/profile-action',{action:'clone',profile:state.profile,name});name=result.name||name;state.modal=null;state.modalError='';await reload();state.profile=name;editHistory.profiles.delete(name);render();store();notify('Копію створено · '+prettyProfile(name));}finally{state.profileBusy=false;if(state.modal)render();}}
+   if(action==='clone-create'){const f=win.querySelector('#clone-form');if(state.profileBusy||!f)return;const q=checkProfileName(f,true);if(q.error){f.elements.name.focus();return;}let name=q.name;state.cloneName=f.elements.name.value;state.profileBusy=true;regions.invalidate('drawer/form');render();try{const result=await api('/api/profile-action',{action:'clone',profile:state.profile,name});name=result.name||name;state.modal=null;state.modalError='';state.opFeedback='';await reload();state.profile=name;editHistory.profiles.delete(name);render();store();notify('Копію створено · '+prettyProfile(name));}finally{state.profileBusy=false;if(state.modal)render();}}
    if(action==='history')openForm('history');
    if(action==='rename-profile'&&state.profile!=='standard'){openForm('rename',{renameName:state.profile});win.querySelector('#rename-form input')?.select();}
    if(action==='delete-profile'&&state.profile!=='standard')openForm('delete-profile');
@@ -1864,14 +2065,14 @@
     state.renameName=f?.elements.name.value;state.profileBusy=true;render();
     try{
      const result=await api('/api/profile-action',{action:f?'rename':'delete',profile:old,name,revision:source.revisions[old]});name=result.name||name;
-     if(name&&name!==old){profiles[name]=profiles[old];original[name]=original[old];source.revisions[name]=source.revisions[old];}
+     if(name&&name!==old){profiles[name]=profiles[old];original[name]=original[old];source.revisions[name]=source.revisions[old];if(staleDrafts.has(old))staleDrafts.set(name,staleDrafts.get(old));}
      editHistory.rename(old,name);
-     if(name!==old){delete profiles[old];delete original[old];delete source.revisions[old];profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));}
-     state.profile=name||'standard';state.modal=null;state.modalError='';state.profileBusy=false;store();render();await reload();notify(name?'Профіль перейменовано':'Профіль видалено');
+     if(name!==old){delete profiles[old];delete original[old];delete source.revisions[old];staleDrafts.delete(old);profileKeys.splice(0,profileKeys.length,...Object.keys(profiles));}
+     state.profile=name||'standard';state.modal=null;state.modalError='';state.profileBusy=false;state.opFeedback='';store();render();await reload();notify(name?'Профіль перейменовано':'Профіль видалено');
     }finally{state.profileBusy=false;}
    }
    // The history drawer is the confirmation itself: its key restores at once.
-   if(action==='restore-profile'){if(state.profileBusy)return;state.profileBusy=true;render();try{await api('/api/profile-action',{action:'restore',profile:state.profile,revision:source.revisions[state.profile]});profiles[state.profile]=copy(original[state.profile]);editHistory.profiles.delete(state.profile);state.poolPanel=false;state.modal=null;await reload();notify('Попередню версію відновлено');}finally{state.profileBusy=false;if(state.modal)render();}}
+   if(action==='restore-profile'){if(state.profileBusy)return;state.profileBusy=true;render();try{await api('/api/profile-action',{action:'restore',profile:state.profile,revision:source.revisions[state.profile]});profiles[state.profile]=copy(original[state.profile]);editHistory.profiles.delete(state.profile);state.poolPanel=false;state.modal=null;state.opFeedback='';await reload();notify('Попередню версію відновлено');}finally{state.profileBusy=false;if(state.modal)render();}}
    if(action==='delete-provider'){const v=source.providers.find(x=>x.id===state.editProvider);askConfirm({action:'delete-provider',back:'provider',danger:true,title:'Видалити підключення',sub:providerName(state.editProvider),label:'Видалити підключення',text:`Підключення <b>${esc(v?.name||state.editProvider)}</b> зникне з каталогу. Якщо його моделі є в профілях, видалення буде заблоковано, а профілі не зміняться.`});}
 
    if(action==='clear-error'){state.error='';render();}
@@ -1879,14 +2080,15 @@
    // is never rewritten; its former version stays restorable.
    if(action==='adopt-profile'){const name=b.dataset.adopt,orphan=source.modeOrphans?.includes(name);askConfirm({action:'adopt-profile',profile:name,title:orphan?'Прийняти видалення':'Прийняти файл',sub:prettyProfile(name),label:orphan?'Забути запис режиму':'Прийняти файл як є',text:orphan?`Файл профілю <b>${esc(prettyProfile(name))}</b> уже видалено поза Mana Tape. Mana Tape забуде запис його режиму; копія запису лишиться в резервних.`:`Файл профілю <b>${esc(prettyProfile(name))}</b> змінено поза Mana Tape. Прийняти його як є: режим DeepSeek стане ON, збережені заміни лишаться для наступного OFF. Попередня версія доступна через «Попереднє збереження».`});return;}
    if(action==='discard-reload')askConfirm({action:'discard-reload',back:'conflict',danger:true,title:'Скинути чернетки',label:'Скинути й оновити',text:'Усі незбережені чернетки профілів і пулів у цьому вікні буде скинуто, а поточні файли — завантажено заново. Експорт чернеток доступний до цього кроку.'});
-   if(action==='export-draft'){const drafts=Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:source.revisions[k],changes:diff(k)}]));if(poolsDirty())drafts['@free-pools']={revision:poolRevision,pools:poolDraft};const blob=new Blob([JSON.stringify(drafts,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+   if(action==='export-draft'){const drafts=Object.fromEntries(profileKeys.filter(k=>diff(k).length).map(k=>[k,{revision:baseRevision(k),changes:diff(k)}]));if(poolsDirty())drafts['@free-pools']={revision:poolRevision,pools:poolDraft};const blob=new Blob([JSON.stringify(drafts,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forge-drafts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   }catch(err){if(state.modal){state.modalError=err.message;state.modalCode=errorCode(err);regions.invalidate('drawer/form');}else state.error=err.message;render();}
  });
  // What a confirmation drawer runs; each closes the drawer when it is done (errors stay on the drawer's line).
  const CONFIRM_ACTIONS={
   'delete-provider':async()=>{await api('/api/provider',{id:state.editProvider,action:'delete',revision:source.providerRevision});state.modal=null;state.confirm=null;await reload();notify('Підключення видалено');},
-  'adopt-profile':async c=>{await api('/api/profile-action',{action:'adopt',profile:c.profile,revision:source.revisions?.[c.profile]});state.modal=null;state.confirm=null;await reload();state.opFeedback='Файл профілю '+prettyProfile(c.profile)+' прийнято.';render();},
-  'discard-reload':async()=>{state.modal=null;state.confirm=null;state.error='';editHistory.profiles.clear();await reload(true);}
+  'adopt-profile':async c=>{await api('/api/profile-action',{action:'adopt',profile:c.profile,revision:source.revisions?.[c.profile]});state.modal=null;state.confirm=null;await reload();state.opFeedback=c.title==='Прийняти видалення'?'Запис режиму '+prettyProfile(c.profile)+' забуто · копія лишилась у резервних.':'Файл профілю '+prettyProfile(c.profile)+' прийнято.';render();},
+  'conflict-discard':async()=>{const name=state.profile,fresh=freshProfile(name);original[name]=fresh;profiles[name]=copy(fresh);staleDrafts.delete(name);editHistory.reset(name,fresh);state.modal=null;state.confirm=null;state.opFeedback='Чернетку '+prettyProfile(name)+' скинуто · показано поточний файл.';render();},
+  'discard-reload':async()=>{state.modal=null;state.confirm=null;state.error='';editHistory.profiles.clear();staleDrafts.clear();await reload(true);}
  };
  root.addEventListener('input',e=>{
   // A field that is corrected loses its error at once; the form is not rebuilt under the typing hand.
@@ -1911,12 +2113,23 @@
  window.addEventListener('online',()=>{state.error='';pollState();});
  Object.assign(state,{health:true,cuts:false,freeCuts:false,cutProvider:'all',cutHealth:'all',cutQuery:'',catalogSort:'score',benchSource:'Artificial Analysis',benchRelease:[...new Set((source.insights?.benchmarks?.records||[]).filter(b=>b.source==='Artificial Analysis').map(b=>b.release))].sort().at(-1)||'',historyMetric:'requests',historySort:'totalRequests'});try{const saved=JSON.parse(localStorage.getItem('mana-operator')||'{}');if(typeof saved?.health==='boolean')state.health=saved.health;if(saved?.drawerResized===true&&Number.isFinite(saved.drawerHeight))state.drawerHeight=saved.drawerHeight;if(Number.isFinite(saved?.editorHeight))state.editorHeight=saved.editorHeight;}catch{}
  state.syncVibe=true;state.favs=source.favs||[];favSaved=state.favs;state.error='';state.modalError='';
- try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(profiles[v.profile])state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;source.revisions[k]=v.revision;}}}catch{}
+ try{const v=JSON.parse(localStorage.getItem(storageKey('forge-view')));if(v){if(['dashboard','profiles','models','providers'].includes(v.view))state.view=v.view==='providers'?'models':v.view;if(profiles[v.profile])state.profile=v.profile;if(roleKeys.includes(v.role))state.role=v.role;if(typeof v.syncVibe==='boolean')state.syncVibe=v.syncVibe;}const drafts=JSON.parse(sessionStorage.getItem(storageKey('forge-drafts'))||'{}');for(const [k,v]of Object.entries(drafts)){if(profiles[k]&&v.original&&v.value&&v.revision){original[k]=v.original;profiles[k]=v.value;if(v.revision!==source.revisions[k])staleDrafts.set(k,{revision:v.revision,conflicts:[]});}}}catch{}
  try{const draft=JSON.parse(sessionStorage.getItem(storageKey('forge-pool-draft'))||'null');if(draft?.original&&draft.value&&draft.revision){poolOriginal=draft.original;poolDraft=draft.value;poolRevision=draft.revision;}}catch{}
  for(const [k,v] of Object.entries(profiles)){v.forgeMode??=copy(source.profileModes?.[k]?.settings||{mode:'deepseek',alternatives:[],overrides:{}});original[k].forgeMode??=copy(v.forgeMode);}
+ // A restored draft made on an older file moves onto the current one now, or waits for its «Конфлікт…» choice.
+ for(const [k,row] of staleDrafts){if(!diff(k).length){original[k]=freshProfile(k);profiles[k]=copy(original[k]);staleDrafts.delete(k);continue;}row.conflicts=rebaseDraft(k,freshProfile(k),'auto');}
  if(!profiles[state.profile])state.profile='standard';
  rebuild();render();ManaScreen.boot(win);
- if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+ // A new service worker takes over at once (skipWaiting + clients.claim); the page itself moves to the new shell
+ // only when nothing can be lost or moved under the hand: no draft in any profile or the pools, no open form,
+ // save or write in flight, and only while the tab is hidden. Otherwise the next ordinary reload picks it up.
+ if('serviceWorker' in navigator){
+  const hadWorker=!!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  const reloadForUpdate=()=>{if(!state.updateReady||!document.hidden||state.modal||state.saving||activeWrites||drag||poolsDirty()||profileKeys.some(k=>diff(k).length))return;state.switchingProject=true;location.reload();};
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadWorker){state.updateReady=true;reloadForUpdate();}});
+  document.addEventListener('visibilitychange',reloadForUpdate);
+ }
  // Countdowns tick in place; a text is written only when it actually changed (an idle tab does no DOM work).
  setInterval(()=>{
   if(document.hidden)return;let passed=false;

@@ -49,6 +49,49 @@ class Projects(unittest.TestCase):
         self.assertEqual(request('POST', '/api/favorites?project=two', {'values': []}, 'wrong')[0], 403)
         self.assertEqual(request('GET', '/api/state?project=one&project=two')[0], 404)
 
+    def test_project_page_preloads_its_own_state(self):
+        # QA1 B12: `?project=` pages preload the state URL the panel fetches first, escaped.
+        from server import pinned_shell
+        raw = b'<link rel="preload" href="/api/state" as="fetch" crossorigin><script src="/app.js"></script>'
+        self.assertIn(b'href="/api/state"', pinned_shell(raw))
+        self.assertIn(b'href="/api/state?project=two"', pinned_shell(raw, 'two'))
+        self.assertIn(b'href="/api/state?project=a%22%3E%3Cx"', pinned_shell(raw, 'a"><x'))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server.app, server.apps = self.apps['one'], self.apps
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        c = http.client.HTTPConnection('127.0.0.1', server.server_port); self.addCleanup(c.close)
+        c.request('GET', '/?project=two'); page = c.getresponse().read()
+        self.assertIn(b'href="/api/state?project=two"', page)
+
+    def test_proxy_flushes_stale_pool_and_retries_a_get_on_a_fresh_connection(self):
+        # QA4 P1-7: after a tunnel blip every pooled connection is stale; one failure flushes them all.
+        from types import SimpleNamespace
+        proxy = self.load_proxy()
+        class Conn:
+            def __init__(self, fail=None): self.fail, self.closed = fail, False
+            def request(self, *args):
+                if self.fail: raise self.fail
+            def getresponse(self): return 'response'
+            def close(self): self.closed = True
+        upstream = proxy.Upstream(1)
+        stale = [Conn(ConnectionResetError()), Conn(ConnectionResetError())]
+        for connection in stale:
+            upstream.put(connection)
+        fresh = Conn()
+        upstream.fresh = lambda: fresh
+        handler = SimpleNamespace(server=SimpleNamespace(upstream=upstream), command='GET', path='/api/state')
+        self.assertEqual(proxy.Proxy.forward(handler, None, {}), (fresh, 'response'))
+        self.assertTrue(all(c.closed for c in stale), 'the whole stale pool is closed')
+        self.assertEqual(upstream.free, [])
+        # A POST is never repeated; a refused fresh connection (tunnel down) is not retried either.
+        upstream.put(Conn(ConnectionResetError()))
+        with self.assertRaises(ConnectionResetError):
+            proxy.Proxy.forward(SimpleNamespace(server=handler.server, command='POST', path='/api/profile'), b'{}', {})
+        upstream.fresh = lambda: Conn(ConnectionRefusedError())
+        with self.assertRaises(ConnectionRefusedError):
+            proxy.Proxy.forward(handler, None, {})
+
     def test_shared_agent_lock_and_explicit_native_environment(self):
         one, two = self.apps.values()
         self.assertIs(one.lock, two.lock)
@@ -273,7 +316,7 @@ class Projects(unittest.TestCase):
         app.path('standard').write_text('# Keep this comment\ntheme:\n  dark: titanium\n')
         for role, info in BUILTIN_ROLES.items():
             with self.subTest(role=role):
-                model = {'id': 'candidate', 'provider': 'test', 'kind': info['kinds'][0]}
+                model = {'id': 'candidate', 'provider': 'test', 'kind': info['kinds'][0], 'input': ['text', 'image']}
                 app.state['catalog'] = {'test/candidate': model}
                 body = {'profile':'standard', 'revision':app.revision('standard'),
                         'changes':[{'path':['modelRoles',role], 'value':'test/candidate'}],
@@ -294,7 +337,8 @@ class Projects(unittest.TestCase):
         app.path('standard').write_text('{}\n')
         app.state['catalog'] = {'test/chat': {'id':'chat','kind':'chat'}}
         before = app.path('standard').read_bytes()
-        for role, selector in [('speech','test/chat'), ('web','test/chat'), ('unconfigured','test/chat'), ('judge','test/chat:high')]:
+        # QA1 B7: the vision lane takes only CUTS that read images, as a pool on it already did.
+        for role, selector in [('speech','test/chat'), ('web','test/chat'), ('unconfigured','test/chat'), ('judge','test/chat:high'), ('vision','test/chat')]:
             with self.subTest(role=role), self.assertRaises(Problem):
                 app.save_profile({'profile':'standard','revision':app.revision('standard'),
                                   'changes':[{'path':['modelRoles',role],'value':selector}]})

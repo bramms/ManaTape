@@ -199,6 +199,27 @@ unrelated: {keep: true}
         with self.assertRaises(Problem):
             self.app.provider_save(self.provider(key='',url='https://different.example/v1'))
 
+    def test_create_refuses_an_existing_provider_id(self):
+        # QA2 B1: «+ Провайдер» with a taken ID never overwrites that provider; editing keeps working.
+        self.app.provider_save(self.provider(models=['kept']))
+        registry = (self.agent/'models.yml').read_bytes()
+        with self.assertRaises(Problem) as refused:
+            self.app.provider_save(self.provider(mode='create', url='https://other.test/v1', auth='none', models=['only-this']))
+        self.assertEqual((refused.exception.status, refused.exception.code), (409, 'provider-exists'))
+        self.assertEqual((self.agent/'models.yml').read_bytes(), registry)
+        self.app.provider_save(self.provider(mode='edit', models=['kept', 'more']))
+        self.assertEqual([m['id'] for m in self.app.registry()['providers']['temporary']['models']], ['kept', 'more'])
+
+    def test_stale_revision_refusals_carry_a_code(self):
+        # The panel tells a stale revision (rebase the draft) from other 409s by its code.
+        body = {'profile': 'standard', 'revision': 'stale', 'changes': [], 'modeSettings': {'mode': 'deepseek', 'alternatives': [], 'overrides': {}}}
+        with self.assertRaises(Problem) as stale:
+            self.app.preview_profile(body)
+        self.assertEqual((stale.exception.status, stale.exception.code), (409, 'revision'))
+        with self.assertRaises(Problem) as pools:
+            self.app.save_pools({'revision': 'stale', 'pools': {'free-good': [], 'free-fast': []}})
+        self.assertEqual(pools.exception.code, 'revision')
+
     def test_identity_headers_rejected_from_nonlocal_peer(self):
         from email.message import Message
         from types import SimpleNamespace
@@ -609,10 +630,10 @@ unrelated: {keep: true}
         # The shell pins every local asset to its content; only that exact URL is immutable.
         response, shell = get('/')
         self.assertEqual(response.getheader('Cache-Control'), 'no-cache')
-        pinned = re.search(r'href="(/icon\.svg\?v=[0-9a-f]{12})"', shell.decode())[1]
+        pinned, icon = re.search(r'href="(/(device\.css)\?v=[0-9a-f]{12})"', shell.decode()).groups()
         self.assertNotIn('?v=42', shell.decode())
         response, raw = get(pinned, **{'Accept-Encoding': 'gzip'})
-        self.assertEqual(gzip.decompress(raw), (static/'icon.svg').read_bytes())
+        self.assertEqual(gzip.decompress(raw), (static/icon).read_bytes())
         self.assertIn('immutable', response.getheader('Cache-Control'))
         self.assertEqual(response.getheader('Vary'), 'Accept-Encoding')
         self.assertEqual(get(pinned, **{'If-None-Match': response.getheader('ETag')})[0].status, 304)

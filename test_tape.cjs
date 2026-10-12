@@ -77,3 +77,22 @@ test('background repaint does not restart a CUT transform, but a changed project
  tape.after(root,beforeProjection,{...frame,projection:'compiled replacement'});
  assert.equal(animations,1,'async replacement projection is a real montage change');
 });
+test('QA1 B2: a rebased draft moves its whole history, so Undo never brings back the older file',()=>{
+ const h=new ForgeHistory(),old={file:'old',mine:0},edit1={file:'old',mine:1},edit2={file:'old',mine:2};
+ h.observe('p',old,false);h.observe('p',edit1,true);h.observe('p',edit2,true);h.step('p',-1);
+ h.rebase('p',v=>({...v,file:'new'}));
+ assert.deepEqual(h.step('p',-1),{file:'new',mine:0},'the base step is the current file');
+ assert.deepEqual(h.step('p',1),{file:'new',mine:1});assert.deepEqual(h.step('p',1),{file:'new',mine:2},'redo moved too');
+ h.rebase('missing',()=>assert.fail('no history, nothing to move'));
+});
+test('F2/QA4: CUTS of a lane off screen are never measured (content-visibility would lay each one out)',()=>{
+ const {runInNewContext}=require('node:vm'),{readFileSync}=require('node:fs');
+ const context={window:{},innerHeight:900,matchMedia:()=>({matches:false,addEventListener(){}})};
+ runInNewContext(readFileSync(require.resolve('./static/tape.js'),'utf8'),context);
+ const reads=[],lane=(top,name)=>({getBoundingClientRect:()=>{reads.push(name);return {left:0,top,width:900,height:60,bottom:top+60};}});
+ const clip=(owner,key)=>({dataset:{clipKey:key},closest:()=>owner,getBoundingClientRect:()=>{reads.push(key);return {left:0,top:owner===shown?100:5000,width:100,height:38,bottom:138};}});
+ const shown=lane(100,'shown'),hidden=lane(5000,'hidden'),clips=[clip(shown,'a'),clip(shown,'b'),clip(hidden,'c'),clip(hidden,'d')];
+ const root={dataset:{tapeContext:'profiles|one'},querySelector:()=>null,querySelectorAll:s=>s==='[data-clip-key]'?clips:[]};
+ const before=context.window.ForgeTape.before(root);
+ assert.deepEqual([...before.clips.keys()],['a','b']);assert.deepEqual(reads,['shown','a','b','hidden'],'each lane is read once; hidden CUTS never');
+});

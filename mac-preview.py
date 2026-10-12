@@ -60,7 +60,10 @@ class Upstream:
                 if time.monotonic() - used < self.idle:
                     return connection, True
                 connection.close()
-        return http.client.HTTPConnection('127.0.0.1', self.port, timeout=30), False
+        return self.fresh(), False
+
+    def fresh(self):
+        return http.client.HTTPConnection('127.0.0.1', self.port, timeout=30)
 
     def put(self, connection):
         with self.lock:
@@ -142,20 +145,23 @@ class Proxy(BaseHTTPRequestHandler):
                 connection.close()
 
     def forward(self, body, headers):
-        """Send over a pooled tunnel connection; a GET retries once if a reused one went stale."""
+        """Send over a pooled tunnel connection. After a tunnel blip every pooled connection is
+        stale, so any failure flushes the whole pool, and a GET is retried once on a fresh one."""
+        upstream = self.server.upstream
+        connection, reused = upstream.get()
         for attempt in (0, 1):
-            connection, reused = self.server.upstream.get()
             try:
                 connection.request(self.command, self.path, body, headers)
                 return connection, connection.getresponse()
-            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
+            except Exception as error:
                 connection.close()
-                # A POST is never repeated: the server may already have applied it.
-                if not reused or attempt or self.command != 'GET':
+                upstream.close()
+                # A POST is never repeated: the server may already have applied it. A timeout is not
+                # retried either (it would only double the wait); a refused fresh connection means
+                # the tunnel is down, not stale.
+                if attempt or self.command != 'GET' or isinstance(error, (TimeoutError, socket.timeout)) or not reused and isinstance(error, ConnectionRefusedError):
                     raise
-            except Exception:
-                connection.close()
-                raise
+                connection = upstream.fresh()
 
     do_GET = serve
     do_POST = serve

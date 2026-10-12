@@ -30,7 +30,8 @@ from profile_modes import (EFFORT, POOL_NAMES, compile_profile, default_settings
 from omp_roles import BUILTIN_ROLES, agent_catalog, accepts_model, fallback_chain
 from insights import Insights
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, quote
+import html
 from urllib.request import Request, urlopen
 
 from ruamel.yaml import YAML
@@ -412,7 +413,7 @@ class Forge:
         with self.lock:
             self.writable()
             if body.get('revision') != self.pools_revision():
-                raise Problem('Спільні пули вже змінилися. Онови дані; чернетка лишиться у вікні.', 409)
+                raise Problem('Спільні пули вже змінилися. Чернетка пулів лишилась у вікні; «Скинути» завантажить збережені.', 409, 'revision')
             frozen = self.outside_edits('standard')
             try:
                 pools = validate_pools(body.get('pools'), self.mode_catalog())
@@ -603,7 +604,7 @@ class Forge:
         if not self.path(name).is_file():
             raise Problem('Профіль не знайдено', 404)
         if body.get('revision') != self.revision(name):
-            raise Problem('Профіль або його режим змінився. Онови дані; чернетка лишиться у вікні.', 409)
+            raise Problem('Профіль або його режим змінився в іншому вікні чи редакторі. Чернетка лишилась у вікні: «Конфлікт…» на кромці переносить її на актуальні файли.', 409, 'revision')
         frozen = self.outside_edits(name)
         base, ps = self.profiles(shared)
         if name not in ps:
@@ -757,7 +758,7 @@ class Forge:
             self.transact({}, {**self.mode_state, 'profiles': records})
             return {'ok': True}
         if body.get('revision') != self.revision(name):
-            raise Problem('Профіль змінився; онови дані', 409)
+            raise Problem('Профіль змінився; онови дані', 409, 'revision')
         if record is None or digest(raw) == record.get('hash'):
             return {'ok': True, 'revision': self.revision(name)}
         conflicts = self.mode_conflicts()
@@ -886,6 +887,9 @@ class Forge:
             model = models.get(raw_route(candidate))
             if model and not accepts_model(role, model):
                 raise Problem('CUT не підтримує роль '+role, 422)
+            # One vision rule for direct CUTs and pools (compile_profile checks pools the same way).
+            if model and role in self.ui.get('visionRoles', ['vision']) and 'image' not in model.get('input', []):
+                raise Problem('Для доріжки зору '+role+' потрібен CUT, що читає зображення: '+raw_route(candidate), 422)
             if not BUILTIN_ROLES.get(role, {}).get('thinking', True) and EFFORT.search(candidate):
                 raise Problem('Ця роль не використовує thinking: '+role, 422)
 
@@ -904,7 +908,7 @@ class Forge:
             base_raw = raw if name == 'standard' else self.path('standard').read_bytes()
             revision = digest(base_raw + b'\0' + (raw if name != 'standard' else b''))
             if body.get('revision') != revision:
-                raise Problem('Профіль або Standard уже змінився. Твоя чернетка збережена в цьому вікні. Онови дані перед повторним збереженням.', 409)
+                raise Problem('Профіль або Standard уже змінився. Твоя чернетка збережена в цьому вікні. Онови дані перед повторним збереженням.', 409, 'revision')
             original_hash = digest(raw)
             data = yaml_load(raw.decode('utf-8'))
             base = yaml_load(base_raw.decode('utf-8'))
@@ -947,7 +951,7 @@ class Forge:
                     self.replace_yaml(target, data, digest(b''))
                 return {'ok': True, 'name': new_name}
             if body.get('revision') != self.revision(name):
-                raise Problem('Профіль змінився; онови дані', 409)
+                raise Problem('Профіль змінився; онови дані', 409, 'revision')
             if action == 'rename' and name != 'standard':
                 new_name = profile_name(body.get('name'))
                 target = self.path(new_name)
@@ -1146,12 +1150,15 @@ class Forge:
                     'заміни його звичайним файлом або змінюй ціль вручну.', 409, 'symlink')
             current_hash = digest(read_or_none(path) or b'')
             if body.get('revision') != current_hash:
-                raise Problem('Провайдери вже змінились. Онови дані.', 409)
+                raise Problem('Провайдери вже змінились. Онови дані.', 409, 'revision')
             data = self.registry()
             if not isinstance(data.get('providers'), dict):
                 data['providers'] = {}
             providers = data['providers']
             exists = pid in providers
+            # «+ Провайдер» only creates: an ID that is taken is refused, editing goes through «Підключення…».
+            if body.get('mode') == 'create' and body.get('action') != 'delete' and (exists or pid in self.managed and not self.managed[pid].get('expired')):
+                raise Problem('Цей ID уже має провайдер. Змінити його можна через «Підключення…».', 409, 'provider-exists')
             renewing = self.managed.get(pid, {}).get('expired', False)
             if not exists and not renewing and (pid in self.managed or any(m['provider'] == pid for m in self.cached()[0].values())):
                 raise Problem('Цей ID уже належить провайдеру OMP; використай інший')
@@ -1475,18 +1482,22 @@ def asset_version(raw):
     return digest(raw)[:12]
 
 
-def pinned_shell(raw):
+def pinned_shell(raw, project=''):
     """index.html with every local asset URL pinned to its current content (`?v=<sha256 prefix>`).
 
     Such a URL can be cached as immutable: new content always gets a new URL,
-    without anyone remembering to bump a version by hand.
+    without anyone remembering to bump a version by hand. A `?project=` page preloads
+    that project's state: the same URL the panel fetches first.
     """
     def pin(match):
         asset = (STATIC / match[2].lstrip('/')).resolve()
         if not asset.is_relative_to(STATIC) or not asset.is_file():
             return match[0]
         return f'{match[1]}{match[2]}?v={asset_version(asset.read_bytes())}"'
-    return SHELL_ASSET.sub(pin, raw.decode('utf-8')).encode('utf-8')
+    text = SHELL_ASSET.sub(pin, raw.decode('utf-8'))
+    if project:
+        text = text.replace('href="/api/state"', 'href="/api/state?project=' + html.escape(quote(project, safe=''), quote=True) + '"', 1)
+    return text.encode('utf-8')
 
 
 def accepts_gzip(header):
@@ -1631,7 +1642,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise Problem('Не знайдено', 404)
             raw = p.read_bytes()
             if p == STATIC / 'index.html':
-                raw = pinned_shell(raw)
+                raw = pinned_shell(raw, parse_qs(parts.query).get('project', [''])[0])
             tag = '"' + digest(raw)[:32] + '"'
             # Only a URL pinned to this exact content is immutable; the shell, sw.js and
             # any other ?v= are revalidated with the ETag instead.

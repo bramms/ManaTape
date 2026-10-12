@@ -20,6 +20,9 @@ class ForgeHistory {
   to.push(h.present);h.present=from.pop();return JSON.parse(h.present);
  }
  reset(name,value,dirty=false){this.profiles.set(name,{present:JSON.stringify(value),dirty,past:[],future:[]});}
+ // A draft moved onto a newer file: every step of its history moves the same way, so Undo never brings back the
+ // older file's fields.
+ rebase(name,fn){const h=this.profiles.get(name);if(!h)return;const map=s=>JSON.stringify(fn(JSON.parse(s)));h.present=map(h.present);h.past=h.past.map(map);h.future=h.future.map(map);}
  rename(from,to){if(from===to)return;const h=this.profiles.get(from);this.profiles.delete(from);if(h&&to)this.profiles.set(to,h);}
  available(name){const h=this.profiles.get(name);return {undo:!!h?.past.length,redo:!!h?.future.length};}
 }
@@ -32,8 +35,10 @@ if(typeof window!=='undefined'){
   const frames=new WeakMap();let reel=0,pendingIntent=null;
   const reduced=matchMedia('(prefers-reduced-motion: reduce)'),ease='cubic-bezier(.22,.75,.25,1)';
   const visible=el=>{const r=el.getBoundingClientRect();return r.width&&r.height&&r.bottom>0&&r.top<innerHeight?r:null;};
-  // One read pass over the visible CUTS: [element, rect] pairs, collected before any animation starts.
-  const measure=root=>{const out=[];for(const el of root.querySelectorAll('[data-clip-key]')){const r=visible(el);if(r)out.push([el,r]);}return out;};
+  // One read pass over the visible CUTS: [element, rect] pairs, collected before any animation starts. A lane's own
+  // box is read first; CUTS of a lane off screen (skipped by content-visibility) are never measured, since that
+  // would force the lane's layout, and they need no motion.
+  const measure=root=>{const out=[],lanes=new Map();for(const el of root.querySelectorAll('[data-clip-key]')){const lane=el.closest?.('.lane');if(lane){let shown=lanes.get(lane);if(shown===undefined){shown=!!visible(lane);lanes.set(lane,shown);}if(!shown)continue;}const r=visible(el);if(r)out.push([el,r]);}return out;};
   // `next` is the frame the coming render will produce. CUT geometry is read only when that render can move
   // CUTS (an edit or a new projection in the same context); without `next` it is always read.
   function before(root,next){

@@ -49,7 +49,7 @@ test('a background response cannot replace a draft after focus or a write change
   let resolve,scheduled=0;
   const snapshot={base:{remote:true}},draft={local:true},context={
    backgroundReloading:false,backgroundRefreshPending:false,writeEpoch:0,stateTag:'',
-   source:snapshot,profiles:{standard:draft},endpoint:x=>x,
+   source:snapshot,profiles:{standard:draft},endpoint:x=>x,deadline:()=>undefined,
    busy:false,interactionBusy:()=>context.busy,scheduleBackgroundWork:()=>scheduled++,
    fetch:()=>new Promise(done=>{resolve=done;})
   };
@@ -64,7 +64,7 @@ test('a background response cannot replace a draft after focus or a write change
 
 test('pending writes block polling until every request settles, including a failed write',async()=>{
  const responses=[];let scheduled=0;
- const context={activeWrites:0,writeEpoch:0,source:{csrf:'test'},state:{},endpoint:x=>x,
+ const context={activeWrites:0,writeEpoch:0,source:{csrf:'test'},state:{},endpoint:x=>x,deadline:()=>undefined,
   document:{hidden:false,documentElement:{dataset:{}},activeElement:null},win:{querySelector:()=>null},
   composing:false,pointerHeld:false,nativeSelectBusy:false,drag:null,cutGesture:null,drawerGesture:null,
   fetch:()=>new Promise(resolve=>responses.push(resolve)),scheduleBackgroundWork:()=>scheduled++};
@@ -83,7 +83,7 @@ test('an unchanged background snapshot only advances the tariff clock, without r
  const snapshot={base:{},tariff:{at:1,next:100,peak:false},insights:{usage:{reports:[]}}};
  const fresh=structuredClone(snapshot);fresh.tariff.at=2;
  const context={backgroundReloading:false,writeEpoch:0,stateTag:'',source:snapshot,state:{offline:false},renderedAt:Date.now(),
-  endpoint:x=>x,interactionBusy:()=>false,normalizeProfile:x=>x,fetch:async()=>({ok:true,json:async()=>fresh}),
+  endpoint:x=>x,deadline:()=>undefined,interactionBusy:()=>false,normalizeProfile:x=>x,fetch:async()=>({ok:true,json:async()=>fresh}),
   render:()=>assert.fail('unchanged polling must not render')};
  runInNewContext(appFunction('snapshotFingerprint').trim()+'\n'+appFunction('reload'),context);
  await context.reload(false,false,true);
@@ -150,7 +150,7 @@ test('save replaces a queued preview even when a changed token requires another 
  const fresh={token:'fresh',issues:[]},old={key:'same',data:{token:'old',issues:[]}},pendingModeResults=new Map([['standard',old]]);
  const state={profile:'standard',modePlans:{standard:{key:'same',pending:true}}},context={state,pendingModeResults,
   profiles:{standard:{forgeMode:{mode:'no-deepseek'}}},copy:structuredClone,diff:()=>[{}],activePlan:()=>old,modeKey:()=> 'same',modeBody:()=>({}),
-  api:async()=>fresh,notify:()=>{},render:()=>{},interactionBusy:()=>false,pendingRender:false,backgroundRefreshPending:false};
+  api:async()=>fresh,notify:()=>{},render:()=>{},interactionBusy:()=>false,pendingRender:false,backgroundRefreshPending:false,staleDrafts:new Map(),saveBlocker:()=>''};
  runInNewContext(appFunction('save')+'\n'+appFunction('flushBackgroundWork'),context);
  await context.save();context.flushBackgroundWork();
  assert.equal(state.modePlans.standard.data,fresh);assert.equal(pendingModeResults.size,0);assert.equal(state.saving,false);
@@ -344,7 +344,7 @@ test('resetting a built-in role creates removals and Undo restores its assignmen
  const profile=structuredClone(baseline),context=roleContext({builtinRoles:[{id:'smol'}],state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},copy:structuredClone,modeSettings:()=>profile.forgeMode,renderCache:null,
   render:()=>history.observe('standard',profile,true,baseline)});
- context.focusLane=()=>{};runInNewContext(['resetRole','workers','diff'].map(appFunction).join('\n'),context);
+ context.focusLane=()=>{};runInNewContext(['resetRole','workers','profilePaths','diff'].map(appFunction).join('\n'),context);
  history.observe('standard',profile,false);context.resetRole('smol');
  assert.deepEqual(Array.from(context.diff('standard'),v=>JSON.parse(JSON.stringify(v))),[
   {path:['modelRoles','smol'],remove:true},{path:['retry','fallbackChains','smol'],remove:true}]);
@@ -353,8 +353,18 @@ test('resetting a built-in role creates removals and Undo restores its assignmen
 
 test('role pickers enforce native model capabilities, including grounded web chat',()=>{
  const builtinRoles=[{id:'smol',kinds:['chat']},{id:'image',kinds:['image']},{id:'speech',kinds:['tts']},{id:'web',kinds:['search','chat']},{id:'judge',kinds:['judge','tiny','chat']}];
- const context=roleContext({builtinRoles});runInNewContext(appFunction('acceptsRoleModel'),context);
+ const profiles={standard:{modelRoles:{storyboarder:'p/eye',plan:'mana-pool/free-fast'},retry:{fallbackChains:{storyboarder:['mana-pool/free-good']}}}};
+ const context=roleContext({builtinRoles,source:{agents:[],ui:{visionRoles:['storyboarder']}},original:profiles,profiles,poolToken:name=>'mana-pool/'+name});
+ runInNewContext(['acceptsRoleModel','readsImages','visionRole','poolVisionLane'].map(appFunction).join('\n'),context);
  assert.equal(context.acceptsRoleModel('smol','role',{}),true);
+ // QA1 B7: one vision rule for direct CUTS, replacements and a pool that stands on a vision lane.
+ assert.equal(context.acceptsRoleModel('storyboarder','role',{input:['text']}),false);
+ assert.equal(context.acceptsRoleModel('storyboarder','role',{input:['text','image']}),true);
+ assert.equal(context.acceptsRoleModel('role:storyboarder','alternatives',{input:['text']}),false);
+ assert.equal(context.acceptsRoleModel('free-good','pool',{input:['text']}),false,'FREE GOOD stands on the vision lane');
+ assert.equal(context.acceptsRoleModel('free-fast','pool',{input:['text']}),true,'FREE FAST does not');
+ assert.equal(context.poolVisionLane('free-good'),'storyboarder');
+ assert.equal(context.acceptsRoleModel('storyboarder','role',{configuredOnly:true}),true,'an only-referenced route is not judged');
  assert.equal(context.acceptsRoleModel('image','role',{kind:'chat'}),false);
  assert.equal(context.acceptsRoleModel('speech','role',{kind:'tts'}),true);
  assert.equal(context.acceptsRoleModel('speech','role',{kind:'chat'}),false);
@@ -384,7 +394,7 @@ test('resetting a built-in agent emits removal and supports Undo and preset inhe
  const baseline={modelRoles:{smol:'p/fast'},retry:{fallbackChains:{}},task:{agentModelOverrides:{scout:['p/own']}},forgeMode:{overrides:{'vibe:scout':['p/alt']}}};
  const profile=structuredClone(baseline),context=roleContext({source:{agents:[{id:'scout',model:'@smol'}]},state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>profile.forgeMode,copy:structuredClone,render:()=>{},renderCache:null});
- context.focusLane=()=>{};runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
+ context.focusLane=()=>{};runInNewContext(['workers','resetAgent','profilePaths','diff'].map(appFunction).join('\n'),context);
  const {ForgeHistory}=require('./static/tape.js'),history=new ForgeHistory();history.observe('standard',profile,false);
  context.resetAgent('scout');history.observe('standard',profile,true,baseline);
  assert.equal(profile.task.agentModelOverrides.scout,undefined);assert.equal(profile.modelRoles.smol,'p/fast');
@@ -418,11 +428,19 @@ test('pool picker and tap insertion accept more than 30 FREE CUTS and still reje
  const context={state:{profile:'standard'},poolDraft,catalogMap,source:{},
   split:r=>({raw:r,provider:r.split('/')[0],id:r.split('/')[1]}),ManaOperator:{isFreeModel:m=>m.free===true},
   chain:role=>[...poolDraft[role]],poolName:()=>null,modeOff:()=>false,routeWarning:()=>false,
-  notify:s=>notices.push(s),narrowSurface:()=>false,short:s=>s,providerName:s=>s,cutTitle:s=>s,render:()=>{}};
+  notify:s=>notices.push(s),narrowSurface:()=>false,short:s=>s,providerName:s=>s,cutTitle:s=>s,render:()=>{},poolNames:{'free-good':'FREE GOOD','free-fast':'FREE FAST'},poolToken:name=>'mana-pool/'+name,original:{},profiles:{}};
  roleContext(context);
-  runInNewContext(['acceptsRoleModel','thinkingOff','withNotes','setChain','carryEffort','commitCut'].map(appFunction).join('\n'),context);
+  runInNewContext(['acceptsRoleModel','readsImages','visionRole','poolVisionLane','thinkingOff','withNotes','setChain','carryEffort','commitCut'].map(appFunction).join('\n'),context);
  context.commitCut(routes[30],{role:'free-good',group:'pool',index:30,profile:'standard',expected:null});
  assert.equal(poolDraft['free-good'].length,31);assert.equal(poolDraft['free-good'][30],routes[30]);
+ // QA1 B5 / QA2 B8: a drop on an occupied place of an editor list inserts there; nothing leaves the shared pool.
+ const second=poolDraft['free-good'][1];
+ context.commitCut(routes[31],{role:'free-good',group:'pool',index:1,profile:'standard',expected:second});
+ assert.equal(poolDraft['free-good'].length,32);assert.equal(poolDraft['free-good'][1],routes[31]);assert.equal(poolDraft['free-good'][2],second);
+ assert.equal(context.state.editorMsg,'Вставлено · '+routes[31]+' · 02');
+ context.commitCut(routes[31],{role:'free-good',group:'pool',index:1,profile:'standard',expected:routes[31]});
+ assert.equal(poolDraft['free-good'].length,32,'the same CUT on its own place changes nothing');assert.match(context.state.editorMsg,/^Уже на цьому місці/);
+ context.setChain('free-good',routes.slice(0,31),'pool');
  context.setChain('free-good',routes,'pool');assert.equal(poolDraft['free-good'].length,40);
  context.setChain('free-good',[...routes,routes[0]],'pool');assert.equal(poolDraft['free-good'].length,40);
  context.setChain('free-good',[...routes,'demo/paid'],'pool');assert.equal(poolDraft['free-good'].length,40);
@@ -453,7 +471,7 @@ test('removing an orphaned agent override emits a removal',()=>{
  const baseline={modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{gone:['p/old']}}};
  const profile=structuredClone(baseline),context=roleContext({source:{agents:[]},state:{profile:'standard'},p:()=>profile,
   original:{standard:baseline},profiles:{standard:profile},modeSettings:()=>({overrides:{}}),copy:structuredClone,render:()=>{},renderCache:null});
- context.focusLane=()=>{};runInNewContext(['workers','resetAgent','diff'].map(appFunction).join('\n'),context);
+ context.focusLane=()=>{};runInNewContext(['workers','resetAgent','profilePaths','diff'].map(appFunction).join('\n'),context);
  context.resetAgent('gone');
  assert.equal(profile.task.agentModelOverrides.gone,undefined);
  assert.ok(context.diff('standard').some(c=>c.remove&&c.path.join('.')==='task.agentModelOverrides.gone'));
@@ -583,7 +601,7 @@ test('BUG2-B: default fallbacks are marked inherited and an edit that copies the
  assert.equal(context.inheritedSlot('default',1),false);assert.equal(context.inheritedSlot('image',1),false);
  // Replacing only the primary keeps following default.
  context.setChain('plan',['p/b','p/x','p/y']);
- assert.equal(profile.modelRoles.plan,'p/b');assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'plan'));assert.equal(context.state.opFeedback,undefined);
+ assert.equal(profile.modelRoles.plan,'p/b');assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'plan'));assert.ok(!context.state.opFeedback,'no note for a plain primary change');
  // Adding a fallback has to copy the inherited chain: one explicit, reported change.
  context.setChain('plan',['p/b','p/x','p/y','p/new']);
  assert.deepEqual(Array.from(profile.retry.fallbackChains.plan),['p/x','p/y','p/new']);
@@ -650,8 +668,8 @@ test('H1: a blur-time change with an unchanged query keeps the results under the
 test('M7: availability refresh is not a profile change',()=>{
  const base={modelRoles:{},retry:{fallbackChains:{}},task:{agentModelOverrides:{}},forgeMode:{mode:'no-deepseek'}};
  const context={original:{standard:base},profiles:{standard:{...structuredClone(base),forgeRefresh:3}},renderCache:null,knownAgents:()=>[],
-  state:{profile:'standard',modeRefresh:{}},source:{revisions:{standard:'r'}},modeSettings:()=>base.forgeMode,copy:structuredClone};
- runInNewContext(['workers','diff','modeBody','modeKey'].map(appFunction).join('\n'),context);
+  state:{profile:'standard',modeRefresh:{}},source:{revisions:{standard:'r'}},modeSettings:()=>base.forgeMode,copy:structuredClone,staleDrafts:new Map()};
+ runInNewContext(['workers','profilePaths','diff','baseRevision','modeBody','modeKey'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.diff('standard')),[]);
  const before=context.modeKey();context.state.modeRefresh.standard=1;assert.notEqual(context.modeKey(),before,'↻ asks for a new projection');
 });
@@ -865,7 +883,7 @@ test('an unchanged poll is revalidated with the ETag and a 304 does no work',asy
  let request;
  const snapshot={base:{},insights:{usage:{reports:[]}}};
  const context={backgroundReloading:false,writeEpoch:0,stateTag:'W/"tag"',source:snapshot,state:{offline:false},renderedAt:Date.now(),pendingRender:false,
-  endpoint:x=>x,interactionBusy:()=>false,fetch:async(url,options)=>{request=options;return {status:304,ok:false};},
+  endpoint:x=>x,deadline:()=>undefined,interactionBusy:()=>false,fetch:async(url,options)=>{request=options;return {status:304,ok:false};},
   render:()=>assert.fail('a 304 must not render'),scheduleBackgroundWork:()=>assert.fail('a 304 must not queue a render'),json:()=>assert.fail('no body')};
  runInNewContext(appFunction('reload'),context);
  await context.reload(false,false,true);
@@ -894,7 +912,7 @@ const flat=r=>r.children?r.open+r.children.map(flat).join('')+'</'+/^<([a-z0-9-]
 function laneContext(chains,open=[]){
  const context={roleKeys:Object.keys(chains),labels:{},state:{profile:'standard',role:'default'},source:{presets:{}},esc:s=>String(s),openFolds:new Set(open),
   chain:r=>chains[r]||[],modeTag:()=>'',node:(role,r,i)=>`<div class="cut" data-node-role="${role}" data-index="${i}"></div>`,agentKey:()=>'',agentListNote:()=>'',agentInfo:()=>null,agentRemove:()=>''};
- runInNewContext(['led','socketKey','laneKey','graphRow','laneGroups','foldOf','laneGraph','leaf','box'].map(appFunction).join('\n'),context);
+ runInNewContext(['led','plural','socketKey','laneKey','graphRow','laneGroups','foldOf','foldOpen','laneGraph','leaf','box'].map(appFunction).join('\n'),context);
  return context;
 }
 
@@ -921,6 +939,11 @@ test('a run of three or more inherited lanes folds into one printed row; default
  context=laneContext({default:[],smol:[],slow:[],vision:[],composer:['p/a']},['smol']);
  tree=context.laneGraph();
  assert.match(tree.children[2].open,/fold__lanes is-open/,'an opened fold is remembered');assert.match(tree.children[1].html,/aria-expanded="true"/);assert.match(tree.children[1].html,/Сховати/);
+ // QA1 B6: an assignment in the middle of an open run splits it; both halves stay open (no lanes vanish under the hand).
+ const chains={default:[],a:[],b:[],c:[],d:[],e:[],f:[],g:[],composer:['p/a']},openLanes=['a','b','c','d','e','f','g'];
+ context=laneContext(chains,openLanes);chains.d=['p/x'];tree=context.laneGraph();
+ assert.deepEqual(Array.from(tree.children,c=>c.key),['p/row:default','p/fold:a','p/foldlanes:a','p/row:d','p/fold:e','p/foldlanes:e','p/row:composer']);
+ assert.match(tree.children[2].open,/is-open/);assert.match(tree.children[5].open,/is-open/,'the split-off run inherits the open state');
 });
 
 test('the transport lives on the drawer front only, with its scope; the dock has no Undo, Redo or Save',()=>{
@@ -929,8 +952,8 @@ test('the transport lives on the drawer front only, with its scope; the dock has
  const context={SVG,state,GRIP:'<div class="tray__grip"></div>',esc:s=>String(s??''),prettyProfile:s=>s==='standard'?'Standard':s,source:{projects:[{id:'x',name:'X'}],projectId:'x',modeConflicts:[],modeRecovery:null},profileKeys:['standard'],
   editHistory:{available:()=>({undo:true,redo:false})},poolsDirty:()=>false,activePlan:()=>null,collectionCuts:()=>[1,2],opProviderItems:()=>[['all','Усі']],healthNames:{healthy:'Є запас'},
   narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,drawerLastMode:'cuts',poolNames:{'free-good':'FREE GOOD','free-fast':'FREE FAST'},poolDraft:{'free-good':['p/a','p/b'],'free-fast':[]},poolName:()=>undefined,cutTitle:r=>r,providerName:r=>r,split:r=>({provider:r}),drawerResults:()=>'<div class="tray__grid"></div>',
-  node:(role,r,i)=>`<div class="cut" data-node-role="${role}" data-index="${i}" data-group="pool"></div>`};
- runInNewContext(['led','key','leaf','box','selWin','opSwitchKey','opSwitchFace','switchRegion','poolActionContext','transportParts','drawerMode','drawerShown','drawerFilters','editorKind','editorTarget','editorTitle','editorTabs','sourceHead','editorLine','socketKey','poolEditor','trayOpen','drawerHint','armedMarkup','drawerSearch','drawerCount','cutsTray','profileMenu','dockSwitches','operatorFeedback','operatorDock'].map(appFunction).join('\n'),context);
+  node:(role,r,i)=>`<div class="cut" data-node-role="${role}" data-index="${i}" data-group="pool"></div>`,staleDrafts:new Map(),catalog:[],ManaOperator:{isFreeModel:()=>true}};
+ runInNewContext(['led','key','leaf','box','selWin','plural','saveBlocker','opSwitchKey','opSwitchFace','switchRegion','poolActionContext','transportParts','drawerMode','drawerShown','drawerFilters','editorKind','editorTarget','editorTitle','editorTabs','sourceHead','editorLine','socketKey','poolEditor','trayOpen','drawerHint','armedMarkup','drawerSearch','drawerCount','cutsTray','profileMenu','dockSwitches','operatorFeedback','operatorDock'].map(appFunction).join('\n'),context);
  const tray=flat(context.cutsTray()),dock=flat(context.operatorDock());
  assert.match(tray,/class="tray__lip"[\s\S]*class="tray__transport transport"[\s\S]*data-action="undo"[\s\S]*data-action="redo"[\s\S]*class="transport__state"[\s\S]*class="key key--action" data-action="save"/);
  assert.match(tray,/3 зміни/);assert.match(tray,/data-action="redo"[^>]*disabled/);
@@ -973,7 +996,7 @@ test('CUT names keep their distinguishing tail when they are truncated',()=>{
 
 // Stage C1b: names that tell routes apart, editors and forms in the drawer, the collection as the editor's source,
 // Колекція's cached sort, the provider form's own field checks, «Прийняти файл» in the reel menu.
-test('a shortened CUT name gives up the shared namespace first, never the family that tells routes apart',()=>{
+test('QA3 P1-5: a CUT name never prints a stub of the shared namespace; the family and the distinguishing tail stay',()=>{
  const context={esc:s=>String(s)};runInNewContext(['nameParts','nameSpace'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1]+'\nthis.nameMarkup=nameMarkup;',context);
  assert.deepEqual(Array.from(context.nameSpace('DEMO · Aurora')),['DEMO ·','Aurora']);
  assert.deepEqual(Array.from(context.nameSpace('qwen/qwen3-coder')),['qwen/','qwen3-coder']);
@@ -981,11 +1004,12 @@ test('a shortened CUT name gives up the shared namespace first, never the family
  assert.deepEqual(Array.from(context.nameSpace('deepseek-demo')),['','deepseek-demo'],'no separator, no namespace');
  assert.deepEqual(Array.from(context.nameSpace('DEMO · ab')),['','DEMO · ab'],'a too short family keeps the whole head');
  const aurora=context.nameMarkup('DEMO · Aurora 01 Free'),swift=context.nameMarkup('DEMO · Swift 01 Free');
- assert.equal(aurora,'<span class="cut__ns">DEMO ·</span><span class="cut__head">Aurora</span><span class="cut__tail"> 01 Free</span>');
- assert.match(swift,/<span class="cut__head">Swift<\/span><span class="cut__tail"> 01 Free<\/span>/);
+ assert.equal(aurora,'<span class="cut__head">Aurora</span><span class="cut__tail"> 01 Free</span>','one rule at every width: no namespace stub');
+ assert.equal(swift,'<span class="cut__head">Swift</span><span class="cut__tail"> 01 Free</span>');
+ assert.equal(context.nameMarkup('Anthropic: Claude Sonnet'),'<span class="cut__head">Claude Sonnet</span>');
+ assert.equal(context.nameMarkup('DEMO · ab'),'<span class="cut__head">DEMO · ab</span>','a too short family keeps the whole name');
+ assert.doesNotMatch(source,/class="cut__ns"/,'no surface prints the namespace separately');
  const css=readFileSync(require.resolve('./static/device.css'),'utf8');
- const ns=css.match(/\.cut__ns\{[^}]*flex:0 (\d+) auto/),head=css.match(/\.cut__head\{[^}]*flex:0 (\d+) auto/);
- assert.ok(ns&&head&&Number(ns[1])>=1e5*Number(head[1]),'the namespace shrinks first; the family keeps less than one layout unit of the shrink');
  assert.match(css,/\.cut__tail\{flex:none/,'the distinguishing tail never shrinks');
 });
 
@@ -1012,8 +1036,8 @@ test('a form opens in the drawer: a dialog with the body inert, the transport ke
  const SVG={undo:'',redo:'',close:'×',more:'',search:''};
  const state={view:'profiles',profile:'standard',changes:0,saving:false,modal:'delete-profile',cuts:false,health:true,cutProvider:'all',cutHealth:'all',freeCuts:false,cutQuery:''};
  const context={SVG,state,GRIP:'',esc:s=>String(s??''),prettyProfile:s=>s,source:{modeConflicts:[],restorable:[]},editHistory:{available:()=>({undo:false,redo:false})},poolsDirty:()=>false,activePlan:()=>null,diff:()=>[],
-  narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,drawerLastMode:'cuts',poolNames:{},poolName:()=>undefined};
- runInNewContext(['led','key','leaf','box','poolActionContext','transportParts','drawerMode','drawerShown','trayOpen','formFoot','formSpec','formTitle','formMarkup','cutsTray'].map(appFunction).join('\n'),context);
+  narrowSurface:()=>false,drawerOpenShown:false,drawerClosing:0,drawerLastMode:'cuts',poolNames:{},poolName:()=>undefined,staleDrafts:new Map()};
+ runInNewContext(['led','key','leaf','box','plural','saveBlocker','poolActionContext','transportParts','drawerMode','drawerShown','trayOpen','formFoot','formSpec','formTitle','formMarkup','cutsTray'].map(appFunction).join('\n'),context);
  const tray=flat(context.cutsTray());
  assert.match(tray,/<section class="tray is-open tray--editor tray--form" id="cuts-collection" role="dialog" aria-modal="true" aria-labelledby="tray-form-title">/);
  assert.match(tray,/id="tray-form-title"[\s\S]*Видалити котушку/);
@@ -1063,4 +1087,208 @@ test('the reel menu offers «Прийняти файл» only for a profile chan
  assert.match(context.profileMenu(),/aria-haspopup="menu"/);
  context.source.modeConflicts=[];assert.doesNotMatch(context.profileMenu(),/adopt-profile/);
  context.source.modeOrphans=['long-tape'];assert.match(context.profileMenu(),/Прийняти видалення/);
+});
+
+// Stage F1: functional fixes after QA1–QA4 (2026-10-12).
+test('QA1 B2: a draft on an older file is rebased field by field; only a field changed on both sides is a conflict',()=>{
+ const context={knownAgents:()=>[],copy:structuredClone,editHistory:{rebase(name,fn){this.called=fn;}},staleDrafts:new Map()};
+ runInNewContext(['workers','profilePaths','rebaseValue','rebaseDraft'].map(appFunction).join('\n'),context);
+ const profile=(roles,extra={})=>({modelRoles:roles,retry:{fallbackChains:{}},task:{agentModelOverrides:{}},forgeMode:{mode:'deepseek'},...extra});
+ const old=profile({composer:'p/a',proofreader:'p/b:high'}),next=profile({composer:'p/a',proofreader:'p/b:low'}),mine=profile({composer:'p/c',proofreader:'p/b:high'});
+ // Another window saved proofreader; this draft changed composer: no conflict, both changes survive.
+ let r=context.rebaseValue(old,next,mine);
+ assert.equal(r.conflicts.length,0);assert.equal(r.value.modelRoles.composer,'p/c');assert.equal(r.value.modelRoles.proofreader,'p/b:low');
+ // Both changed proofreader differently: a conflict, and `auto` leaves the decision to the owner.
+ const both=profile({composer:'p/c',proofreader:'p/b:medium'});
+ r=context.rebaseValue(old,next,both);assert.deepEqual(JSON.parse(JSON.stringify(r.conflicts)),[['modelRoles','proofreader']]);
+ assert.equal(context.rebaseValue(old,next,both,'mine').value.modelRoles.proofreader,'p/b:medium');
+ assert.equal(context.rebaseValue(old,next,both,'theirs').value.modelRoles.proofreader,'p/b:low');
+ assert.equal(context.rebaseValue(old,next,both,'theirs').value.modelRoles.composer,'p/c','«theirs» decides only the conflicting field');
+ // The same value on both sides is not a conflict (e.g. a save that timed out but landed).
+ assert.equal(context.rebaseValue(old,next,profile({composer:'p/a',proofreader:'p/b:low'})).conflicts.length,0);
+ // A removed own chain stays removed.
+ const withChain=profile({composer:'p/a'},{retry:{fallbackChains:{composer:['p/x']}}}),dropped=profile({composer:'p/a'});
+ assert.ok(!('composer' in context.rebaseValue(withChain,withChain,dropped).value.retry.fallbackChains));
+ // rebaseDraft: auto refuses on a conflict and changes nothing; mine/theirs move the draft and its history.
+ Object.assign(context,{original:{long:old},profiles:{long:both}});
+ assert.equal(context.rebaseDraft('long',next,'auto').length,1);assert.equal(context.profiles.long,both);
+ assert.deepEqual(Array.from(context.rebaseDraft('long',next,'mine')),[]);
+ assert.equal(context.profiles.long.modelRoles.proofreader,'p/b:medium');assert.equal(context.original.long.modelRoles.proofreader,'p/b:low');
+ assert.equal(typeof context.editHistory.called,'function','the undo history moves with the draft');
+});
+
+test('QA1 B2: reload adopts the new revision for a rebased draft and keeps the old one only for a real conflict',async()=>{
+ const base=(effort,composer='p/a')=>({modelRoles:{composer,proofreader:'p/b:'+effort},retry:{fallbackChains:{}},task:{agentModelOverrides:{}}});
+ const fresh={base:base('low'),presets:{long:{}},revisions:{standard:'s2',long:'l2'},profileModes:{},freePools:{'free-good':[],'free-fast':[]},poolsRevision:'p'};
+ const original={standard:{...base('high'),forgeMode:{mode:'deepseek',alternatives:[],overrides:{}}},long:{...base('high'),forgeMode:{mode:'deepseek',alternatives:[],overrides:{}}}};
+ const profiles=structuredClone(original);profiles.long.modelRoles.composer='p/mine';
+ const context={backgroundReloading:false,writeEpoch:0,stateTag:'',state:{offline:false,profile:'standard'},renderedAt:0,endpoint:x=>x,deadline:()=>undefined,
+  source:{revisions:{standard:'s1',long:'l1'},base:{}},original,profiles,staleDrafts:new Map(),copy:structuredClone,knownAgents:()=>[],renderCache:null,
+  editHistory:{rebase(){}},profileKeys:[],roleKeys:[],knownRoleKeys:()=>[],poolsDirty:()=>false,rebuild:()=>{},render:()=>{},normalizeProfile:x=>x,
+  merge:(a,b)=>({...structuredClone(a),...structuredClone(b)}),interactionBusy:()=>false,fetch:async()=>({status:200,ok:true,json:async()=>structuredClone(fresh),headers:{get:()=>''}})};
+ runInNewContext(['workers','profilePaths','diff','rebaseValue','baseRevision','rebaseDraft','snapshotFingerprint','reload'].map(appFunction).join('\n'),context);
+ await context.reload();
+ assert.equal(context.profiles.long.modelRoles.composer,'p/mine','the draft keeps its own change');
+ assert.equal(context.profiles.long.modelRoles.proofreader,'p/b:low','and follows the saved Standard');
+ assert.equal(context.staleDrafts.size,0);assert.equal(context.baseRevision('long'),'l2','it saves against the current revision');
+ // Both sides changed composer: the draft stays on its revision until the owner chooses.
+ fresh.base=base('low','p/theirs');fresh.revisions={standard:'s3',long:'l3'};
+ await context.reload();
+ assert.equal(context.staleDrafts.get('long').revision,'l2');assert.equal(context.baseRevision('long'),'l2');
+ assert.deepEqual(JSON.parse(JSON.stringify(context.staleDrafts.get('long').conflicts)),[['modelRoles','composer']]);
+ assert.equal(context.profiles.long.modelRoles.composer,'p/mine');
+});
+
+test('QA1 B2 / QA2 B6: a stale draft gets «Конфлікт…» instead of a dead Save; only relevant outside edits block Save',()=>{
+ const state={view:'profiles',profile:'long',changes:1,saving:false,poolPanel:false,modePanel:false};
+ const context={state,SVG:{undo:'',redo:''},esc:s=>String(s??''),prettyProfile:s=>s,editHistory:{available:()=>({undo:true,redo:false})},poolsDirty:()=>false,activePlan:()=>null,
+  source:{modeConflicts:['other'],modeRecovery:null},staleDrafts:new Map()};
+ runInNewContext(['led','plural','saveBlocker','poolActionContext','transportParts'].map(appFunction).join('\n'),context);
+ assert.doesNotMatch(context.transportParts().save,/disabled/,'a conflict on an unrelated preset does not block');
+ context.source.modeConflicts=['long'];assert.match(context.transportParts().save,/disabled/);assert.match(context.saveBlocker(),/long/);
+ context.source.modeConflicts=['standard'];assert.match(context.saveBlocker(),/standard/);
+ context.source.modeConflicts=[];context.activePlan=()=>({error:'Сервер не відповів'});
+ assert.doesNotMatch(context.transportParts().save,/disabled/,'a failed preview does not block: Save previews again');
+ context.staleDrafts.set('long',{revision:'old',conflicts:[['modelRoles','composer']]});
+ const parts=context.transportParts();
+ assert.match(parts.save,/data-action="conflict-open"[^>]*>.*Конфлікт…/);assert.doesNotMatch(parts.save,/disabled/);assert.match(parts.state,/вирішити конфлікт/);
+});
+
+test('QA1 B3: «Закріпити» puts the replacement on the DeepSeek place, never over another primary, never twice',()=>{
+ const profile={modelRoles:{curator:'p/editor:low'},retry:{fallbackChains:{curator:['mana-pool/free-good','p/deepseek:high']}},task:{agentModelOverrides:{}},forgeMode:{mode:'no-deepseek',alternatives:['p/atlas:high'],overrides:{}}};
+ const view={routes:['p/editor:low','mana-pool/free-good','p/atlas:high'],substituted:false,paused:[{index:2,route:'p/deepseek:high',primary:false}],
+  refs:[{kind:'base',index:0,route:'p/editor:low'},{kind:'base',index:1,route:'mana-pool/free-good',pool:'mana-pool/free-good'},{kind:'replacement',route:'p/atlas:high',key:'role:curator'}]};
+ const context=chainContext({p:()=>profile,state:{syncVibe:false},modeView:()=>view,modeSettings:()=>profile.forgeMode,chain:()=>[...view.routes],split:r=>({raw:r.replace(/:(low|high)$/,'')}),poolName:r=>r.startsWith('mana-pool/')?r.slice(10):undefined},['pinReplacement']);
+ assert.match(context.pinReplacement({role:'curator',group:'role',index:2}),/резерв 2/);
+ assert.deepEqual([profile.modelRoles.curator,...profile.retry.fallbackChains.curator],['p/editor:low','mana-pool/free-good','p/atlas:high'],'the primary stays');
+ // The same CUT already standing in the lane is not duplicated.
+ profile.modelRoles.composer='p/deepseek:high';profile.retry.fallbackChains.composer=['p/atlas:high','mana-pool/free-good'];
+ const composer={routes:['p/atlas:high','mana-pool/free-good'],substituted:true,paused:[{index:0,route:'p/deepseek:high',primary:true}],refs:[{kind:'replacement',route:'p/atlas:high',key:'role:composer'},{kind:'base',index:2,route:'mana-pool/free-good'}]};
+ context.modeView=()=>composer;context.chain=()=>[...composer.routes];
+ assert.match(context.pinReplacement({role:'composer',group:'role',index:0}),/основна/);
+ assert.deepEqual([profile.modelRoles.composer,...profile.retry.fallbackChains.composer],['p/atlas:high','mana-pool/free-good']);
+});
+
+test('QA1 B4: in OFF an agent’s substituted @role head edits the role’s replacement list, keeps the link and says so',()=>{
+ const profile={modelRoles:{composer:'p/deepseek'},retry:{fallbackChains:{}},task:{agentModelOverrides:{team:['@composer','p/fast']}},forgeMode:{mode:'no-deepseek',alternatives:['p/atlas:high','p/r2'],overrides:{}}};
+ const view={routes:['p/atlas:high','p/r2','p/fast'],alias:'@composer',substituted:true,paused:[{index:0,route:'p/deepseek',primary:true}],
+  refs:[{kind:'base',index:0,route:'p/deepseek',key:'vibe:team'},{kind:'replacement',route:'p/r2',key:'role:composer'},{kind:'base',index:1,route:'p/fast',key:'vibe:team'}]};
+ const context=chainContext({p:()=>profile,modeView:()=>view,modeSettings:()=>profile.forgeMode});
+ assert.equal(context.setChain('team',['p/atlas:low','p/r2','p/fast'],'vibe'),true);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.team),['@composer','p/fast'],'the agent still follows composer');
+ assert.deepEqual(Array.from(profile.forgeMode.overrides['role:composer']),['p/atlas:low','p/r2']);
+ assert.match(context.state.opFeedback,/Заміни ролі composer змінено/);
+ // Moving the head away is refused with what really applies, not the replacement-block text.
+ assert.equal(context.setChain('team',['p/r2','p/atlas:low','p/fast'],'vibe',{moved:1}),false);
+ assert.match(context.notices.at(-1),/бере основну з @composer/);
+});
+
+test('QA1 B8/B9: editing default syncs the agents of roles that inherit it; every edit replaces the last line',()=>{
+ const profile={modelRoles:{default:'p/d',task:'p/t'},retry:{fallbackChains:{default:['p/swift','p/aurora']}},task:{agentModelOverrides:{task:['@task','p/swift','p/aurora']}}};
+ const context=chainContext({p:()=>profile,roleKeys:['default','task'],state:{syncVibe:true,opFeedback:'Останню дію скасовано.'}});
+ context.setChain('default',['p/d','p/aurora','p/swift']);
+ assert.deepEqual(Array.from(profile.task.agentModelOverrides.task),['@task','p/aurora','p/swift']);
+ assert.match(context.state.opFeedback,/Резерви task також оновлено в агентах: task/);
+ context.setChain('default',['p/e','p/aurora','p/swift']);assert.equal(context.state.opFeedback,'','no stale line after an edit without notes');
+});
+
+test('QA1 B1: edge autoscroll waits for an armed, dwelled pointer; a sideways move near the lip never scrolls',()=>{
+ const context={};runInNewContext(appFunction('edgeVelocity'),context);
+ // Lifted 50px above the lip (floor 854): in the zone, not armed; a sideways reorder never scrolls.
+ let d={y0:805,y:807,floor:854,overTray:false};
+ for(const t of [0,400,900,2000])assert.equal(context.edgeVelocity(d,t),0);
+ // Moving 24px toward the edge arms it; the page starts after the dwell, slowly.
+ d.y=830;assert.equal(context.edgeVelocity(d,3000),null,'dwell');assert.equal(context.edgeVelocity(d,3200),null);
+ const slow=context.edgeVelocity(d,3330),fast=context.edgeVelocity(d,4200);assert.ok(slow>0&&slow<fast,'ramps up');
+ // Lifted mid-page: armed at once; the top edge scrolls up after the dwell.
+ d={y0:400,y:400,floor:854,overTray:false};assert.equal(context.edgeVelocity(d,0),0);d.y=20;
+ assert.equal(context.edgeVelocity(d,10),null);assert.ok(context.edgeVelocity(d,800)<0);
+});
+
+test('QA1 B11 / QA3 P2-7: provider codes never collide and slots go to the providers on the tape first',()=>{
+ const context={codes:{'opencode-free':'FREE'},catalog:[],source:{providers:[{id:'demo-studio',used:['x']},{id:'demo-cloud',used:['x']},{id:'demo-free'},{id:'mystery-lab',connected:true},{id:'zz-local'}]},
+  dataVersion:1,isLocal:id=>id==='zz-local',priceInfo:m=>({kind:m.free?'free':'paid'})};
+ runInNewContext(['providerCode','assignCodes','providerSlot','assignSlots'].map(appFunction).join('\n'),context);
+ const codes=['demo-studio','demo-cloud','demo-free','mystery-lab'].map(id=>context.providerCode(id));
+ assert.deepEqual(codes,['DSTU','DCLO','DFRE','MYST']);assert.equal(new Set(codes).size,codes.length);
+ assert.equal(context.providerCode('opencode-free'),'FREE','an explicit code wins');
+ context.codes['demo-studio']='STU';context.dataVersion=2;
+ assert.equal(context.providerSlot('demo-studio'),'stu','its own token');assert.equal(context.providerSlot('zz-local'),'gpu');
+ const slots=['demo-cloud','demo-free','mystery-lab'].map(id=>context.providerSlot(id));
+ assert.equal(new Set([...slots,'stu']).size,4,'no two providers share a colour while slots are free');
+});
+
+test('QA2 B14: a CUT skipped in several lanes names every lane once',()=>{
+ const context={state:{},activePlan:()=>({data:{skipped:[{key:'role:composer',route:'p/x',reason:'r'},{key:'role:investigator',route:'p/x',reason:'r'},{key:'role:composer',route:'p/x',reason:'r'}]}})};
+ runInNewContext(appFunction('modeSkipped'),context);
+ const rows=context.modeSkipped('profile');assert.equal(rows.length,1);assert.deepEqual(Array.from(rows[0].keys),['role:composer','role:investigator']);
+ assert.equal(context.modeSkipped('role:investigator').length,1);
+});
+
+test('QA2 B21: Ukrainian counts agree',()=>{
+ const context={};runInNewContext(appFunction('plural'),context);
+ const f=n=>n+' '+context.plural(n,'помилка','помилки','помилок');
+ assert.deepEqual([1,2,3,5,11,12,21,22,25,111].map(f),['1 помилка','2 помилки','3 помилки','5 помилок','11 помилок','12 помилок','21 помилка','22 помилки','25 помилок','111 помилок']);
+});
+
+test('QA4 P0-4: every request has a deadline; a hung write unlocks with a clear message',async()=>{
+ let signal;const context={source:{csrf:'x'},endpoint:x=>x,writeEpoch:0,activeWrites:0,backgroundRefreshPending:false,scheduleBackgroundWork:()=>{},
+  deadline:ms=>({ms}),fetch:(url,options)=>{signal=options.signal;return Promise.reject(Object.assign(new Error('aborted'),{name:'TimeoutError'}));}};
+ runInNewContext(appFunction('api')+'\n'+appFunction('problemText'),context);
+ await assert.rejects(context.api('/api/profile',{}),e=>e.code==='timeout'&&/30 с/.test(e.message));
+ assert.equal(signal.ms,30000);assert.equal(context.activeWrites,0,'Save and Undo unlock');assert.equal(context.backgroundRefreshPending,true,'the state is read again');
+ await assert.rejects(context.api('/api/profile-preview',{}),e=>e.code==='timeout');assert.equal(signal.ms,20000);
+ assert.match(source,/fetch\(endpoint\('\/api\/state'\),\{signal:deadline\(15000\)\}\)/,'boot has a deadline');
+ assert.match(source,/signal:deadline\(background\?10000:15000\)/,'polls and reloads have one');
+});
+
+test('QA2 B1: «+ Провайдер» refuses a taken ID before sending and tells the server it only creates',()=>{
+ const context={state:{editProvider:null},source:{providers:[{id:'demo-studio'}]},URL};
+ runInNewContext(['providerProblems','providerField'].map(appFunction).join('\n'),context);
+ const form={elements:{name:{value:'X'},id:{value:'demo-studio'},url:{value:'https://other.test/v1'},auth:{value:'none'},key:{value:''},discovery:{value:''},models:{value:'only-this'}}};
+ assert.match(context.providerProblems(form).id,/уже має провайдер/);assert.equal(context.providerField('Цей ID уже має провайдер. Змінити його можна через «Підключення…».'),'id');
+ context.state.editProvider='demo-studio';assert.equal(context.providerProblems(form).id,undefined,'editing keeps its own ID');
+ assert.match(source,/mode:state\.editProvider\?'edit':'create'/);
+});
+
+test('QA4 P1-8: the service worker answers a navigation with the cached shell when the network gives a 5xx or nothing',async()=>{
+ const sw=readFileSync(require.resolve('./static/sw.js'),'utf8');
+ const run=async({network,cached='SHELL',instant=false})=>{
+  const handlers={},shell=cached&&{status:200,ok:true,body:cached};
+  const context={self:{addEventListener:(type,fn)=>{handlers[type]=fn;},skipWaiting(){},clients:{claim(){}}},location:{origin:'http://x'},URL,Promise,
+   setTimeout:instant?(fn,ms,arg)=>{setImmediate(()=>fn(arg));return 1;}:setTimeout,clearTimeout,
+   caches:{match:async key=>key==='/'?shell:undefined,open:async()=>({put:async()=>{},keys:async()=>[],delete:async()=>{},match:async()=>undefined,add:async()=>{}}),keys:async()=>[],delete:async()=>{}},
+   fetch:()=>network()};
+  runInNewContext(sw,context);
+  let answer;const waits=[];
+  handlers.fetch({request:{method:'GET',url:'http://x/?project=a',mode:'navigate'},respondWith:p=>{answer=p;},waitUntil:p=>waits.push(p)});
+  return answer;
+ };
+ assert.equal((await run({network:async()=>({status:502,ok:false,clone(){return this;}})})).body,'SHELL','the launcher’s raw 502 is not shown');
+ assert.equal((await run({network:()=>Promise.reject(new TypeError('offline'))})).body,'SHELL');
+ assert.equal((await run({network:()=>new Promise(()=>{}),instant:true})).body,'SHELL','a hung link answers with the shell after the wait');
+ const fresh={status:200,ok:true,body:'NEW',clone(){return {...this,text:async()=>'',clone(){return this;}};}};
+ assert.equal((await run({network:async()=>fresh})).body,'NEW','a working network wins');
+ assert.equal((await run({network:async()=>({status:502,ok:false}),cached:null})).status,502,'without a cached shell the response passes');
+ assert.match(sw,/self\.skipWaiting\(\)/);assert.match(sw,/clients\.claim\(\)/);
+});
+
+test('QA3 P2-2: an unreachable catalogue offers the provider form instead of blaming the filters; no drag hint at 0 CUTS',()=>{
+ const state={cutQuery:'',cutProvider:'all',cutHealth:'all',freeCuts:false,cutLimit:60,cutTarget:null};
+ const context={state,esc:s=>String(s??''),source:{models:[{provider:'p',id:'a',available:false}],providers:[{id:'p',connected:false}]},narrowSurface:()=>false,drawerCut:()=>''};
+ runInNewContext(['catalogEmpty','drawerResults','drawerHint'].map(appFunction).join('\n'),context);
+ assert.match(context.drawerResults([]),/Каталог порожній · додай провайдера[\s\S]*data-action="provider-add"/);
+ context.source.providers[0].connected=true;assert.match(context.drawerResults([]),/Немає CUTS за цими фільтрами/);
+ state.cutQuery='zz';assert.match(context.drawerResults([]),/Нічого не знайдено[\s\S]*cuts-clear/);
+ assert.equal(context.drawerHint(0),'<span class="tray__hint"></span>');assert.match(context.drawerHint(3),/перетягни CUT/);
+});
+
+test('QA4 P0-1: thinking on a CUT is one key, not a native select per CUT',()=>{
+ const context={esc:s=>String(s??''),roleInfo:id=>id==='judge'?{thinking:false}:{}};
+ runInNewContext(appFunction('thinkSelect'),context);
+ const key=context.thinkSelect({effort:'high',raw:'p/m'},'composer',1,'role','Thinking: composer, CUT 2');
+ assert.match(key,/^<button type="button" class="cut__think" data-effort-role="composer" data-index="1" data-group="role" aria-haspopup="menu" aria-expanded="false"[^>]*>high<\/button>$/);
+ assert.match(context.thinkSelect({effort:'',raw:'p/m'},'composer',0,'role','x'),/>типово</);
+ assert.equal(context.thinkSelect({effort:'',raw:'p/m'},'judge',0,'role','x'),'','a role without thinking has no key');
+ assert.doesNotMatch(source,/<select class="cut__think"/);
 });
