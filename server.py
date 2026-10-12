@@ -315,8 +315,10 @@ def peer_uid(client_port, server_port, table='/proc/net/tcp'):
 
 
 class Forge:
-    def __init__(self, project, agent, state, omp, origin='', owner='', demo=False):
+    def __init__(self, project, agent, state, omp, origin='', owner='', demo=False, omp_dir=None):
         self.project, self.agent, self.state_dir = Path(project), Path(agent), Path(state)
+        # Project scope keeps <project>/.omp; user scope edits the OMP agent directory itself.
+        self.omp_dir = Path(omp_dir) if omp_dir else self.project / '.omp'
         self.omp, self.origin, self.owner = omp, origin.rstrip('/'), owner
         self.demo = demo
         self.ui = {}
@@ -376,8 +378,8 @@ class Forge:
     def path(self, profile):
         if not isinstance(profile, str) or not ID.fullmatch(profile):
             raise Problem('Некоректна назва профілю')
-        p = self.project / '.omp' / ('config.yml' if profile == 'standard' else f'presets/{profile}.yml')
-        if p.is_symlink() or not p.resolve().is_relative_to((self.project / '.omp').resolve()):
+        p = self.omp_dir / ('config.yml' if profile == 'standard' else f'presets/{profile}.yml')
+        if p.is_symlink() or not p.resolve().is_relative_to(self.omp_dir.resolve()):
             raise Problem('Посилання замість конфігурації не підтримується')
         return p
 
@@ -426,7 +428,7 @@ class Forge:
         """Standard plus every readable preset. A broken or linked preset is reported, never fatal."""
         base = self.read(self.path('standard'), shared)
         profiles, warnings = {'standard': base}, []
-        for p in sorted((self.project / '.omp/presets').glob('*.yml')):
+        for p in sorted((self.omp_dir / 'presets').glob('*.yml')):
             if ID.fullmatch(p.stem):
                 try:
                     profiles[p.stem] = self.read(self.path(p.stem), shared)
@@ -1791,15 +1793,20 @@ def load_installation(config_path):
         pid = entry.get('id', '')
         if not ID.fullmatch(pid) or pid in apps:
             raise ValueError('Кожен проєкт потребує унікального id: a-z, 0-9, _ або -')
-        project = location(entry['path'])
+        scope = entry.get('scope', 'project')
+        if scope not in ('project', 'user'):
+            raise ValueError(f'Невідомий scope для проєкту {pid}: project або user')
+        agent = location(entry.get('agent', default_agent))
+        # scope: user edits the OMP user config (<agent>/config.yml, presets beside it) when no project exists.
+        project = agent if scope == 'user' else location(entry['path'])
+        omp_dir = agent if scope == 'user' else project / '.omp'
         state = location(entry['state']) if entry.get('state') else state_root / pid
         if project in paths or state in states:
             raise ValueError('Проєкти та каталоги стану не можуть дублюватися')
-        if not (project / '.omp/config.yml').is_file():
-            raise ValueError(f'Немає .omp/config.yml для проєкту {pid}')
+        if not (omp_dir / 'config.yml').is_file():
+            raise ValueError(f'Немає {"config.yml в каталозі агента" if scope == "user" else ".omp/config.yml"} для проєкту {pid}')
         paths.add(project); states.add(state)
-        agent = location(entry.get('agent', default_agent))
-        app = Forge(project, agent, state, omp, cfg.get('origin', ''), cfg.get('owner', ''), cfg.get('demo', False))
+        app = Forge(project, agent, state, omp, cfg.get('origin', ''), cfg.get('owner', ''), cfg.get('demo', False), omp_dir=omp_dir)
         app.project_id = pid
         app.ui = entry.get('ui', {})
         app.legacy_drafts = bool(entry.get('legacyDrafts', False))

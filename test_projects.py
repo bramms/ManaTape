@@ -121,6 +121,27 @@ class Projects(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_installation(self.config)
 
+    def test_user_scope_edits_the_agent_config(self):
+        agent = self.root / 'agent'
+        (agent / 'presets').mkdir(parents=True, exist_ok=True)
+        (agent / 'config.yml').write_text('# user config\n' + yaml_dump({'modelRoles': {'default': 'custom/model-a'}, 'theme': {'dark': 'titanium'}}))
+        (agent / 'presets/night.yml').write_text(yaml_dump({'modelRoles': {'default': 'custom/model-b'}}))
+        self.cfg['projects'] = [{'id': 'mac', 'name': 'Mac', 'scope': 'user'}]
+        self.config.write_text(yaml_dump(self.cfg))
+        _, apps = load_installation(self.config)
+        app = apps['mac']
+        self.assertEqual(app.path('standard'), (agent / 'config.yml').resolve())
+        self.assertEqual(app.path('night'), (agent / 'presets/night.yml').resolve())
+        app.save_profile({'profile': 'standard', 'revision': app.revision('standard'), 'changes': [{'path': ['modelRoles', 'default'], 'value': 'custom/model-c'}]})
+        text = (agent / 'config.yml').read_text()
+        self.assertIn('custom/model-c', text)
+        self.assertIn('# user config', text)
+        self.assertIn('titanium', text)
+        self.cfg['projects'][0]['scope'] = 'global'
+        self.config.write_text(yaml_dump(self.cfg))
+        with self.assertRaises(ValueError):
+            load_installation(self.config)
+
     def test_expiry_respects_other_projects_using_shared_registry(self):
         import time
         from server import fingerprint
