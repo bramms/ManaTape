@@ -659,10 +659,12 @@ test('M7: availability refresh is not a profile change',()=>{
 test('M8/M12: select options are escaped and the profile list keeps a stable order',()=>{
  const context={esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),catalogMap:new Map(),
   state:{profile:'long-tape'},profileKeys:['standard','long-tape','without-deepseek'],prettyProfile:s=>s==='standard'?'Standard':s};
- runInNewContext(['options','profileOptions'].map(appFunction).join('\n'),context);
+ runInNewContext(['options','selWin'].map(appFunction).join('\n'),context);
  assert.doesNotMatch(context.options('x"><b>',''),/<b>/);
- assert.deepEqual([...context.profileOptions().matchAll(/value="([^"]+)"/g)].map(m=>m[1]),['standard','long-tape','without-deepseek']);
- assert.match(context.profileOptions(),/value="long-tape" selected/);
+ const profileSelect=()=>context.selWin('profile-choice','Профіль',context.state.profile,context.profileKeys.map(k=>[k,context.prettyProfile(k)]),'sel--prof');
+ assert.deepEqual([...profileSelect().matchAll(/value="([^"]+)"/g)].map(m=>m[1]),['standard','long-tape','without-deepseek']);
+ assert.match(profileSelect(),/value="long-tape" selected/);
+ assert.doesNotMatch(context.selWin('x','X','',[['a"><b>','<b>']]),/<b>/);
 });
 
 test('M10: an armed CUT is placed even after the drawer filters hide it',()=>{
@@ -982,7 +984,7 @@ test('a shortened CUT name gives up the shared namespace first, never the family
  assert.equal(aurora,'<span class="cut__ns">DEMO ·</span><span class="cut__head">Aurora</span><span class="cut__tail"> 01 Free</span>');
  assert.match(swift,/<span class="cut__head">Swift<\/span><span class="cut__tail"> 01 Free<\/span>/);
  const css=readFileSync(require.resolve('./static/device.css'),'utf8');
- const ns=css.match(/\.cut__ns\{flex:0 (\d+) auto/),head=css.match(/\.cut__head\{flex:0 (\d+) auto\}/);
+ const ns=css.match(/\.cut__ns\{[^}]*flex:0 (\d+) auto/),head=css.match(/\.cut__head\{[^}]*flex:0 (\d+) auto/);
  assert.ok(ns&&head&&Number(ns[1])>=1e5*Number(head[1]),'the namespace shrinks first; the family keeps less than one layout unit of the shrink');
  assert.match(css,/\.cut__tail\{flex:none/,'the distinguishing tail never shrinks');
 });

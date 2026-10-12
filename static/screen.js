@@ -3,7 +3,7 @@
    maximum in-gamut chroma) on a chassis encoder; one global BRIGHTNESS knob drives every screen.
    Legibility is computed, never left to the knobs: ink ≥ 7:1, accent / dim / ok / warn / bad ≥ 4.5:1 on the
    brightest point of the glass for every hue × brightness. Status colours (ok / warn / bad) never follow the hue.
-   Replaces display.js. Pure maths is exported for Node tests; the browser part paints [data-screen] elements
+   Pure maths is exported for Node tests; the browser part paints [data-screen] elements
    (never :root), runs the knob / encoder / analog-toggle controllers and persists to localStorage 'mana-display'. */
 const ManaScreen=(()=>{
  'use strict';
@@ -81,7 +81,7 @@ const ManaScreen=(()=>{
 
  /* ---------- persistence + migration ---------- */
  /* v2: {v:2, brightness:0–100, screens:{[id]:{hue:0–359}}}
-    v1 (display.js): {light:{background,colour}, dark:{background,colour}, screens:{[id]: number | 'amber'… | {background,foreground}}} */
+    v1 (the former display.js, kept so stored settings migrate): {light:{background,colour}, dark:{background,colour}, screens:{[id]: number | 'amber'… | {background,foreground}}} */
  const LEGACY_NAMES={green:130,amber:42,blue:218,cyan:183,violet:276,neutral:130};
  const LEGACY_BASE=[194,205,190];                 /* display.js light background at ФОН 55, i.e. what knob 130 showed */
  const LEGACY_DEFAULT={light:55,dark:25};          /* display.js ФОН defaults per theme */

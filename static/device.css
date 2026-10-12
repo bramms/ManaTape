@@ -15,23 +15,26 @@
    - Mono = self-hosted IBM Plex Mono (Cyrillic incl. і ї є ґ). Never ui-monospace.
    - Status colours never follow a screen's hue; colour is never the only carrier of meaning.
 
-   Class index (BEM-like, no prefix; documented in device-components.md)
-   page/body  .desk .device .screw .seam .seam--v .bay .strip .brand .logo .reel .wordmark .silk .print .rd .vh
-   controls   .led .key .key__cap .key--sq .key--action .key--danger .key--menu .key--sm .keybed .ctl
-              .knob .enc .tgl .slide .sel .search .field .fader .transport
-   screen     .screens .screen .screen__win .screen__gasket .glass .glass__content .glass__sweep .screen__chin
-              .g .g-head .g-name .g-age .g-mode .g-reels .g-rule .g-vsep .wins .win .pace .meter .tariff
-              .g-legend .g-empty .g-msg .g-bars .g-insp .g-kv .g-score .g-table .g-chip
-   tape       .deck .ruler .lanes .lane .lane__key .lane__groove .cut .tag .hs .stamp .chip .leader .socket
-              .fold .patch .subhead .legend .ghost
-   trays      .menu .tray-port .tray .tray--editor .tray-spacer .msg .toast .status .empty .list
+   The only stylesheet. Sections in cascade order; a selector is defined once per context (a component's own
+   rules in its section, a rule about a component inside a container with that container); widths live only
+   in BREAKPOINTS, narrower blocks later:
+    1 tokens     fonts, scales, light / dark token sets, elevation recipes
+    2 base       resets (layer device-base), plain focus outline, .silk .print .rd
+    3 chassis    .desk .device .screw .seam .bay .strip .brand .logo .reel .wordmark .plate .status .dock .boot
+    4 controls   .led .key .keybed .ctl .knob .enc .tgl .slide .sel .search .field .form .fader .transport
+                 .msg .empty .chip .list
+    5 screens    .screens .screen .glass .g .g-* .wins .win .meter .tariff .toast
+    6 tape       .deck .ruler .lanes .lane .cut .tag .hs .hb .stamp .stack .ghost .leader .socket .fold .patch
+                 .subhead .legend
+    7 drawer     .tray-port .tray .tray__* .tray--editor .tray-spacer
+    8 menus      .menu .menu--tools .menu--pick .dock__menu .tray--form .tray__form .det .pkv .ev
+    9 surfaces   .coll .coll__* .hist .hist__* .counter
+   10 breakpoints, 11 motion / contrast / forced colours. Names are BEM-like, no prefix (canon: docs/DESIGN.md).
    ===================================================================================== */
 
-/* ---------- 0 · FONTS ---------- */
+/* ---------- 1 · FONTS, TOKENS, ELEVATION — the only colours, sizes and shadows; light and dark are token sets ---------- */
 @font-face{font-family:"IBM Plex Mono";src:url("fonts/IBMPlexMono-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:"IBM Plex Mono";src:url("fonts/IBMPlexMono-Bold.woff2") format("woff2");font-weight:700;font-style:normal;font-display:swap}
-
-/* ---------- 1 · TOKENS ---------- */
 :root{
  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
  --font-mono:"IBM Plex Mono",Menlo,Consolas,"DejaVu Sans Mono","Liberation Mono",monospace; /* Menlo & co. only supply △ ∅ ◆ ● ▨ */
@@ -40,8 +43,6 @@
  --track-silk:.12em;
  /* radius scale */
  --r-xs:3px;--r-sm:5px;--r-md:8px;--r-lg:12px;--r-win:14px;--r-xl:16px;--r-body:28px;
- /* spacing scale */
- --sp-1:2px;--sp-2:4px;--sp-3:6px;--sp-4:8px;--sp-5:10px;--sp-6:12px;--sp-7:14px;--sp-8:16px;--sp-9:18px;--sp-10:22px;
  /* fixed sizes */
  --pad:22px;--hit:44px;--key-w:156px;--cut-w:176px;--cut-h:52px;--win-w:136px;--lip:46px;
  /* motion */
@@ -70,7 +71,7 @@
  --cap-hi:#FDFCF9;--cap-lo:#E6E2DA;
  --seam-dark:rgba(96,82,60,.30);--seam-light:rgba(255,255,255,.95);
  --ink:#1D2024;--ink-2:#454B51;--ink-off:#74797F;--silk:#474D53;--silk-2:#4F555B;
- --focus:#1659D6;--focus-glow:rgba(22,89,214,.30);
+ --focus:#1659D6;--focus-glow:rgba(22,89,214,.30);--focus-line:#225F90;--selection:#E6F0F1;--page:#D8D9D5;
  --tape-hi:#F9F4EA;--tape:#EFE7D6;--tape-lo:#E3D9C4;--tape-ink:#2A251D;--tape-ink-2:#564D3F;--tape-line:rgba(120,96,60,.07);--tape-sheen:rgba(255,255,255,.6);--splice:rgba(255,255,255,.55);
  --leader:rgba(255,255,255,.5);--leader-edge:rgba(120,104,80,.16);
  --rail:rgba(96,82,60,.17);--hb-track:rgba(96,82,60,.17);
@@ -97,7 +98,7 @@
  --cap-hi:#464A4F;--cap-lo:#35383C;
  --seam-dark:rgba(0,0,0,.65);--seam-light:rgba(255,255,255,.07);
  --ink:#EEEFF0;--ink-2:#BCC0C5;--ink-off:#959AA0;--silk:#AEB3B9;--silk-2:#ADB2B8;
- --focus:#6FA8FF;--focus-glow:rgba(111,168,255,.42);
+ --focus:#6FA8FF;--focus-glow:rgba(111,168,255,.42);--focus-line:#92C3ED;--selection:#3C5360;--page:#222529;
  --tape-hi:#433D36;--tape:#39342E;--tape-lo:#2F2B26;--tape-ink:#F1EBE1;--tape-ink-2:#CFC5B5;--tape-line:rgba(255,235,200,.035);--tape-sheen:rgba(255,255,255,.07);--splice:rgba(255,255,255,.16);
  --leader:rgba(255,255,255,.055);--leader-edge:rgba(255,255,255,.08);
  --rail:rgba(255,255,255,.06);--hb-track:rgba(0,0,0,.45);
@@ -109,8 +110,6 @@
  --grain:var(--grain-dark);
  color-scheme:dark;
 }
-
-/* ---------- 2 · ELEVATION RECIPES — the only shadows in the system ---------- */
 :root{
  --el-raised-1:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo),0 1px 1px rgb(var(--sh)/calc(.18*var(--sha))),2px 3px 6px -1px rgb(var(--sh)/calc(.24*var(--sha))),-2px -2px 5px -1px var(--bounce); /* CUT, lane key */
  --el-cast-1:0 1px 1px rgb(var(--sh)/calc(.18*var(--sha))),2px 3px 6px -1px rgb(var(--sh)/calc(.26*var(--sha))),-2px -2px 5px -1px var(--bounce);   /* key cap (on ::before) */
@@ -124,17 +123,22 @@
  --ring:0 0 0 2px var(--focus),0 0 12px 2px var(--focus-glow);                                                                                   /* focus = an LED ring */
 }
 
-/* ---------- 3 · BASE ---------- */
+/* ---------- 2 · BASE — element resets, plain focus outline, print primitives ---------- */
+/* Element resets sit in a cascade layer, so any component rule overrides them. html carries the page behind the
+   table (scrollbar gutter, overscroll); the app's mount point is a formatting root, so the device's top margin
+   stays inside it. */
 @layer device-base{
  *,*::before,*::after{box-sizing:border-box}
- html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+ html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scrollbar-gutter:stable;font-synthesis:none;background:var(--page)}
+ #forge-window{display:flow-root}
+ p{margin:0}
+ button,a,input,select,textarea{-webkit-tap-highlight-color:transparent}
  .desk button,.desk select,.desk input,.desk textarea{font:inherit;color:inherit}
+ ::selection{background:var(--selection);color:var(--ink)}
 }
-/* the "table" the device stands on — put on <body>. No background-attachment:fixed (scroll repaint). */
-.desk{margin:0;min-height:100vh;color:var(--ink);font:var(--fs-ui)/1.35 var(--font-sans);-webkit-font-smoothing:antialiased;
- background:radial-gradient(120% 90% at 16% -12%,var(--table-hi),var(--table) 55%,var(--table-lo)) var(--table-lo)}
-.vh{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
-.mono{font-family:var(--font-mono)}
+/* plain focusables (list rows, the drawer grip, panels) get an outline; device controls draw their own LED ring.
+   Not layered: it must win over a component's outline:none, as it always has. */
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus-line);outline-offset:3px}
 /* silk-screen print on the body */
 .silk{font:650 var(--fs-label)/1.15 var(--font-sans);letter-spacing:var(--track-silk);text-transform:uppercase;color:var(--silk)}
 .silk--2{color:var(--silk-2);font-weight:600}
@@ -147,7 +151,11 @@
 .rd{display:inline-block;min-width:var(--rd,3ch);font-family:var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:0;text-align:right;white-space:nowrap}
 .rd--l{text-align:left}
 
-/* ---------- 4 · CHASSIS: plate + chamfer + side wall + contact shadow; grows with its content ---------- */
+/* ---------- 3 · CHASSIS — the table, the body, the top strip, the dock ---------- */
+/* the "table" the device stands on — put on <body>. No background-attachment:fixed (scroll repaint). */
+.desk{margin:0;min-height:100vh;color:var(--ink);font:var(--fs-ui)/1.35 var(--font-sans);-webkit-font-smoothing:antialiased;
+ background:radial-gradient(120% 90% at 16% -12%,var(--table-hi),var(--table) 55%,var(--table-lo)) var(--table-lo)}
+/* CHASSIS: plate + chamfer + side wall + contact shadow; grows with its content */
 .device{position:relative;z-index:0;isolation:isolate;width:min(1680px,calc(100% - 36px));margin:14px auto 0;padding:14px var(--pad) 18px;display:flex;flex-direction:column}
 .device::before{/* side wall + shadow on the table */content:"";position:absolute;inset:18px 0 -11px;border-radius:var(--r-body);z-index:-2;
  background:linear-gradient(180deg,var(--side-hi),var(--side-lo));
@@ -158,11 +166,13 @@
 .screw{position:absolute;width:11px;height:11px;border-radius:50%;z-index:1;pointer-events:none;
  background:linear-gradient(var(--a,30deg),transparent 44%,rgb(var(--sh)/calc(.5*var(--sha))) 44% 56%,transparent 56%),radial-gradient(circle at 38% 32%,var(--alu-hi),var(--alu-lo) 75%);
  box-shadow:inset 0 0 0 .5px rgb(var(--sh)/calc(.35*var(--sha))),0 0 0 1.5px var(--pocket-lo),0 1px 0 1.5px var(--lip-hi)}
-.screw--tl{left:11px;top:11px;--a:28deg}.screw--tr{right:11px;top:11px;--a:-52deg}.screw--bl{left:11px;bottom:11px;--a:71deg}.screw--br{right:11px;bottom:11px;--a:-12deg}
+.screw--tl{left:11px;top:11px;--a:28deg}
+.screw--tr{right:11px;top:11px;--a:-52deg}
+.screw--bl{left:11px;bottom:11px;--a:71deg}
+.screw--br{right:11px;bottom:11px;--a:-12deg}
 /* engraved parting line, edge to edge of the plate */
 .seam{flex:none;height:2px;margin:10px calc(-1*var(--pad));background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px)}
 .seam--v{width:2px;height:auto;align-self:stretch;margin:2px;background:linear-gradient(90deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px)}
-.seam--inset{margin-inline:0}
 /* milled pocket: chamfer ring (border-box gradient) + floor of the same material */
 .bay{position:relative;border-radius:var(--r-lg);border:2px solid transparent;
  background:var(--grain) padding-box,linear-gradient(180deg,var(--pocket-hi),var(--pocket)) padding-box,linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light)) border-box;
@@ -170,19 +180,42 @@
 /* top strip: brand window with reels, surface keys, display plate, status */
 .strip{display:flex;align-items:center;gap:18px;min-height:58px;position:relative;flex-wrap:wrap}
 .strip__grow{flex:1}
-.brand{display:flex;align-items:center;gap:12px;flex:none}
+/* surface keys keep a fixed width so the latched one never shifts its neighbours */
+.strip>.keybed .key__cap{min-width:118px;justify-content:flex-start}
+/* the brand is a link: no underline; its logo parts are blocks */
+.brand{display:flex;align-items:center;gap:12px;flex:none;text-decoration:none;color:inherit;border-radius:var(--r-md)}
+.brand:focus-visible{outline:none;box-shadow:var(--ring)}
 .logo{position:relative;width:82px;height:44px;border-radius:10px;padding:3px;flex:none;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light))}
 .logo__glass{position:relative;width:100%;height:100%;border-radius:7px;overflow:hidden;background:radial-gradient(120% 120% at 20% 0%,#2b2e33,#0b0c0e 70%);box-shadow:inset 0 2px 5px rgba(0,0,0,.85)}
 .logo__glass::after{content:"";position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,.14),rgba(255,255,255,0) 38%);pointer-events:none}
+.logo,.logo__glass,.reel{display:block}
 .reel{position:absolute;top:4px;width:30px;height:30px;transition:transform var(--t-reel) var(--e-out);will-change:transform}
-.reel--a{left:4px}.reel--b{right:4px}
+.reel--a{left:4px}
+.reel--b{right:4px}
 .reel svg{width:100%;height:100%;display:block}
 .wordmark{display:grid;gap:3px}
 .wordmark b{font:800 var(--fs-brand)/.92 var(--font-sans);letter-spacing:-.04em;color:var(--ink)}
 .wordmark .silk{font-size:var(--fs-hint);letter-spacing:.16em}
 .plate{display:flex;align-items:flex-end;gap:16px;padding:6px 14px 6px 12px}
+/* status cluster: LED + mono name + one printed note; full text in the accessible name */
+.status{display:grid;gap:4px;max-width:200px}
+.status__row{display:flex;align-items:center;gap:8px}
+.status__name{font:700 var(--fs-data)/1 var(--font-mono);letter-spacing:.12em;color:var(--ink)}
+.status__note{font:500 var(--fs-label)/1.25 var(--font-sans);color:var(--ink-2)}
+.status__row--sub{margin-top:2px}
+.status__row--sub .status__note{color:var(--danger)}
+/* DOCK — operator pocket: project / profile selectors, ⋯, HEALTH, CUTS, printed context */
+.dock{display:flex;align-items:center;gap:14px;padding:8px 12px;flex-wrap:wrap}
+.dock__grp{display:flex;align-items:center;gap:8px}
+.dock__ctx{text-align:right;flex:none}
+/* dock: the feedback line takes the free middle; the ⋯ menu drops from its key */
+.dock__msg{flex:1 1 0;min-width:120px;display:flex;align-items:center}
+.dock__msg .msg{flex:1;min-width:0}
+.boot{display:grid;justify-items:start;gap:12px;padding:24px 4px;min-height:160px}
+.boot .screen{width:min(420px,100%)}
 
-/* ---------- 5 · LED — 8px lens set into the body; ON = emission layer + halo (opacity only) ---------- */
+/* ---------- 4 · CONTROLS — LED, key, knob, toggle, slide, selector window, fields, transport, feedback, empty, chips, list rows ---------- */
+/* LED — 8px lens set into the body; ON = emission layer + halo (opacity only) */
 .led{--c:var(--led-green);position:relative;flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;
  background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.55) 0 .8px,transparent 1.6px),radial-gradient(circle,#2c2e31,#0f1012 80%);
  box-shadow:inset 0 1px 1px rgba(0,0,0,.7),0 0 0 1.5px rgb(var(--sh)/calc(.12*var(--sha))),0 1px 0 1.5px var(--lip-hi)}
@@ -190,18 +223,12 @@
 .led::before{inset:0;background:radial-gradient(circle at 36% 32%,#fff 0 .9px,var(--c) 2.6px,color-mix(in srgb,var(--c) 72%,#000) 100%)}
 .led::after{inset:-7px;background:radial-gradient(closest-side,color-mix(in srgb,var(--c) 55%,transparent),transparent)}
 .led.is-on::before,.led.is-on::after{opacity:1}
-.led[data-c=amber]{--c:var(--led-amber)}.led[data-c=red]{--c:var(--led-red)}.led[data-c=blue]{--c:var(--led-blue)}.led[data-c=orange]{--c:var(--led-orange)}
-.led.is-blink::before,.led.is-blink::after{animation:led-blink 1.2s steps(2,jump-none) infinite}
+.led[data-c=amber]{--c:var(--led-amber)}
+.led[data-c=red]{--c:var(--led-red)}
+.led[data-c=blue]{--c:var(--led-blue)}
+.led[data-c=orange]{--c:var(--led-orange)}
 @keyframes led-blink{0%{opacity:1}100%{opacity:.15}}
-/* status cluster: LED + mono name + one printed note; full text in the accessible name */
-.status{display:grid;gap:4px;max-width:200px}
-.status__row{display:flex;align-items:center;gap:8px}
-.status__name{font:700 var(--fs-data)/1 var(--font-mono);letter-spacing:.12em;color:var(--ink)}
-.status__note{font:500 var(--fs-label)/1.25 var(--font-sans);color:var(--ink-2)}
-.ledrow{display:flex;align-items:center;gap:14px}
-.ledrow>span{display:inline-flex;align-items:center;gap:6px}
-
-/* ---------- 6 · KEY — socket + concave cap. Press = cap travel + shadow cross-fade (opacity only) ---------- */
+/* KEY — socket + concave cap. Press = cap travel + shadow cross-fade (opacity only) */
 .key{all:unset;box-sizing:border-box;position:relative;display:inline-flex;flex:none;padding:3px;border-radius:calc(var(--r-md) + 3px);cursor:pointer;-webkit-tap-highlight-color:transparent;
  background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
 .key__cap{position:relative;display:flex;align-items:center;justify-content:center;gap:8px;min-height:32px;min-width:32px;padding:0 12px;border-radius:var(--r-md);
@@ -216,10 +243,13 @@
 .key::before{/* focus: LED-like ring */content:"";position:absolute;inset:-3px;border-radius:calc(var(--r-md) + 6px);pointer-events:none;opacity:0;box-shadow:var(--ring);transition:opacity var(--t-fast)}
 .key:focus-visible{outline:none}
 .key:focus-visible::before{opacity:1}
-@media (hover:hover){.key:hover:not(:disabled,[aria-disabled=true])::after{opacity:1;transform:translateX(14%)}.key:hover:not(:disabled,[aria-disabled=true]) .key__cap{transform:translateY(-.5px)}}
-.key:active .key__cap,.key.is-down .key__cap{transform:translateY(1.5px)}
-.key:active .key__cap::before,.key.is-down .key__cap::before{opacity:0}
-.key:active .key__cap::after,.key.is-down .key__cap::after{opacity:1}
+@media (hover:hover){
+ .key:hover:not(:disabled,[aria-disabled=true])::after{opacity:1;transform:translateX(14%)}
+ .key:hover:not(:disabled,[aria-disabled=true]) .key__cap{transform:translateY(-.5px)}
+}
+.key:active .key__cap{transform:translateY(1.5px)}
+.key:active .key__cap::before{opacity:0}
+.key:active .key__cap::after{opacity:1}
 /* latched: pressed / expanded (a surface is open) / current surface */
 .key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page],[aria-current=true],[aria-selected=true]) .key__cap{transform:translateY(1px)}
 .key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page],[aria-current=true],[aria-selected=true]) .key__cap::before{opacity:.2}
@@ -238,7 +268,8 @@
 .key--sm .key__cap{min-height:24px;min-width:24px;padding:0 8px;font-size:var(--fs-label);gap:6px}
 .key--sm.key--sq .key__cap{width:26px;height:24px;padding:0}
 .key--sm svg{width:14px;height:14px}
-.key--wide{display:flex}.key--wide .key__cap{flex:1;justify-content:space-between}
+.key--wide{display:flex}
+.key--wide .key__cap{flex:1;justify-content:space-between}
 /* action: the orange key (Зберегти) — lit only when it has work */
 .key--action .key__cap{color:#0b0806;background:radial-gradient(120% 140% at 72% 92%,#ff8a52 0%,transparent 70%),linear-gradient(150deg,#e2511f 0%,var(--op-orange) 70%);
  box-shadow:inset 0 1px 0 rgba(255,220,190,.75),inset 0 -1px 0 rgba(120,30,0,.4)}
@@ -250,19 +281,29 @@
 .key--menu{display:flex;width:100%}
 .key--menu .key__cap{flex:1;justify-content:flex-start;min-height:34px;padding:0 12px 0 10px}
 .key--menu .key__hint{margin-left:auto;font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
+/* LED that follows its key's latched state (HEALTH, CUTS, FREE CUTS, Ліміти, drawer title): flipping patches attributes only */
+.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::before,
+.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::after,
+.tray__title[aria-expanded=true] .led[data-latch]::before,.tray__title[aria-expanded=true] .led[data-latch]::after{opacity:1}
+.key.is-spinning svg{animation:key-spin 1s linear infinite}
+@keyframes key-spin{to{transform:rotate(360deg)}}
+.key__lbl{display:inline-flex;align-items:center;gap:8px}
+/* a key that is one of a choice (radio): the same latched cap as a pressed key */
+.key[aria-checked=true] .key__cap{transform:translateY(1px)}
+.key[aria-checked=true] .key__cap::before{opacity:.2}
+.key[aria-checked=true] .key__cap::after{opacity:.8}
+a.key{text-decoration:none}
 /* segmented key group sharing one socket (surfaces, filters, pagination) */
 .keybed{display:inline-flex;gap:6px;padding:4px;border-radius:calc(var(--r-md) + 7px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
 .keybed .key{background:none;box-shadow:none;padding:0}
 .keybed .key::after{inset:0}
 .keybed .key::before{inset:-3px}
-.keybed--col{flex-direction:column;align-items:stretch}
 /* a control with its silk label */
 .ctl{display:grid;justify-items:center;gap:6px;flex:none}
 .ctl>.silk{font-size:var(--fs-label);letter-spacing:.1em;white-space:nowrap}
 .ctl__read{display:grid;gap:3px;justify-items:end}
 .ctl__read output{font:700 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
-
-/* ---------- 7 · KNOB / ENCODER — knurl + pointer rotate; light, face and specular stay put ---------- */
+/* KNOB / ENCODER — knurl + pointer rotate; light, face and specular stay put */
 .knob{all:unset;position:relative;display:block;width:var(--k,36px);height:var(--k,36px);border-radius:50%;cursor:ns-resize;touch-action:none;-webkit-tap-highlight-color:transparent;flex:none}
 .knob::before{/* ≥ 44px hit area */content:"";position:absolute;inset:calc((var(--k,36px) - 46px)/2);border-radius:50%}
 .knob__ticks{position:absolute;inset:-8px;width:calc(100% + 16px);height:calc(100% + 16px);pointer-events:none;overflow:visible}
@@ -287,8 +328,7 @@
 .enc .knob__face{background:repeating-radial-gradient(circle at 50% 50%,rgba(255,255,255,0) 0 1px,rgba(0,0,0,.05) 1px 2px),radial-gradient(circle at 36% 30%,var(--cap2,#a1e4ae),var(--cap1,#00af51) 55%,var(--cap0,#005e28) 100%)}
 .enc .knob__ptr::before{background:#fff;width:2.5px;top:2px;height:40%;box-shadow:0 0 2px rgba(0,0,0,.35)}
 .enc-wrap{display:flex;align-items:center;gap:12px}
-
-/* ---------- 8 · ANALOG TOGGLE — chrome bat-handle lever in a hex nut on a washer (role=switch) ----------
+/* ANALOG TOGGLE — chrome bat-handle lever in a hex nut on a washer (role=switch)
    Front view: the lever leans toward the viewer, so the stalk is foreshortened and the ball tip shows.
    Flip = slow against the spring → over centre (nearest the eye, slightly larger) → snap into the stop,
    small overshoot, settle. Only transform animates; the tip is translated, never mirrored, so its highlight
@@ -329,8 +369,11 @@
 .tgl:active .tgl__tip{transform:translateY(-10.3px) scale(1.02)}
 .tgl[aria-checked=false]:active .tgl__stalk{transform:scaleY(-.86)}
 .tgl[aria-checked=false]:active .tgl__tip{transform:translateY(10.3px) scale(1.02)}
-@media (hover:hover){.tgl:hover .tgl__tip::after{opacity:.9}}
-.tgl:disabled{cursor:default}.tgl:disabled .tgl__lab{color:var(--ink-off)}
+@media (hover:hover){
+ .tgl:hover .tgl__tip::after{opacity:.9}
+}
+.tgl:disabled{cursor:default}
+.tgl:disabled .tgl__lab{color:var(--ink-off)}
 .tgl.is-flip .tgl__stalk,.tgl.is-flip .tgl__tip{transition:none}
 .tgl.is-flip[aria-checked=false] .tgl__tip{animation:tgl-tip-dn 210ms both}
 .tgl.is-flip[aria-checked=false] .tgl__stalk{animation:tgl-stalk-dn 210ms both}
@@ -356,8 +399,7 @@
  56%{transform:scaleY(0);animation-timing-function:cubic-bezier(.15,.7,.3,1)}
  80%{transform:scaleY(1.12);animation-timing-function:ease-in-out}
  91%{transform:scaleY(.97)}100%{transform:scaleY(1)}}
-
-/* ---------- 9 · SLIDE SWITCH — two detents, ridged metal tab (DeepSeek OFF / ON) ---------- */
+/* SLIDE SWITCH — two detents, ridged metal tab (DeepSeek OFF / ON) */
 .slide{all:unset;box-sizing:border-box;position:relative;display:inline-flex;align-items:center;gap:8px;min-height:var(--hit);cursor:pointer;-webkit-tap-highlight-color:transparent}
 .slide__lab{font:700 var(--fs-label)/1 var(--font-mono);letter-spacing:.06em;color:var(--silk-2);transition:color var(--t-med)}
 .slide__slot{position:relative;width:52px;height:24px;border-radius:7px;
@@ -371,9 +413,9 @@
 .slide[aria-checked=false] .slide__lab--off,.slide[aria-checked=true] .slide__lab--on{color:var(--ink)}
 .slide:focus-visible{outline:none}
 .slide:focus-visible .slide__slot::after{opacity:1}
-.slide:disabled{cursor:default}.slide:disabled .slide__lab{color:var(--ink-off)}
-
-/* ---------- 10 · SELECTOR WINDOW — native <select> as a drum behind a milled window ---------- */
+.slide:disabled{cursor:default}
+.slide:disabled .slide__lab{color:var(--ink-off)}
+/* SELECTOR WINDOW — native <select> as a drum behind a milled window */
 .sel{display:flex;align-items:center;gap:10px;min-width:0}
 .sel>.silk{flex:none;line-height:1.25}
 .sel__win{position:relative;flex:1;min-width:0;padding:3px;border-radius:calc(var(--r-md) + 3px);background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
@@ -388,8 +430,9 @@
 .sel--sm select{height:28px;font-size:var(--fs-data);padding-right:36px}
 .sel--sm .sel__chev{top:6px;bottom:6px;width:20px;right:6px}
 .sel option{color:#1D2024;background:#FDFCF9}
-
-/* ---------- 11 · FIELDS — search, form field, fader ---------- */
+.sel--proj{flex:0 1 360px;min-width:200px}
+.sel--prof{flex:0 1 290px;min-width:180px}
+/* FIELDS — search, form field, fader */
 .search{position:relative;display:flex;align-items:center;gap:8px;height:36px;width:300px;max-width:100%;padding:0 12px;border-radius:var(--r-md);
  background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-2)}
 .search::after{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;box-shadow:var(--ring);transition:opacity var(--t-fast);pointer-events:none}
@@ -398,9 +441,6 @@
 .search input{all:unset;flex:1;min-width:0;height:100%;font:400 var(--fs-data)/1 var(--font-mono);color:var(--ink)}
 .search input::placeholder{color:var(--silk-2);opacity:1}
 .search input::-webkit-search-cancel-button{display:none}
-.search__clear{all:unset;display:grid;place-items:center;width:24px;height:24px;margin-right:-6px;border-radius:6px;color:var(--ink-2);cursor:pointer;font:700 14px/1 var(--font-mono)}
-.search__clear:focus-visible{box-shadow:var(--ring)}
-.search__count{flex:none;min-width:5ch;text-align:right;font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);font-variant-numeric:tabular-nums}
 /* labelled form field (editor trays): silk label + recessed window; entered value = ink, placeholder = silk-2 italic-free but lighter */
 .field{display:grid;gap:6px;min-width:0;align-content:start}
 .field__lab{font:650 var(--fs-label)/1.15 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
@@ -412,8 +452,15 @@
 .field input::placeholder,.field textarea::placeholder{color:var(--silk-2);opacity:1}
 .field__note{font:400 var(--fs-label)/1.35 var(--font-mono);color:var(--ink-2)}
 .field.is-bad .field__win{box-shadow:var(--el-recess-2),inset 0 0 0 1.5px var(--danger)}
-.field.is-bad .field__note{color:var(--danger)}
+.field.is-bad .field__note{color:var(--danger);font-weight:700}
+/* form fields: a native <select> in a field window */
+.field__win select{appearance:none;-webkit-appearance:none;display:block;width:100%;min-height:36px;padding:0 36px 0 12px;border:0;border-radius:var(--r-md);background:transparent;font:400 var(--fs-data)/1 var(--font-mono);color:var(--ink);cursor:pointer}
+.field__win:has(select)::before{content:"";position:absolute;right:14px;top:50%;margin-top:-2px;border:4.5px solid transparent;border-top:5.5px solid var(--ink-2);pointer-events:none}
+.field--wide{grid-column:1/-1}
+.field input[readonly]{color:var(--ink-2);cursor:default}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 16px}
+.form--one{grid-template-columns:minmax(0,1fr)}
+.form--one .field{max-width:440px}
 /* fader: native range as a milled slot with a metal cap (history position) */
 .fader{-webkit-appearance:none;appearance:none;display:block;width:100%;height:var(--hit);margin:0;background:transparent;cursor:ew-resize;touch-action:none}
 .fader::-webkit-slider-runnable-track{height:10px;border-radius:5px;background:repeating-linear-gradient(90deg,var(--rail) 0 1px,transparent 1px 10%) center/100% 4px no-repeat,linear-gradient(180deg,var(--pocket-lo),var(--pocket));box-shadow:var(--el-recess-2)}
@@ -425,30 +472,63 @@
 .fader:focus-visible{outline:none}
 .fader:focus-visible::-webkit-slider-thumb{box-shadow:var(--el-cast-1),var(--ring)}
 .fader:focus-visible::-moz-range-thumb{box-shadow:var(--el-cast-1),var(--ring)}
-
-/* ---------- 12 · TRANSPORT — Undo / Redo / save state / Зберегти (dock, and mirrored on the tray lip) ---------- */
+/* TRANSPORT — Undo / Redo / save state / Зберегти (dock, and mirrored on the tray lip) */
 .transport{display:flex;align-items:center;gap:12px}
-.transport__keys{display:flex;gap:8px}
 .transport__state{display:grid;gap:3px;width:150px;flex:none;min-width:0}
 .transport__state b{display:flex;align-items:center;gap:7px;min-width:0;font:700 var(--fs-data)/1 var(--font-mono);color:var(--ink)}
 .transport__state b>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transport__state small{font:500 var(--fs-label)/1.2 var(--font-sans);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* FEEDBACK — printed status line (reserved space), toast on a small glass */
+.msg{display:flex;align-items:center;gap:8px;min-height:20px;min-width:0;font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2);white-space:nowrap}
+.msg>span:last-child{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.msg[data-s=bad]{color:var(--danger)}
+.msg[data-s=warn]{color:var(--warn-ink)}
+.msg[data-s=ok]{color:var(--ok-ink)}
+.msg .key{flex:none;margin-left:auto}
+.msg__code{flex:none;font:700 var(--fs-label)/1 var(--font-mono);padding:2px 5px;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1.25px currentColor}
+/* EMPTY STATES — compact, left-aligned, a glyph and one line; never moves the layout */
+.empty{display:flex;align-items:center;gap:12px;min-height:56px;padding:10px 12px;color:var(--ink-2);font:400 var(--fs-label)/1.35 var(--font-mono)}
+.empty__glyph{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font:700 14px/1 var(--font-mono);color:var(--silk);
+ background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
+.empty b{color:var(--ink)}
+.empty .key{margin-left:auto}
+.tray__grid .empty{grid-column:1/-1}
+/* CHIPS — printed outline chips on body / tape (own list, source of data, scope) */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 6px;border-radius:var(--r-xs);font:700 var(--fs-label)/1.2 var(--font-mono);color:var(--ink-2);box-shadow:inset 0 0 0 1.25px currentColor;white-space:nowrap}
+.chip--ok{color:var(--ok-ink)}
+.chip--warn{color:var(--warn-ink)}
+/* LIST ROWS on the body (catalogue, providers): a bay of printed rows; selection = LED + pressed strip */
+.list{display:grid;gap:4px;padding:4px;border-radius:var(--r-lg);background:var(--grain),linear-gradient(180deg,var(--pocket-hi),var(--pocket));box-shadow:var(--el-bay)}
+.list__row{all:unset;box-sizing:border-box;position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:40px;padding:6px 12px 6px 10px;border-radius:var(--r-md);cursor:pointer;
+ font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2)}
+.list__row::before{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:var(--el-pressed);opacity:0;transition:opacity var(--t-press) linear;pointer-events:none}
+.list__row::after{content:"";position:absolute;inset:-1px;border-radius:calc(var(--r-md) + 1px);box-shadow:var(--ring);opacity:0;transition:opacity var(--t-fast);pointer-events:none}
+.list__row:focus-visible::after{opacity:1}
+.list__row b{font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list__row+.list__row{box-shadow:0 -2px 0 -1px var(--seam-light),0 -1px 0 0 transparent}
+.list__row:is([aria-selected=true],.is-sel){color:var(--ink);background:linear-gradient(180deg,var(--pocket-lo),var(--pocket))}
+.list__row:is([aria-selected=true],.is-sel)::before{opacity:1}
+.list__row:is([aria-selected=true],.is-sel) .led::before,.list__row:is([aria-selected=true],.is-sel) .led::after{opacity:1}
+.list__row .num{text-align:right;font-variant-numeric:tabular-nums;min-width:6ch}
+@media (hover:hover){
+ .list__row:hover{color:var(--ink)}
+}
 
-/* ---------- 13 · SCREEN — window with chamfer → dark gasket (the only reflection) → black glass → raster ----------
+/* ---------- 5 · SCREENS — window → gasket → black glass; on-glass primitives; the toast ---------- */
+/* SCREEN — window with chamfer → dark gasket (the only reflection) → black glass → raster
    Colours come from screen.js as per-element custom properties (--s-bg, --s-hi, --s-ink, --s-acc, --s-dim,
    --s-ok, --s-warn, --s-bad, their "-c" channel twins, --s-glow, --s-spill). The fallbacks below = hue 150 at 60%. */
-.screens{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:flex-start;justify-content:space-between;padding-top:2px}
-.screen{--s-bg:rgb(3 9 4);--s-bg-c:3 9 4;--s-hi:rgb(11 35 17);--s-hi-c:11 35 17;--s-ink:rgb(226 249 230);--s-ink-c:226 249 230;--s-acc:rgb(23 218 104);--s-acc-c:23 218 104;
+/* a row of screens shares one height: chins line up, the shorter glass simply has more black */
+.screens{display:flex;flex-wrap:wrap;gap:12px 18px;justify-content:space-between;padding-top:2px;align-items:stretch}
+.screens__key{display:none}
+.screen{--s-bg:rgb(3 9 4);--s-hi:rgb(11 35 17);--s-ink:rgb(226 249 230);--s-ink-c:226 249 230;--s-acc:rgb(23 218 104);--s-acc-c:23 218 104;
  --s-dim:rgb(151 186 157);--s-dim-c:151 186 157;--s-ok:rgb(90 237 133);--s-ok-c:90 237 133;--s-warn:rgb(255 202 98);--s-warn-c:255 202 98;--s-bad:rgb(255 132 120);--s-bad-c:255 132 120;--s-glow:.46;--s-spill:.9;
  position:relative;isolation:isolate;display:flex;flex-direction:column;gap:4px;min-width:0}
-.screen__win{position:relative;border-radius:var(--r-win);padding:3px;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light))}
+.screen__win{position:relative;border-radius:var(--r-win);padding:3px;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light));flex:1;display:flex;min-width:0}
 .screen__win::before{/* light spill on the plate: static shadow in the screen's hue; only opacity changes */content:"";position:absolute;inset:4px;z-index:-1;border-radius:12px;pointer-events:none;
  box-shadow:0 0 22px 4px rgb(var(--s-acc-c)/.30),0 10px 40px 6px rgb(var(--s-acc-c)/.16);opacity:calc(var(--spill)*var(--s-spill));transition:opacity .5s linear}
-.screen__gasket{border-radius:11px;padding:4px;background:linear-gradient(152deg,#45484c 0%,#1a1b1d 16%,#0b0c0d 55%,#141517 88%,#26282b 100%);
- box-shadow:inset 0 0 0 1px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.14)}
-.glass{position:relative;overflow:hidden;border-radius:7px;color:var(--s-ink);
- background:radial-gradient(140% 110% at 12% -12%,var(--s-hi),var(--s-bg) 58%,#010202);
- box-shadow:inset 0 2px 8px rgba(0,0,0,.9),inset 0 0 0 1px rgba(0,0,0,.75)}
+.screen__gasket{border-radius:11px;padding:4px;background:linear-gradient(152deg,#45484c 0%,#1a1b1d 16%,#0b0c0d 55%,#141517 88%,#26282b 100%);box-shadow:inset 0 0 0 1px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.14);flex:1;display:flex;min-width:0}
+.glass{position:relative;overflow:hidden;border-radius:7px;color:var(--s-ink);background:radial-gradient(140% 110% at 12% -12%,var(--s-hi),var(--s-bg) 58%,#010202);box-shadow:inset 0 2px 8px rgba(0,0,0,.9),inset 0 0 0 1px rgba(0,0,0,.75);flex:1;min-width:0}
 .glass::after{/* raster ≤ 3–4 %: scanlines + pixel grid, never a reflection over text */content:"";position:absolute;inset:0;pointer-events:none;
  background:repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px),repeating-linear-gradient(90deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px)}
 .glass__content{position:relative}
@@ -465,8 +545,14 @@
 .screen.is-booting .glass__content{animation:boot-flicker 720ms linear both;animation-delay:calc(var(--i,0)*120ms)}
 .screen.is-booting .glass__sweep{animation:boot-sweep 640ms var(--e-io) both;animation-delay:calc(var(--i,0)*120ms + 70ms)}
 .screen.is-booting .screen__win::before{animation:boot-spill 1100ms ease-out both;animation-delay:calc(var(--i,0)*120ms)}
-
-/* ---------- 14 · ON-GLASS PRIMITIVES — emissive text: ink (numbers), acc (labels, segments), dim (secondary) ---------- */
+.screen__legend{flex:1;display:grid;gap:2px;justify-items:center;text-align:center;margin:0;color:var(--ink-2)}
+.screen__legend>span{white-space:nowrap}
+.screen--wide{width:100%}
+.screen--wide .wins{flex-wrap:wrap}
+.screen--insp .g{max-height:min(72vh,720px);overflow:auto;scrollbar-width:thin}
+/* the DeepSeek head (name, age, mode) never widens its screen: the limits and the tariff set the width, the age gives way */
+.screen--ds .g-head{width:0;min-width:100%}
+/* ON-GLASS PRIMITIVES — emissive text: ink (numbers), acc (labels, segments), dim (secondary) */
 .g{padding:8px 12px 10px;font:400 var(--fs-label)/1.25 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink)}
 .g b,.g strong{font-weight:700}
 .g-head{display:flex;align-items:baseline;gap:8px;padding-bottom:6px;margin-bottom:7px;white-space:nowrap;
@@ -476,6 +562,9 @@
 .g-age.is-stale{color:var(--s-warn)}
 .g-mode{color:var(--s-acc);text-shadow:0 0 7px rgb(var(--s-acc-c)/var(--s-glow))}
 .g-head .strip__grow,.g-grow{flex:1}
+.g-head__sel{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.g-head .g-name{flex:none;max-width:62%}
+.g-head .g-age{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .g-reels{display:inline-flex;gap:3px;align-self:center}
 .g-reels i{position:relative;width:9px;height:9px;border-radius:50%;border:1.3px solid var(--s-acc);box-shadow:0 0 5px rgb(var(--s-acc-c)/var(--s-glow))}
 .g-reels i::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--s-acc)}
@@ -484,12 +573,13 @@
 .g-split{display:flex;gap:12px;align-items:stretch}
 .g-acc{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow))}
 .g-dim{color:var(--s-dim)}
-.g-ok{color:var(--s-ok)}.g-warn{color:var(--s-warn)}.g-bad{color:var(--s-bad)}
 .g-hint{font-size:var(--fs-hint);color:var(--s-dim)}
 /* window cells: label + big value, meter, reset + pace / forecast */
 .wins{display:flex}
+.wins--sample .win{width:auto;flex:1 1 120px}
 .win{position:relative;width:var(--win-w);padding:0 10px;min-width:0}
-.win:first-child{padding-left:0}.win:last-child{padding-right:0}
+.win:first-child{padding-left:0}
+.win:last-child{padding-right:0}
 .win+.win{background:radial-gradient(circle,var(--s-dim) 0 .7px,transparent 1px) left top/2px 4px repeat-y}
 .win__top{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
 .win__l{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -497,7 +587,9 @@
 .win__row{display:flex;justify-content:space-between;gap:6px;color:var(--s-dim);margin-top:3px;white-space:nowrap}
 .win__row>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pace{display:inline-block;min-width:5ch}
-.pace.is-plus{color:var(--s-ok)}.pace.is-minus{color:var(--s-bad)}.pace.is-even{color:var(--s-dim)}
+.pace.is-plus{color:var(--s-ok)}
+.pace.is-minus{color:var(--s-bad)}
+.pace.is-even{color:var(--s-dim)}
 .win.is-stale .win__v{color:var(--s-dim);text-shadow:none}
 /* segmented meter: 20 segments, uniform-pace marker, 0/25/50/75/100 scale. Lit part "pours" by two counter-translations */
 .meter{--seg-c:var(--s-acc);--seg-c2:rgb(var(--s-acc-c)/.16);position:relative;height:9px;margin:7px 0 0}
@@ -534,7 +626,8 @@
 .tariff__now::before{content:"";position:absolute;left:50%;top:-1px;margin-left:-3.5px;border:3.5px solid transparent;border-top:4px solid var(--s-ink)}
 .tariff__axis{position:relative;height:12px;color:var(--s-dim)}
 .tariff__axis span{position:absolute;transform:translateX(-50%)}
-.tariff__axis span:first-child{transform:none}.tariff__axis span:last-child{transform:translateX(-100%)}
+.tariff__axis span:first-child{transform:none}
+.tariff__axis span:last-child{transform:translateX(-100%)}
 /* mini legend printed on glass, one line per item */
 .g-legend{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--s-dim);font-size:var(--fs-label)}
 .g-legend>span{white-space:nowrap}
@@ -543,7 +636,9 @@
 .g-msg{display:flex;align-items:center;gap:8px;min-height:18px;color:var(--s-dim);white-space:nowrap;overflow:hidden}
 .g-msg>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .g-msg::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 6px currentColor}
-.g-msg[data-s=ok]{color:var(--s-ok)}.g-msg[data-s=warn]{color:var(--s-warn)}.g-msg[data-s=bad]{color:var(--s-bad)}
+.g-msg[data-s=ok]{color:var(--s-ok)}
+.g-msg[data-s=warn]{color:var(--s-warn)}
+.g-msg[data-s=bad]{color:var(--s-bad)}
 .g-msg:empty::before{display:none}
 /* empty state on glass: a glyph and one left-aligned line, compact (never a big empty rectangle) */
 .g-empty{display:flex;align-items:center;gap:10px;min-height:48px;padding:6px 0;color:var(--s-dim)}
@@ -580,34 +675,44 @@
 .g-plot__pt:focus-visible{outline:2px solid var(--s-ink);outline-offset:3px}
 .g-plot__y{position:absolute;left:-26px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:space-between;color:var(--s-dim);font-size:var(--fs-hint)}
 .g-plot__x{display:flex;justify-content:space-between;margin-left:26px;color:var(--s-dim);font-size:var(--fs-hint)}
+.g-plot__tick{position:absolute;top:0;bottom:0;left:calc(var(--x,0)*100%);width:1px;background:rgb(var(--s-dim-c)/.22);pointer-events:none}
+.g-plot__x--abs{position:relative;display:block;height:14px}
+.g-plot__x--abs>span{position:absolute;left:calc(var(--x,0)*100%);transform:translateX(-50%);white-space:nowrap}
 /* analysis / inspector on glass: key–value rows with a dotted leader, score bars, source chips */
 .g-insp{display:grid;gap:8px}
 .g-insp__title{display:flex;align-items:baseline;gap:8px;min-width:0}
 .g-insp__title b{font:700 var(--fs-ui)/1.2 var(--font-mono);color:var(--s-ink);overflow-wrap:anywhere}
+.g-insp__id{overflow-wrap:anywhere}
 .g-kv{display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:6px;min-width:0}
 .g-kv>span:first-child{color:var(--s-acc);white-space:nowrap}
 .g-kv>i{height:2px;align-self:end;margin-bottom:3px;background:radial-gradient(circle,rgb(var(--s-dim-c)/.8) 0 .7px,transparent 1px) left/4px 2px repeat-x}
 .g-kv>b{color:var(--s-ink);text-align:right;min-width:6ch;font-variant-numeric:tabular-nums}
+.g-kv--btn{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:6px;min-width:0;min-height:24px;cursor:pointer;border-radius:3px}
+.g-kv--btn:focus-visible{outline:2px solid var(--s-ink);outline-offset:1px}
+.g-kv--btn[aria-current=true]>span:first-child{text-decoration:underline;text-underline-offset:3px}
 .g-score{position:relative;height:6px;border-radius:1px;background:repeating-linear-gradient(90deg,rgb(var(--s-acc-c)/.16) 0 calc(10% - 1.5px),transparent calc(10% - 1.5px) 10%)}
 .g-score>i{position:absolute;inset:0 auto 0 0;width:calc(var(--v,0)*100%);background:repeating-linear-gradient(90deg,var(--s-acc) 0 calc(var(--seg,10%) - 1.5px),transparent calc(var(--seg,10%) - 1.5px) var(--seg,10%));background-size:calc(100%/max(var(--v,0),.001)) 100%}
-/* table / list on glass: dim header, dotted row rules, selected row lit by a bar on the left */
-.g-table{width:100%;border-collapse:collapse;font:400 var(--fs-label)/1.3 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink)}
-.g-table th{font-weight:400;color:var(--s-dim);text-align:left;padding:0 8px 5px 0;white-space:nowrap;background:radial-gradient(circle,var(--s-dim) 0 .7px,transparent 1px) left bottom/4px 2px repeat-x}
-.g-table td{padding:5px 8px 5px 0;vertical-align:baseline;background:radial-gradient(circle,rgb(var(--s-dim-c)/.45) 0 .6px,transparent .9px) left bottom/4px 1px repeat-x}
-.g-table .num{text-align:right}
-.g-table tr.is-sel td,.g-table tr[aria-selected=true] td{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow))}
-.g-table tr.is-sel td:first-child,.g-table tr[aria-selected=true] td:first-child{box-shadow:inset 2px 0 0 var(--s-acc);padding-left:6px}
-.g-table tbody tr{cursor:pointer}
-.g-table tbody tr:focus-visible{outline:2px solid var(--s-ink);outline-offset:-2px}
+/* toast: a small glass above the drawer lip; amber for refusals */
+.toast{position:fixed;z-index:55;left:50%;bottom:calc(var(--toast-b,58px));max-width:min(520px,calc(100vw - 24px));pointer-events:none;opacity:0;transform:translate(-50%,10px);transition:opacity var(--t-med),transform var(--t-med) var(--e-out);--toast-b:58px}
+.toast.is-in{opacity:1;transform:translate(-50%,0)}
+.toast .screen__win{box-shadow:var(--el-lift);border-radius:12px}
+.toast .screen__gasket{border-radius:9px;padding:3px}
+.toast .glass{border-radius:6px}
+.toast .g{padding:8px 12px}
 
-/* ---------- 15 · TAPE DECK — lanes in grooves; keys stay still while tape moves ---------- */
+/* ---------- 6 · TAPE — deck, lanes, CUT, leader, socket, fold, patch, drag ghost ---------- */
+/* TAPE DECK — lanes in grooves; keys stay still while tape moves */
 .deck{display:flex;flex-direction:column;min-width:0;padding:10px 12px 0}
 .deck__tools{display:flex;align-items:center;gap:12px;padding:0 2px 10px;flex-wrap:wrap}
 .deck__tools .search{margin-left:auto}
 .deck__body{padding:2px 2px 14px;margin:0 -2px}
+.deck__note{white-space:nowrap}
+.deck__notices{display:grid;gap:4px;padding:0 4px 10px}
+.deck__notices .msg{white-space:normal;min-height:24px}
+.deck__body.is-pending .lanes{opacity:.78;transition:opacity var(--t-med)}
 /* printed ruler: column names over the bed, a tick per column, timecode rail */
 .ruler{display:grid;grid-template-columns:var(--key-w) minmax(0,1fr);gap:10px;padding:0 2px 6px}
-.ruler__cols{display:flex;padding-left:8px;overflow:hidden}
+.ruler__cols{display:flex;padding-left:8px;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
 .ruler__cols span{flex:0 0 calc(var(--cut-w) + 3px);font:650 var(--fs-label)/1 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silk);padding:0 0 5px 6px;white-space:nowrap;
  background:linear-gradient(var(--silk),var(--silk)) left bottom/1.5px 9px no-repeat,repeating-linear-gradient(90deg,var(--rail) 0 1px,transparent 1px 22px) left bottom/100% 4px no-repeat}
 .ruler__cols span:first-child{color:var(--ink)}
@@ -635,24 +740,35 @@
 .subhead{display:flex;align-items:center;gap:12px;margin:14px 0 8px}
 .subhead__rule{flex:1;height:2px;background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px)}
 .subhead .print{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.subhead .key{margin-left:2px}
 /* printed legend strip at the bottom of the deck */
 .legend{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin:0 -12px;padding:8px 16px 9px;
  background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px,transparent 2px) top/100% 2px no-repeat;font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
+.legend .seam--v{height:14px;align-self:center;margin:0 2px}
+.legend .stamp--repl{padding:1px 3px}
 .lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .lg__sw{display:inline-block;width:22px;height:4px;border-radius:2px;background:var(--hb-track);position:relative;overflow:hidden}
 .lg__sw i{position:absolute;inset:0}
-
-/* ---------- 16 · CUT — one tape segment: provider edge, name, meta, HEALTH bar; one look on every surface ---------- */
+.lg__inh{display:inline-block;width:22px;height:12px;border-radius:3px;outline:1.5px dashed var(--ink-2);outline-offset:-3px}
+.lg--off{display:none;color:var(--ink-2)}
+.lg__note{margin-left:auto;white-space:normal}
+/* CUT — one tape segment: provider edge, name, meta, HEALTH bar; one look on every surface */
 .cut{--pc:var(--pc-x);position:relative;flex:0 0 var(--cut-w);width:var(--cut-w);max-width:100%;min-width:0;height:var(--cut-h);margin-right:3px;border-radius:var(--r-sm);padding:7px 10px 0 13px;color:var(--tape-ink);cursor:grab;touch-action:manipulation;user-select:none;-webkit-user-select:none;outline:none;
  background:linear-gradient(180deg,var(--tape-sheen),transparent 38%),repeating-linear-gradient(180deg,var(--tape-line) 0 1px,transparent 1px 3px),linear-gradient(180deg,var(--tape-hi),var(--tape) 55%,var(--tape-lo));
  box-shadow:var(--el-raised-1);transition:opacity var(--t-med),transform var(--t-med) var(--e-out)}
-.cut[data-p=p5],.tag[data-p=p5]{--pc:var(--pc-p5)}.cut[data-p=p6],.tag[data-p=p6]{--pc:var(--pc-p6)}.cut[data-p=p7],.tag[data-p=p7]{--pc:var(--pc-p7)}
-.cut[data-p=ds]{--pc:var(--pc-ds)}.cut[data-p=stu]{--pc:var(--pc-stu)}.cut[data-p=cld]{--pc:var(--pc-cld)}.cut[data-p=gpu]{--pc:var(--pc-gpu)}.cut[data-p=free]{--pc:var(--pc-free)}
+.cut[data-p=p5],.tag[data-p=p5]{--pc:var(--pc-p5)}
+.cut[data-p=p6],.tag[data-p=p6]{--pc:var(--pc-p6)}
+.cut[data-p=p7],.tag[data-p=p7]{--pc:var(--pc-p7)}
+.cut[data-p=ds]{--pc:var(--pc-ds)}
+.cut[data-p=stu]{--pc:var(--pc-stu)}
+.cut[data-p=cld]{--pc:var(--pc-cld)}
+.cut[data-p=gpu]{--pc:var(--pc-gpu)}
+.cut[data-p=free]{--pc:var(--pc-free)}
 .cut__edge{position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:var(--r-sm) 0 0 var(--r-sm);background:linear-gradient(180deg,color-mix(in srgb,var(--pc) 70%,#fff),var(--pc) 40%)}
 .cut__name{display:block;font:700 var(--fs-data)/1.25 var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:2px}
 /* middle truncation: the distinguishing tail (01 Free, v3, :free, namespace) never disappears — full name stays in the accessible name */
 .cut__name--split{display:flex;min-width:0}
-.cut__head{min-width:1.5ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cut__head{min-width:1.5ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto}
 .cut__tail{flex:none;white-space:pre}
 .cut--free .cut__name{padding-right:40px}
 .cut--more .cut__name{padding-right:26px}
@@ -661,15 +777,12 @@
 .cut__meta{display:flex;align-items:center;gap:6px;margin-top:4px;min-width:0;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);white-space:nowrap}
 .cut__think{min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* thinking as a small detented selector on the tape (24px hit, 20px visible: the transparent border is part of the target) */
-select.cut__think{appearance:none;-webkit-appearance:none;height:24px;margin:-2px 0;padding:0 16px 0 5px;border:2px solid transparent;border-radius:6px;background-clip:padding-box;cursor:pointer;
- font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);
- background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(-45deg,transparent 50%,currentColor 50%),linear-gradient(180deg,rgb(var(--sh)/calc(.07*var(--sha))),rgb(var(--sh)/calc(.03*var(--sha))));
- background-size:4px 4px,4px 4px,100% 100%;background-position:calc(100% - 9px) 7px,calc(100% - 5px) 7px,0 0;background-repeat:no-repeat;box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.14*var(--sha)))}
 /* the caret shows under the hand or the focus; the padding stays, so hovering never relayouts the tape */
-select.cut__think{padding-right:13px;background-size:0 0,0 0,100% 100%}
-@media (hover:hover){select.cut__think:hover{background-size:4px 4px,4px 4px,100% 100%}}
-select.cut__think:focus-visible{background-size:4px 4px,4px 4px,100% 100%}
-select.cut__think:focus-visible{outline:2px solid var(--focus);outline-offset:0}
+select.cut__think{appearance:none;-webkit-appearance:none;height:24px;margin:-2px 0;padding:0 16px 0 5px;border:2px solid transparent;border-radius:6px;background-clip:padding-box;cursor:pointer;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(-45deg,transparent 50%,currentColor 50%),linear-gradient(180deg,rgb(var(--sh)/calc(.07*var(--sha))),rgb(var(--sh)/calc(.03*var(--sha))));background-position:calc(100% - 9px) 7px,calc(100% - 5px) 7px,0 0;background-repeat:no-repeat;box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.14*var(--sha)));padding-right:13px;background-size:0 0,0 0,100% 100%}
+@media (hover:hover){
+ select.cut__think:hover{background-size:4px 4px,4px 4px,100% 100%}
+}
+select.cut__think:focus-visible{background-size:4px 4px,4px 4px,100% 100%;outline:2px solid var(--focus);outline-offset:0}
 /* ⋯ : a permanent small key (24px), never hover-only */
 .cut__more{all:unset;position:absolute;top:4px;right:4px;width:24px;height:22px;border-radius:5px;display:grid;place-items:center;cursor:pointer;color:var(--tape-ink-2);font:700 13px/1 var(--font-mono);
  background:linear-gradient(150deg,rgb(var(--sh)/calc(.04*var(--sha))),rgb(255 255 255/.25));box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
@@ -681,19 +794,34 @@ select.cut__think:focus-visible{outline:2px solid var(--focus);outline-offset:0}
 .cut__ord{position:absolute;left:8px;top:-8px;min-width:22px;height:15px;padding:0 4px;border-radius:8px;display:grid;place-items:center;font:700 var(--fs-label)/1 var(--font-mono);color:var(--tape-hi);background:var(--tape-ink-2);font-variant-numeric:tabular-nums}
 /* provider chip — text colour pre-checked (≥ 4.7:1) */
 .tag{flex:none;font:700 var(--fs-label)/1 var(--font-mono);padding:2px 4px;border-radius:var(--r-xs);background:var(--pc,var(--pc-x));color:#fff;letter-spacing:.02em}
-.tag[data-p=ds]{--pc:var(--pc-ds)}.tag[data-p=stu]{--pc:var(--pc-stu);color:#1a1a1a}.tag[data-p=cld]{--pc:var(--pc-cld)}.tag[data-p=gpu]{--pc:var(--pc-gpu)}.tag[data-p=free]{--pc:var(--pc-free)}
+.tag[data-p=ds]{--pc:var(--pc-ds)}
+.tag[data-p=stu]{--pc:var(--pc-stu);color:#1a1a1a}
+.tag[data-p=cld]{--pc:var(--pc-cld)}
+.tag[data-p=gpu]{--pc:var(--pc-gpu)}
+.tag[data-p=free]{--pc:var(--pc-free)}
 .cut[data-p=stu] .tag{color:#1a1a1a}
 /* HEALTH glyph (colour is never alone: ● △ ∅ ? ◆) and bar in a gutter at the bottom */
 .hs{flex:none;width:11px;text-align:center;font:700 var(--fs-label)/1 var(--font-mono);transition:opacity var(--t-med)}
-.hs--ok{color:var(--ok-ink)}.hs--low{color:var(--warn-ink)}.hs--zero{color:var(--danger)}.hs--unk{color:var(--tape-ink-2)}.hs--gpu{color:var(--ok-ink)}
+.hs--ok{color:var(--ok-ink)}
+.hs--low{color:var(--warn-ink)}
+.hs--zero{color:var(--danger)}
+.hs--unk{color:var(--tape-ink-2)}
+.hs--gpu{color:var(--ok-ink)}
+/* HEALTH: unavailable (provider off / expired / DELETED) is neither unknown nor exhausted */
+.hs--off{color:var(--ink-off)}
 .cut__hb{position:absolute;left:13px;right:10px;bottom:5px;height:4px;border-radius:2px;background:var(--hb-track);box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.18*var(--sha)));overflow:hidden;transition:opacity var(--t-med)}
 .cut__hb i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(var(--hp,1));transition:transform var(--t-med) var(--e-out) calc(var(--li,0)*22ms);border-radius:2px}
-.hb--ok i{background:#2e9a57}.hb--low i{background:#e0950f}.hb--gpu i{background:repeating-linear-gradient(90deg,#1c7f4e 0 5px,#36b673 5px 7px)}
+.hb--ok i{background:#2e9a57}
+.hb--low i{background:#e0950f}
+.hb--gpu i{background:repeating-linear-gradient(90deg,#1c7f4e 0 5px,#36b673 5px 7px)}
 .hb--zero i{background:repeating-linear-gradient(90deg,#d23a2a 0 4px,transparent 4px 7px)}
 .hb--unk i{background:radial-gradient(circle,var(--tape-ink-2) 0 1px,transparent 1.3px) left center/6px 4px repeat-x;opacity:.7}
+.hb--off i{background:repeating-linear-gradient(135deg,var(--tape-ink-2) 0 1px,transparent 1px 4px);opacity:.55}
 .health-off .cut__hb{opacity:0}
 .health-off .cut__hb i{transform:scaleX(0);transition-delay:0s}
 .health-off .hs{opacity:0}
+.health-off .lg--h{display:none}
+.health-off .lg--off{display:inline-flex}
 /* stamps: FREE (kept when HEALTH is off; never for an unknown tariff), DELETED (solid red), заміна ⇄, поточний */
 .stamp{display:inline-block;font:700 var(--fs-label)/1 var(--font-mono);letter-spacing:.04em;padding:2px 4px;border-radius:var(--r-xs);color:var(--ok-ink);box-shadow:inset 0 0 0 1.5px currentColor;white-space:nowrap}
 .cut .stamp--free{position:absolute;top:5px;right:6px;transform:rotate(-3deg);opacity:.92}
@@ -701,7 +829,7 @@ select.cut__think:focus-visible{outline:2px solid var(--focus);outline-offset:0}
 .stamp--del{color:#fff;background:var(--del);box-shadow:none}
 .cut .stamp--del{margin-left:auto}
 .stamp--repl{color:var(--warn-ink)}
-.stamp--cur{color:var(--own-ink)}
+.stamp--skip{color:var(--warn-ink)}
 .cut__repl{display:none}
 .cut.is-replaced .cut__repl{display:inline-block}
 .cut--deleted{box-shadow:var(--el-raised-1),inset 0 0 0 1.5px var(--danger),inset 0 0 0 3px rgba(198,45,31,.12)}
@@ -717,7 +845,8 @@ select.cut__think:focus-visible{outline:2px solid var(--focus);outline-offset:0}
  background:linear-gradient(var(--sc),var(--sc)) 0 2px/16px 3px no-repeat,linear-gradient(var(--sc),var(--sc)) 2px 7px/14px 3px no-repeat,linear-gradient(var(--sc),var(--sc)) 0 12px/16px 3px no-repeat}
 .stack--fast{--sc:var(--pc-fast)}
 /* the CUT can be a <button> (collection, picker) or a container whose name is the <button data-edit> */
-button.cut{appearance:none;-webkit-appearance:none;border:0;margin:0;font:inherit;text-align:left;display:block}
+/* a CUT that is a button lays its name and meta from the top, like the lane CUT (a button centres by default) */
+button.cut{appearance:none;-webkit-appearance:none;border:0;margin:0;font:inherit;text-align:left;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start}
 button.cut__name{all:unset;box-sizing:border-box;display:block;max-width:100%;font:700 var(--fs-data)/1.25 var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;color:var(--tape-ink)}
 button.cut__name.cut__name--split{display:flex}
 /* states */
@@ -731,33 +860,45 @@ button.cut__name.cut__name--split{display:flex}
 .is-searching .cut:not(.is-match){opacity:.35}
 .cut.is-match{box-shadow:var(--el-raised-1),0 0 0 2px var(--led-amber),0 0 14px 2px rgba(255,180,40,.45)}
 .cut.is-src{opacity:.32;transform:scale(.98)}
-.cut.is-new{animation:splice-in 360ms var(--e-out) both}
-.cut.is-out{animation:splice-out 220ms var(--e-io) both}
-.cut.is-swap{animation:swap 420ms var(--e-out) both}
-@keyframes splice-in{from{opacity:0;transform:translateX(-14px) scaleX(.7)}to{opacity:1;transform:none}}
-@keyframes splice-out{to{opacity:0;transform:translateY(6px) scaleX(.85)}}
-@keyframes swap{0%{transform:translateY(0)}35%{transform:translateY(-6px);opacity:.2}36%{transform:translateY(6px)}100%{transform:none;opacity:1}}
-.lanes.is-loading .lane__groove>*{animation:lane-in 420ms var(--e-out) both;animation-delay:calc(var(--li,0)*28ms)}
-@keyframes lane-in{from{opacity:0;transform:translateX(-22px)}to{opacity:1;transform:none}}
+/* a fallback inherited from `default`: the same CUT, outlined by a printed dashed frame */
+.cut[data-inherited]{outline:1.5px dashed color-mix(in srgb,var(--tape-ink-2) 55%,transparent);outline-offset:-4px}
+/* CUT name: the shared namespace («DEMO · », «org/») gives way first, then the family; the tail never does */
+/* the namespace shrinks first: its weight keeps the family's share below one layout unit, so the family never
+   shows an ellipsis while the namespace still has room to give */
+.cut__ns{flex:0 100000 auto;min-width:1ch;margin-right:.6ch;overflow:hidden;text-overflow:ellipsis;white-space:pre}
+/* an agent's first CUT that follows @role: the reference is printed in the meta line, the name keeps the model */
+.cut__alias{min-width:0;overflow:hidden;text-overflow:ellipsis;font:700 var(--fs-label)/1 var(--font-mono);color:var(--own-ink)}
+.cut.is-skipped{outline:1.5px dashed var(--warn-ink);outline-offset:-3px}
+.lanes+.subhead{margin-top:16px}
 /* lifted ghost while dragging (fixed, moved by transform; shadow fades in on its own layer) */
 .ghost{position:fixed;left:0;top:0;z-index:60;pointer-events:none;will-change:transform}
-.ghost .cut{margin:0;cursor:grabbing;transform:none!important;animation:none!important}
+.ghost .cut{margin:0;cursor:grabbing;transform:none;animation:none}
 .ghost__sh{position:absolute;inset:0;border-radius:var(--r-sm);box-shadow:var(--el-lift);opacity:0;transition:opacity var(--t-fast)}
 .ghost.is-up .ghost__sh{opacity:1}
-
-/* ---------- 17 · LEADER, SOCKET, FOLD, PATCH ---------- */
+/* LEADER, SOCKET, FOLD, PATCH */
 /* inherited lane: a thin translucent leader tape with print — not a CUT */
 .leader{position:relative;z-index:1;flex:none;display:flex;align-items:center;gap:10px;height:26px;padding:0 14px 0 12px;border-radius:2px;
  background:linear-gradient(180deg,var(--leader),transparent 160%);box-shadow:inset 0 0 0 1px var(--leader-edge);font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);white-space:nowrap}
 .leader b{font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
 .leader small{font:400 var(--fs-label)/1 var(--font-mono);color:var(--silk-2)}
+.leader+.key.patch,.leader+.lane__note{margin-left:8px}
 /* socket: recessed jack for a new CUT; stays pinned to the right edge of a long lane */
 .socket{all:unset;box-sizing:border-box;position:sticky;right:0;z-index:1;flex:none;display:inline-flex;align-items:center;gap:8px;height:42px;min-width:44px;padding:0 14px 0 10px;margin-left:8px;border-radius:var(--r-md);cursor:pointer;
  background:linear-gradient(180deg,var(--pocket-lo),var(--pocket));box-shadow:var(--el-recess-2),-10px 0 12px -4px var(--groove),14px 0 0 2px var(--groove);font:650 var(--fs-label)/1 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
 .lane--inherit .socket{height:34px}
+.lane__label{display:grid;gap:2px;min-width:0}
+.lane__sub{font:400 var(--fs-hint)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane__key[aria-current=true]{box-shadow:var(--el-pressed),inset 0 1px 0 var(--bevel-hi)}
+.lane__key:focus-visible,.socket:focus-visible,.cut__more:focus-visible,button.cut__name:focus-visible,button.cut:focus-visible,.tray__title:focus-visible,.leader:focus-visible{outline:none}
+.lane__tools{display:flex;gap:6px;margin-left:auto;flex:none;padding-left:10px}
+.lane__mode{margin-right:8px}
+.lane__mode .key__cap{font:700 var(--fs-label)/1 var(--font-mono);color:var(--warn-ink)}
+.lane__groove>.key.patch{flex:none}
+.lane__groove>.chip{flex:none}
 .socket__plus{position:relative;flex:none;width:16px;height:16px;border-radius:50%;background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:inset 1px 1px 2px rgb(var(--sh)/calc(.3*var(--sha))),0 1px 0 var(--lip-hi)}
 .socket__plus::before,.socket__plus::after{content:"";position:absolute;left:50%;top:50%;background:var(--silk);border-radius:1px}
-.socket__plus::before{width:8px;height:1.6px;margin:-.8px 0 0 -4px}.socket__plus::after{width:1.6px;height:8px;margin:-4px 0 0 -.8px}
+.socket__plus::before{width:8px;height:1.6px;margin:-.8px 0 0 -4px}
+.socket__plus::after{width:1.6px;height:8px;margin:-4px 0 0 -.8px}
 .socket::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity var(--t-fast);
  box-shadow:inset 0 0 0 1.5px var(--led-green),inset 0 0 14px rgba(47,224,122,.35),0 0 16px rgba(47,224,122,.45)}
 .socket::before{content:"";position:absolute;inset:-3px;border-radius:calc(var(--r-md) + 3px);opacity:0;box-shadow:var(--ring);transition:opacity var(--t-fast);pointer-events:none}
@@ -765,7 +906,9 @@ button.cut__name.cut__name--split{display:flex}
 .is-dragging .socket::after{opacity:.4}
 .is-dragging .socket.is-hot::after{opacity:1}
 .is-dragging .socket.is-hot{color:var(--ink)}
-@media (hover:hover){.socket:hover{color:var(--ink)}}
+@media (hover:hover){
+ .socket:hover{color:var(--ink)}
+}
 .socket:disabled{cursor:default;color:var(--ink-off)}
 /* fold: a run of identical inherited lanes collapsed into one printed row + «Показати N» */
 .fold{display:grid;grid-template-columns:var(--key-w) minmax(0,1fr);gap:10px;align-items:center}
@@ -778,33 +921,12 @@ button.cut__name.cut__name--split{display:flex}
 /* agent binding: patch key with a jack (scrolls to the role's lane and blinks its LED) */
 .patch .key__cap{gap:8px;font:700 var(--fs-data)/1 var(--font-mono)}
 .jack{flex:none;width:12px;height:12px;border-radius:50%;background:radial-gradient(circle,#0c0d0e 0 2.4px,#8b9096 2.8px 4.2px,#2d2f33 4.6px)}
+.poolkey .key__cap{min-height:40px;gap:10px;padding:0 14px 0 12px}
+.poolkey .key__sub{margin-top:2px}
+.is-armed .socket::after{opacity:.4}
 
-/* ---------- 18 · DOCK — operator pocket: project / profile selectors, ⋯, HEALTH, CUTS, printed context ---------- */
-.dock{display:flex;align-items:center;gap:14px;padding:8px 12px;flex-wrap:wrap}
-.dock__grp{display:flex;align-items:center;gap:8px}
-.dock__ctx{margin:0 0 0 auto;text-align:right}
-
-/* ---------- 19 · MENU TRAY — a small plate that slides out of its key, keys in a recessed bed (⋯, CUT tools, quick pick) ---------- */
-.menu{position:absolute;z-index:50;min-width:210px;max-width:min(340px,calc(100vw - 16px));padding:6px;border-radius:var(--r-lg);
- background:var(--grain),linear-gradient(162deg,var(--body-hi),var(--body) 60%,var(--body-lo));
- box-shadow:inset 0 1px 0 var(--edge-catch),0 0 0 1px rgb(var(--sh)/calc(.12*var(--sha)))}
-.menu::before{content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;box-shadow:var(--el-lift);pointer-events:none}
-.menu[hidden]{display:none}
-.menu.is-in{animation:menu-in var(--t-fast) var(--e-out) both}
-@keyframes menu-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-.menu__head{display:flex;align-items:center;gap:8px;min-height:28px;padding:0 4px 4px 6px}
-.menu__head .silk{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.menu__bed{display:grid;gap:4px;padding:4px;border-radius:calc(var(--r-md) + 4px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
-.menu__bed .key{background:none;box-shadow:none;padding:0}
-.menu__bed .key::after{inset:0}
-.menu__bed .key--menu .key__cap{min-height:36px}
-.menu__sep{height:2px;margin:3px 4px;background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px)}
-.menu__note{padding:6px 6px 2px;font:400 var(--fs-label)/1.35 var(--font-mono);color:var(--ink-2)}
-.menu--pick{width:min(420px,calc(100vw - 16px));max-width:none}
-.menu--pick .menu__list{display:grid;gap:8px;max-height:min(360px,50vh);overflow:auto;padding:8px 6px 6px;overscroll-behavior:contain}
-.menu--pick .menu__list .cut{margin:0;width:auto;flex:none}
-
-/* ---------- 20 · TRAY — the drawer pinned to the viewport bottom, exactly as wide as the body ----------
+/* ---------- 7 · DRAWER — the CUTS collection pinned to the window bottom, the transport on its lip, editors as its faces ---------- */
+/* TRAY — the drawer pinned to the viewport bottom, exactly as wide as the body
    The page scrolls above it; .tray-spacer after the body is as tall as the drawer, so every lane can be
    scrolled above it. Height: clamped so ≈ 3 lanes (220px) of page stay visible; the remembered height is not
    overwritten by a temporarily small window. During a drag out of it, .is-retracted slides it down to its lip.
@@ -862,252 +984,8 @@ button.cut__name.cut__name--split{display:flex}
 /* editor / form drawer: same drawer, its own title LED (orange = active surface) and a close key */
 .tray--editor .tray__title .led{--c:var(--led-orange)}
 .tray__tabs{flex:none}
-
-/* ---------- 21 · FEEDBACK — printed status line (reserved space), toast on a small glass ---------- */
-.msg{display:flex;align-items:center;gap:8px;min-height:20px;min-width:0;font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2);white-space:nowrap}
-.msg>span:last-child{overflow:hidden;text-overflow:ellipsis;min-width:0}
-.msg[data-s=bad]{color:var(--danger)}.msg[data-s=warn]{color:var(--warn-ink)}.msg[data-s=ok]{color:var(--ok-ink)}
-.toast{position:fixed;z-index:55;left:50%;bottom:calc(var(--toast-b,58px));max-width:min(520px,calc(100vw - 24px));pointer-events:none;opacity:0;transform:translate(-50%,10px);transition:opacity var(--t-med),transform var(--t-med) var(--e-out)}
-.toast.is-in{opacity:1;transform:translate(-50%,0)}
-.toast .screen__win{box-shadow:var(--el-lift);border-radius:12px}
-.toast .screen__gasket{border-radius:9px;padding:3px}
-.toast .glass{border-radius:6px}
-.toast .g{padding:8px 12px}
-
-/* ---------- 22 · EMPTY STATES — compact, left-aligned, a glyph and one line; never moves the layout ---------- */
-.empty{display:flex;align-items:center;gap:12px;min-height:56px;padding:10px 12px;color:var(--ink-2);font:400 var(--fs-label)/1.35 var(--font-mono)}
-.empty__glyph{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font:700 14px/1 var(--font-mono);color:var(--silk);
- background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
-.empty b{color:var(--ink)}
-.empty .key{margin-left:auto}
-.tray__grid .empty{grid-column:1/-1}
-
-/* ---------- 23 · CHIPS — printed outline chips on body / tape (own list, source of data, scope) ---------- */
-.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 6px;border-radius:var(--r-xs);font:700 var(--fs-label)/1.2 var(--font-mono);color:var(--ink-2);box-shadow:inset 0 0 0 1.25px currentColor;white-space:nowrap}
-.chip--own{color:var(--own-ink)}
-.chip--ok{color:var(--ok-ink)}.chip--warn{color:var(--warn-ink)}.chip--bad{color:var(--danger)}
-.chip--solid{color:var(--ink);background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
-
-/* ---------- 24 · LIST ROWS on the body (catalogue, providers): a bay of printed rows; selection = LED + pressed strip ---------- */
-.list{display:grid;gap:4px;padding:4px;border-radius:var(--r-lg);background:var(--grain),linear-gradient(180deg,var(--pocket-hi),var(--pocket));box-shadow:var(--el-bay)}
-.list__row{all:unset;box-sizing:border-box;position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:40px;padding:6px 12px 6px 10px;border-radius:var(--r-md);cursor:pointer;
- font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2)}
-.list__row::before{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:var(--el-pressed);opacity:0;transition:opacity var(--t-press) linear;pointer-events:none}
-.list__row::after{content:"";position:absolute;inset:-1px;border-radius:calc(var(--r-md) + 1px);box-shadow:var(--ring);opacity:0;transition:opacity var(--t-fast);pointer-events:none}
-.list__row:focus-visible::after{opacity:1}
-.list__row b{font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.list__row+.list__row{box-shadow:0 -2px 0 -1px var(--seam-light),0 -1px 0 0 transparent}
-.list__row:is([aria-selected=true],.is-sel){color:var(--ink);background:linear-gradient(180deg,var(--pocket-lo),var(--pocket))}
-.list__row:is([aria-selected=true],.is-sel)::before{opacity:1}
-.list__row:is([aria-selected=true],.is-sel) .led::before,.list__row:is([aria-selected=true],.is-sel) .led::after{opacity:1}
-.list__row .num{text-align:right;font-variant-numeric:tabular-nums;min-width:6ch}
-@media (hover:hover){.list__row:hover{color:var(--ink)}}
-
-/* ---------- 25 · LAYOUT — the body grows with its lanes; the page scrolls ---------- */
-@media (max-width:1380px){:root{--win-w:122px;--pad:18px}}
-@media (max-width:1300px){:root{--win-w:118px;--cut-w:168px}.plate{gap:12px}.transport__state{width:112px}.transport__state small{display:none}}
-@media (max-width:760px){
- :root{--pad:12px;--key-w:100%;--cut-w:100%;--win-w:auto}
- .desk{background:var(--table)}
- .device{width:calc(100% - 16px);margin:8px auto 0;padding-top:10px}
- .screw{display:none}
- .strip{gap:10px 12px}
- .strip__grow{display:none}
- .brand{order:1;flex:1}
- .strip>.status{order:2;max-width:none}.strip>.status .status__note{display:none}
- .strip>.keybed{order:3;width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
- .strip>.keybed .key{min-width:0}.strip>.keybed .key__cap{width:100%;padding:0 8px;gap:6px}.strip>.keybed .key__num{display:none}
- .plate{order:4;flex:1;justify-content:space-between}
- .dock{gap:10px}
- .dock .sel{width:100%}
- .sel>.silk{width:74px}
- .dock__ctx{display:none}
- .screens{flex-direction:column;align-items:stretch}
- .screen{width:100%}
- .wins{display:grid;grid-template-columns:1fr 1fr;gap:10px 0}
- .win,.win:first-child,.win:last-child{width:auto;padding:0 10px}
- .win:nth-child(odd){padding-left:0;background:none}
- .g-split{flex-direction:column}
- .g-vsep{width:auto;height:2px;background:radial-gradient(circle,var(--s-dim) 0 .7px,transparent 1px) left top/4px 2px repeat-x}
- .tariff{width:auto}
- .screen__chin{flex-wrap:wrap;padding-bottom:4px}
- .deck{padding:8px 8px 0}
- .deck__tools .search{width:100%;margin:0}
- .ruler{display:none}
- .lane{grid-template-columns:minmax(0,1fr);gap:6px}
- .lane__groove{flex-direction:column;align-items:stretch;padding:6px;gap:6px;overflow:visible}
- .lane__groove::before{left:50%;right:auto;top:8px;bottom:8px;width:1px;height:auto;background:repeating-linear-gradient(180deg,var(--rail) 0 5px,transparent 5px 9px)}
- /* phone CUT: 56px base; a long name wraps and grows the CUT only when needed */
- .cut{flex:none;margin:0;height:auto;min-height:56px;padding-bottom:14px}
- .cut__name{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
- .cut+.cut::after{left:calc(50% - 18px);top:-6px;bottom:auto;width:36px;height:8px;transform:none}
- .socket{position:relative;right:auto;margin:0;justify-content:center;box-shadow:var(--el-recess-2)}
- .leader{justify-content:center}
- .fold{grid-template-columns:minmax(0,1fr)}
- .lane__note{display:none}
- .legend{margin:0 -8px;padding-inline:10px}
- /* drawer: full width minus 8px, two-row front (title row + transport row) */
- .tray-port{--lip:92px;left:8px;width:calc(100% - 16px)}
- .tray__lip{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:46px 46px;grid-template-areas:"title chev" "tp tp";gap:0 8px;padding:0 10px}
- .tray__title,.tray__armed{grid-area:title}
- .tray__chev{grid-area:chev;align-self:center}
- .tray__transport{grid-area:tp;margin:0;justify-content:space-between;padding-top:2px;box-shadow:inset 0 2px 0 -1px var(--seam-dark),inset 0 3px 0 -1px var(--seam-light)}
- .tray__transport .transport__state{width:auto;flex:1;min-width:0}
- .tray__transport .transport__state small,.tray__hint,.tray__pull{display:none}
- .tray__armed{max-width:none}
- .tray.is-armed .tray__grip{display:none}
- .tray--editor .tray__lip{grid-template-areas:"title chev" "tabs tp"}
- .tray__tabs{grid-area:tabs;align-self:center}
- .tray--editor .tray__transport{justify-content:flex-end;gap:6px}
- .tray__foot .print{flex:1 1 100%}
- .tray__filters .search{width:100%;margin:0}
- .menu{position:fixed;left:8px!important;right:8px;bottom:8px;top:auto!important;max-width:none;min-width:0}
-}
-/* phone touch targets: keys and lane keys never below 44px tall */
-@media (max-width:760px) and (pointer:coarse){.key__cap{min-height:38px}.key--sq .key__cap{width:40px;height:38px}}
-
-/* ---------- 25b · APP WIRING — states and parts the app needs on top of the components ---------- */
-/* LED that follows its key's latched state (HEALTH, CUTS, FREE CUTS, Ліміти, drawer title): flipping patches attributes only */
-.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::before,
-.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::after,
-.tray__title[aria-expanded=true] .led[data-latch]::before,.tray__title[aria-expanded=true] .led[data-latch]::after{opacity:1}
-.key.is-spinning svg{animation:key-spin 1s linear infinite}
-@keyframes key-spin{to{transform:rotate(360deg)}}
-.status__row--sub{margin-top:2px}
-.status__row--sub .status__note{color:var(--danger)}
-/* dock: the feedback line takes the free middle; the ⋯ menu drops from its key */
-.dock__msg{flex:1 1 0;min-width:120px;display:flex;align-items:center}
-@media (min-width:1181px){.dock{flex-wrap:nowrap}}
-@media (max-width:1180px){.dock__msg{order:9;flex-basis:100%}.dock__ctx{margin-left:auto}}
-.dock__ctx{flex:none}
-.dock__msg .msg{flex:1;min-width:0}
-.msg .key{flex:none;margin-left:auto}
-.dock__menu{position:relative;flex:none}
-.dock__menu>summary{list-style:none}
-.dock__menu>summary::-webkit-details-marker{display:none}
-.dock__menu[open]>summary .key__cap{transform:translateY(1px)}
-.dock__menu[open]>summary .key__cap::before{opacity:.2}.dock__menu[open]>summary .key__cap::after{opacity:.8}
-.dock__menu>.menu{top:calc(100% + 8px);left:0;width:240px}
-.sel--proj{flex:0 1 360px;min-width:200px}.sel--prof{flex:0 1 290px;min-width:180px}
-/* the brand is a link: no underline; its logo parts are blocks */
-.brand{text-decoration:none;color:inherit;border-radius:var(--r-md)}
-.brand:focus-visible{outline:none;box-shadow:var(--ring)}
-.logo,.logo__glass,.reel{display:block}
-/* a row of screens shares one height: chins line up, the shorter glass simply has more black */
-.screens{align-items:stretch}
-.screen__win{flex:1;display:flex;min-width:0}.screen__gasket{flex:1;display:flex;min-width:0}.glass{flex:1;min-width:0}
-.ruler__cols{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
-.boot{display:grid;justify-items:start;gap:12px;padding:24px 4px;min-height:160px}
-.boot .screen{width:min(420px,100%)}
-/* surface keys keep a fixed width so the latched one never shifts its neighbours */
-.strip>.keybed .key__cap{min-width:118px;justify-content:flex-start}
-/* deck */
-.deck__note{white-space:nowrap}
-.poolkey .key__cap{min-height:40px;gap:10px;padding:0 14px 0 12px}
-.poolkey .key__sub{margin-top:2px}
-.deck__notices{display:grid;gap:4px;padding:0 4px 10px}
-.deck__notices .msg{white-space:normal;min-height:24px}
-.deck__body.is-pending .lanes{opacity:.78;transition:opacity var(--t-med)}
-.is-armed .socket::after{opacity:.4}
-.lanes+.subhead{margin-top:16px}
-.subhead .key{margin-left:2px}
-.lane__label{display:grid;gap:2px;min-width:0}
-.lane__sub{font:400 var(--fs-hint)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lane__key[aria-current=true]{box-shadow:var(--el-pressed),inset 0 1px 0 var(--bevel-hi)}
-.lane__key:focus-visible,.socket:focus-visible,.cut__more:focus-visible,button.cut__name:focus-visible,button.cut:focus-visible,.tray__title:focus-visible,.leader:focus-visible{outline:none}
-.lane__tools{display:flex;gap:6px;margin-left:auto;flex:none;padding-left:10px}
-.lane__mode{margin-right:8px}
-.lane__mode .key__cap{font:700 var(--fs-label)/1 var(--font-mono);color:var(--warn-ink)}
-.lane__groove>.key.patch{flex:none}
-.lane__groove>.chip{flex:none}
-.leader+.key.patch,.leader+.lane__note{margin-left:8px}
-/* a fallback inherited from `default`: the same CUT, outlined by a printed dashed frame */
-.cut[data-inherited]{outline:1.5px dashed color-mix(in srgb,var(--tape-ink-2) 55%,transparent);outline-offset:-4px}
-.lg__inh{display:inline-block;width:22px;height:12px;border-radius:3px;outline:1.5px dashed var(--ink-2);outline-offset:-3px}
-/* HEALTH: unavailable (provider off / expired / DELETED) is neither unknown nor exhausted */
-.hs--off{color:var(--ink-off)}
-.hb--off i{background:repeating-linear-gradient(135deg,var(--tape-ink-2) 0 1px,transparent 1px 4px);opacity:.55}
-.health-off .lg--h{display:none}
-.lg--off{display:none;color:var(--ink-2)}
-.health-off .lg--off{display:inline-flex}
-.legend .seam--v{height:14px;align-self:center;margin:0 2px}
-.legend .stamp--repl{padding:1px 3px}
-.lg__note{margin-left:auto;white-space:normal}
-/* screens */
-.screens__key{display:none}
-.key__lbl{display:inline-flex;align-items:center;gap:8px}
-.screen__legend{flex:1;display:grid;gap:2px;justify-items:center;text-align:center;margin:0;color:var(--ink-2)}
-.screen__legend>span{white-space:nowrap}
-.screen--wide{width:100%}
-.screen--wide .wins{flex-wrap:wrap}
-.wins--sample .win{width:auto;flex:1 1 120px}
-.g-head__sel{overflow:hidden;text-overflow:ellipsis;min-width:0}
-.g-head .g-name{flex:none;max-width:62%}
-.g-head .g-age{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.g-plot__tick{position:absolute;top:0;bottom:0;left:calc(var(--x,0)*100%);width:1px;background:rgb(var(--s-dim-c)/.22);pointer-events:none}
-.g-plot__x--abs{position:relative;display:block;height:14px}
-.g-plot__x--abs>span{position:absolute;left:calc(var(--x,0)*100%);transform:translateX(-50%);white-space:nowrap}
-.g-kv--btn{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:6px;min-width:0;min-height:24px;cursor:pointer;border-radius:3px}
-.g-kv--btn:focus-visible{outline:2px solid var(--s-ink);outline-offset:1px}
-.g-kv--btn[aria-current=true]>span:first-child{text-decoration:underline;text-underline-offset:3px}
-.g-insp__id{overflow-wrap:anywhere}
-.screen--insp .g{max-height:min(72vh,720px);overflow:auto;scrollbar-width:thin}
-.history-fader{display:grid;gap:2px;min-width:200px;flex:1}
-/* the DeepSeek head (name, age, mode) never widens its screen: the limits and the tariff set the width, the age gives way */
-.screen--ds .g-head{width:0;min-width:100%}
-@media (max-width:1300px){.screens{column-gap:12px}.tariff{width:164px}.tariff__head .g-hint{display:none}
- .screen--ds .screen__chin{gap:6px}.screen--ds .enc-wrap{gap:6px}.screen--ds .slide{gap:6px}.screen--ds .screen__chin .key:not(.key--sq) .key__cap{padding:0 8px}}
-/* drawer */
 .tray__count .rd{min-width:3ch}
 .tray__more{grid-column:1/-1;display:flex;justify-content:center;padding-top:4px}
-.toast{--toast-b:58px}
-/* form fields: a native <select> in a field window */
-.field__win select{appearance:none;-webkit-appearance:none;display:block;width:100%;min-height:36px;padding:0 36px 0 12px;border:0;border-radius:var(--r-md);background:transparent;font:400 var(--fs-data)/1 var(--font-mono);color:var(--ink);cursor:pointer}
-.field__win:has(select)::before{content:"";position:absolute;right:14px;top:50%;margin-top:-2px;border:4.5px solid transparent;border-top:5.5px solid var(--ink-2);pointer-events:none}
-@media (max-width:760px){
- .screens__key{display:flex;width:100%}
- .dock .sel{flex:1 1 100%;min-width:0}
- .screens[data-mobile-expanded=false] .screen:not(.screen--ds){display:none}
- .screen__legend{display:none}
- .dock__menu>.menu{position:absolute;left:0;right:auto;top:calc(100% + 8px);bottom:auto;width:min(320px,calc(100vw - 56px))}
- .dock__msg{flex-basis:100%;order:5}
- .deck__note{display:none}
- .deck__tools .key{flex:1 1 auto}
- .lane__tools{padding-left:0;margin:0;justify-content:stretch}.lane__tools .key{flex:1}
- .lane--link .lane__groove{flex-direction:row;flex-wrap:wrap}
- .tray__hint--target{display:inline;max-width:none}
- /* phone drawer: filters in two compact rows; the whole body scrolls, so results are never squeezed out */
- .tray__body{overflow:auto;overscroll-behavior:contain;padding:4px 10px 10px}
- .tray__filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
- .tray__filters .sel>.silk{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
- .tray__filters .search{grid-column:1/-1}
- .tray__filters>.key{justify-self:stretch}.tray__filters>.key .key__cap{width:100%}
- .tray__grid{flex:none;overflow:visible;min-height:120px}
- .g-bars__plot{gap:1px;grid-auto-columns:minmax(1px,1fr)}
- .history-fader{min-width:0;flex-basis:100%}
- .strip>.keybed .key__cap{min-width:0;justify-content:center}
- .strip>.status .status__row--sub .status__note{display:inline}
- .subhead{flex-wrap:wrap}.subhead .print{white-space:normal;flex-basis:100%;order:3}.subhead__rule{display:none}.subhead .key{white-space:normal}.subhead .key .key__cap{white-space:normal;text-align:left}
- /* phone CUT: the full name wraps to two lines (head and tail flow together) */
- button.cut__name.cut__name--split,.cut__name.cut__name--split{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow-wrap:anywhere}
- .cut__ns,.cut__head,.cut__tail{display:inline;white-space:normal;overflow:visible}
-}
-
-/* ---------- 25d · EDITORS, MENUS, FORMS, КОЛЕКЦІЯ, ІСТОРІЯ (stage C1b) ---------- */
-/* CUT name: the shared namespace («DEMO · », «org/») gives way first, then the family; the tail never does */
-/* the namespace shrinks first: its weight keeps the family's share below one layout unit, so the family never
-   shows an ellipsis while the namespace still has room to give */
-.cut__ns{flex:0 100000 auto;min-width:1ch;margin-right:.6ch;overflow:hidden;text-overflow:ellipsis;white-space:pre}
-/* a CUT that is a button lays its name and meta from the top, like the lane CUT (a button centres by default) */
-button.cut{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start}
-.cut__head{flex:0 1 auto}
-/* an agent's first CUT that follows @role: the reference is printed in the meta line, the name keeps the model */
-.cut__alias{min-width:0;overflow:hidden;text-overflow:ellipsis;font:700 var(--fs-label)/1 var(--font-mono);color:var(--own-ink)}
-/* a key that is one of a choice (radio): the same latched cap as a pressed key */
-.key[aria-checked=true] .key__cap{transform:translateY(1px)}
-.key[aria-checked=true] .key__cap::before{opacity:.2}
-.key[aria-checked=true] .key__cap::after{opacity:.8}
-
 /* editors in the drawer: the front is the editor's head; the body is the ordered list beside its source */
 .tray__title--ed{cursor:default;flex:0 1 auto}
 .tray--editor .tray__lip{gap:10px}
@@ -1133,35 +1011,49 @@ button.cut{display:flex;flex-direction:column;align-items:stretch;justify-conten
 .tray__grid--seq{grid-template-columns:repeat(auto-fill,minmax(188px,1fr));gap:18px 8px;padding-top:16px}
 .tray__grid .cut+.cut::after{display:none}
 .tray__grid .socket{position:relative;right:auto;margin:0;height:var(--cut-h);justify-content:center;box-shadow:var(--el-recess-2)}
-.stamp--skip{color:var(--warn-ink)}
-.cut.is-skipped{outline:1.5px dashed var(--warn-ink);outline-offset:-3px}
 .tray__foot .key{flex:none}
-@media (max-width:1100px){
- .tray__body--ed{grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;align-content:start;overflow:auto;overscroll-behavior:contain;gap:12px}
- .tray__body--ed .tray__grid{flex:none;overflow:visible;min-height:0}
- .tray__source{padding:12px 0 0;background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px) left top/100% 2px no-repeat}
- .tray--editor .tray__title .tray__count{display:none}
-}
 
-/* menus: CUT tools and the quick pick open at their key, fixed to the window (a sheet on phones) */
-[data-picker].menu{position:fixed}
+/* ---------- 8 · MENUS AND FORMS — menu trays, form / confirm / model-data faces of the drawer ---------- */
+/* MENU TRAY — a small plate that slides out of its key, keys in a recessed bed (⋯, CUT tools, quick pick) */
+.menu{position:absolute;z-index:50;min-width:210px;max-width:min(340px,calc(100vw - 16px));padding:6px;border-radius:var(--r-lg);
+ background:var(--grain),linear-gradient(162deg,var(--body-hi),var(--body) 60%,var(--body-lo));
+ box-shadow:inset 0 1px 0 var(--edge-catch),0 0 0 1px rgb(var(--sh)/calc(.12*var(--sha)))}
+.menu::before{content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;box-shadow:var(--el-lift);pointer-events:none}
+.menu.is-in{animation:menu-in var(--t-fast) var(--e-out) both}
+@keyframes menu-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.menu__head{display:flex;align-items:center;gap:8px;min-height:28px;padding:0 4px 4px 6px}
+.menu__head .silk{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu__bed{display:grid;gap:4px;padding:4px;border-radius:calc(var(--r-md) + 4px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
+.menu__bed .key{background:none;box-shadow:none;padding:0}
+.menu__bed .key::after{inset:0}
+.menu__bed .key--menu .key__cap{min-height:36px}
+.menu__sep{height:2px;margin:3px 4px;background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px)}
+.menu__note{padding:6px 6px 2px;font:400 var(--fs-label)/1.35 var(--font-mono);color:var(--ink-2);margin:0}
+.menu--pick{max-width:none;display:flex;flex-direction:column;width:min(432px,calc(100vw - 16px));height:min(480px,calc(100vh - 24px))}
+.menu--pick .menu__list{display:grid;overflow:auto;overscroll-behavior:contain;flex:1;min-height:0;max-height:none;align-content:start;gap:12px;padding:12px 6px 6px;border-radius:calc(var(--r-md) + 4px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
+.menu--pick .menu__list .cut{margin:0;width:auto;flex:none}
 .menu--tools{width:244px}
 .menu__row{padding:8px 4px 2px}
 .menu__row .sel{width:100%}
 .menu__row .sel>.silk{width:72px}
 .menu .key--menu .key__cap{gap:9px}
-.menu--pick{display:flex;flex-direction:column;width:min(432px,calc(100vw - 16px));height:min(480px,calc(100vh - 24px))}
 .menu__search{display:grid;grid-template-columns:minmax(0,1fr) 168px;gap:8px;padding:0 2px 6px}
 .menu__search .search{width:auto}
 .menu__search .sel>.silk{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.menu--pick .menu__list{flex:1;min-height:0;max-height:none;align-content:start;gap:12px;padding:12px 6px 6px;border-radius:calc(var(--r-md) + 4px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
 .menu__list .cut{height:auto;min-height:var(--cut-h);padding-bottom:12px}
 .menu__list .cut.is-current{margin-top:6px}
 .menu__list .cut+.cut::after{display:none}
 .menu__list .empty{min-height:72px}
-.menu__note{margin:0}
 .menu__count{flex:none;font:700 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);white-space:nowrap}
-
+.dock__menu{position:relative;flex:none}
+.dock__menu>summary{list-style:none}
+.dock__menu>summary::-webkit-details-marker{display:none}
+.dock__menu[open]>summary .key__cap{transform:translateY(1px)}
+.dock__menu[open]>summary .key__cap::before{opacity:.2}
+.dock__menu[open]>summary .key__cap::after{opacity:.8}
+.dock__menu>.menu{top:calc(100% + 8px);left:0;width:240px}
+/* menus: CUT tools and the quick pick open at their key, fixed to the window (a sheet on phones) */
+[data-picker].menu{position:fixed}
 /* forms in the drawer: recessed windows, keys at the foot, the device body inert behind */
 .tray--form .tray__lip{gap:12px}
 .tray--form .tray__title{flex:1}
@@ -1170,21 +1062,15 @@ button.cut{display:flex;flex-direction:column;align-items:stretch;justify-conten
 .tray__form{display:grid;gap:12px;max-width:760px;align-content:start}
 .tray__form--wide{max-width:none}
 .tray__form>.print{margin:0;max-width:78ch}
-.tray__form .form{grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}
-.form--one{grid-template-columns:minmax(0,1fr)!important}.form--one .field{max-width:440px}
-/* the provider form: name · ID / address · format / authorisation · key · term / list · model IDs */
-#new-provider [data-field=name],#new-provider [data-field=id],#new-provider [data-field=key]{grid-column:span 2}
-#new-provider [data-field=url],#new-provider [data-field=models]{grid-column:span 3}
-@media (max-width:1100px){.tray__form .form{grid-template-columns:repeat(2,minmax(0,1fr))}#new-provider .field{grid-column:span 1}#new-provider [data-field=url],#new-provider [data-field=models]{grid-column:1/-1}}
-.field--wide{grid-column:1/-1}
+.tray__form .form{align-items:start}
 .tray__form .tray__foot{grid-column:1/-1;padding-top:6px;justify-content:flex-end}
 .tray__form .tray__foot .print{max-width:60ch}
 .tray__grow{flex:1}
-.field input[readonly]{color:var(--ink-2);cursor:default}
-.field.is-bad .field__note{font-weight:700}
-.msg__code{flex:none;font:700 var(--fs-label)/1 var(--font-mono);padding:2px 5px;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1.25px currentColor}
 .tray__form .msg{white-space:normal;min-height:24px}
-
+/* the provider form: name · ID / address · format / authorisation · key · term / list · model IDs */
+#new-provider{grid-template-columns:repeat(4,minmax(0,1fr))}
+#new-provider [data-field=name],#new-provider [data-field=id],#new-provider [data-field=key]{grid-column:span 2}
+#new-provider [data-field=url],#new-provider [data-field=models]{grid-column:span 3}
 /* model data (Всі дані): printed key–value rows and evidence blocks; the kind of each source is a word */
 .det{display:grid;gap:12px}
 .det__id{display:grid;gap:4px}
@@ -1210,8 +1096,8 @@ button.cut{display:flex;flex-direction:column;align-items:stretch;justify-conten
 .ev__rating{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .ev__rating b{font:700 var(--fs-value)/1 var(--font-mono);color:var(--ink)}
 .ev__src{justify-self:start}
-a.key{text-decoration:none}
 
+/* ---------- 9 · SURFACES — Колекція, Історія ---------- */
 /* КОЛЕКЦІЯ: a control pocket, the screens, the list (rows on the body), the inspector beside it */
 .coll{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
 .coll__ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 12px}
@@ -1248,11 +1134,9 @@ a.key{text-decoration:none}
 .coll__row .coll__score b,.coll__row .coll__price b,.coll__row .coll__ctx b{font:700 var(--fs-data)/1.2 var(--font-mono);color:var(--ink);overflow:visible}
 .coll__score small,.coll__price small,.coll__ctx small{font:400 var(--fs-label)/1.2 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .coll__price .stamp{padding:2px 4px}
-.coll__goto,.coll__back{display:none!important}
+.coll__goto,.coll__back{display:none}
 .coll__pager{justify-self:end;align-items:center}
 .coll__page{padding:0 8px;font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
-.coll__note{margin:0 4px}
-
 /* ІСТОРІЯ: signal keys, the position fader and the period; the screen; printed counters; lists */
 .hist{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
 .hist__ctl{display:flex;flex-wrap:wrap;align-items:center;gap:10px 24px;padding:10px 14px}
@@ -1264,13 +1148,6 @@ a.key{text-decoration:none}
 .hist__period b{font:700 var(--fs-data)/1.25 var(--font-mono);color:var(--ink)}
 .hist__sum{display:grid;gap:8px}
 .hist__counters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 12px}
-.counter{display:grid;gap:6px;min-width:0}
-/* a tape counter: a drum behind a recessed slot, tabular digits */
-.counter__win{display:flex;align-items:baseline;gap:6px;min-height:48px;padding:10px 12px;border-radius:var(--r-md);
- background:linear-gradient(180deg,rgb(var(--sh)/calc(.16*var(--sha))),transparent 32%,transparent 68%,rgb(var(--sh)/calc(.18*var(--sha)))),linear-gradient(180deg,var(--cap-lo),var(--cap-hi) 45%,var(--cap-lo));
- box-shadow:var(--el-recess-2)}
-.counter__win b{font:700 22px/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink);letter-spacing:.02em;white-space:nowrap}
-.counter__win small{font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);white-space:nowrap}
 .hist__head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:2px}
 .hist__head .subhead__rule{flex:1;min-width:20px;height:2px;background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px)}
 .hist__mix,.hist__changes{gap:0}
@@ -1287,71 +1164,208 @@ a.key{text-decoration:none}
 .hist__change b{font:700 var(--fs-data)/1.2 var(--font-mono);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hist__sign{font:700 var(--fs-data)/1 var(--font-mono);color:var(--danger);width:1ch}
 .hist__sign.is-new{color:var(--ok-ink)}
-.hist__note{margin:0 4px}
+.counter{display:grid;gap:6px;min-width:0}
+/* a tape counter: a drum behind a recessed slot, tabular digits */
+.counter__win{display:flex;align-items:baseline;gap:6px;min-height:48px;padding:10px 12px;border-radius:var(--r-md);
+ background:linear-gradient(180deg,rgb(var(--sh)/calc(.16*var(--sha))),transparent 32%,transparent 68%,rgb(var(--sh)/calc(.18*var(--sha)))),linear-gradient(180deg,var(--cap-lo),var(--cap-hi) 45%,var(--cap-lo));
+ box-shadow:var(--el-recess-2)}
+.counter__win b{font:700 22px/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink);letter-spacing:.02em;white-space:nowrap}
+.counter__win small{font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);white-space:nowrap}
 
+/* ---------- 10 · BREAKPOINTS — one block per width, narrower blocks later ---------- */
+@media (max-width:1380px){
+ :root{--win-w:122px;--pad:18px}
+}
+@media (max-width:1300px){
+ :root{--win-w:118px;--cut-w:168px}
+ .plate{gap:12px}
+ .transport__state{width:112px}
+ .transport__state small{display:none}
+ .screens{column-gap:12px}
+ .tariff{width:164px}
+ .tariff__head .g-hint{display:none}
+ .screen--ds .screen__chin{gap:6px}
+ .screen--ds .enc-wrap{gap:6px}
+ .screen--ds .slide{gap:6px}
+ .screen--ds .screen__chin .key:not(.key--sq) .key__cap{padding:0 8px}
+}
+@media (min-width:1181px){
+ .dock{flex-wrap:nowrap}
+}
+@media (max-width:1180px){
+ .dock__msg{order:9;flex-basis:100%}
+}
+@media (max-width:1100px){
+ .tray__body--ed{grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;align-content:start;overflow:auto;overscroll-behavior:contain;gap:12px}
+ .tray__body--ed .tray__grid{flex:none;overflow:visible;min-height:0}
+ .tray__source{padding:12px 0 0;background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px) left top/100% 2px no-repeat}
+ .tray--editor .tray__title .tray__count{display:none}
+ #new-provider{grid-template-columns:repeat(2,minmax(0,1fr))}
+ #new-provider .field{grid-column:span 1}
+ #new-provider [data-field=url],#new-provider [data-field=models]{grid-column:1/-1}
+}
 @media (max-width:760px){
- /* editors and forms: a third lip row for the tabs or the scope; the body scrolls */
+ :root{--pad:12px;--key-w:100%;--cut-w:100%;--win-w:auto}
+ .desk{background:var(--table)}
+ .device{width:calc(100% - 16px);margin:8px auto 0;padding-top:10px}
+ .screw{display:none}
+ .strip{gap:10px 12px}
+ .strip__grow{display:none}
+ .brand{order:1;flex:1}
+ .strip>.status{order:2;max-width:none}
+ .strip>.status .status__note{display:none}
+ .strip>.keybed{order:3;width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+ .strip>.keybed .key{min-width:0}
+ .strip>.keybed .key__cap{width:100%;padding:0 8px;gap:6px;min-width:0;justify-content:center}
+ .strip>.keybed .key__num{display:none}
+ .plate{order:4;flex:1;justify-content:space-between}
+ .dock{gap:10px}
+ .dock .sel{width:100%;flex:1 1 100%;min-width:0}
+ .dock__ctx{display:none}
+ .dock__msg{flex-basis:100%;order:5}
+ .strip>.status .status__row--sub .status__note{display:inline}
+ .sel>.silk{width:74px}
+ .list__row.coll__row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:6px}
+ .screens{flex-direction:column;align-items:stretch}
+ .screen{width:100%}
+ .wins{display:grid;grid-template-columns:1fr 1fr;gap:10px 0}
+ .win,.win:first-child,.win:last-child{width:auto;padding:0 10px}
+ .win:nth-child(odd){padding-left:0;background:none}
+ .g-split{flex-direction:column}
+ .g-vsep{width:auto;height:2px;background:radial-gradient(circle,var(--s-dim) 0 .7px,transparent 1px) left top/4px 2px repeat-x}
+ .tariff{width:auto}
+ .screen__chin{flex-wrap:wrap;padding-bottom:4px}
+ .screens__key{display:flex;width:100%}
+ .screens[data-mobile-expanded=false] .screen:not(.screen--ds){display:none}
+ .screen__legend{display:none}
+ .g-bars__plot{gap:1px;grid-auto-columns:minmax(1px,1fr)}
+ .g-bars__read{flex-wrap:wrap;row-gap:2px}
+ .deck{padding:8px 8px 0}
+ .deck__tools .search{width:100%;margin:0}
+ .ruler{display:none}
+ .lane{grid-template-columns:minmax(0,1fr);gap:6px}
+ .lane__groove{flex-direction:column;align-items:stretch;padding:6px;gap:6px;overflow:visible}
+ .lane__groove::before{left:50%;right:auto;top:8px;bottom:8px;width:1px;height:auto;background:repeating-linear-gradient(180deg,var(--rail) 0 5px,transparent 5px 9px)}
+ /* phone CUT: 56px base; a long name wraps and grows the CUT only when needed */
+ .cut{flex:none;margin:0;height:auto;min-height:56px;padding-bottom:14px}
+ .cut__name{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+ .cut+.cut::after{left:calc(50% - 18px);top:-6px;bottom:auto;width:36px;height:8px;transform:none}
+ .socket{position:relative;right:auto;margin:0;justify-content:center;box-shadow:var(--el-recess-2)}
+ .leader{justify-content:center}
+ .fold{grid-template-columns:minmax(0,1fr)}
+ .lane__note{display:none}
+ .legend{margin:0 -8px;padding-inline:10px}
+ .deck__note{display:none}
+ .deck__tools .key{flex:1 1 auto}
+ .lane__tools{padding-left:0;margin:0;justify-content:stretch}
+ .lane__tools .key{flex:1}
+ .lane--link .lane__groove{flex-direction:row;flex-wrap:wrap}
+ .subhead{flex-wrap:wrap}
+ .subhead .print{white-space:normal;flex-basis:100%;order:3}
+ .subhead__rule{display:none}
+ .subhead .key{white-space:normal}
+ .subhead .key .key__cap{white-space:normal;text-align:left}
+ /* phone CUT: the full name wraps to two lines (head and tail flow together) */
+ button.cut__name.cut__name--split,.cut__name.cut__name--split{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow-wrap:anywhere}
+ .cut__ns{display:inline}
+ .cut__head,.cut__tail{display:inline;white-space:normal;overflow:visible}
+ /* drawer: full width minus 8px, two-row front (title row + transport row) */
+ .tray-port{--lip:92px;left:8px;width:calc(100% - 16px)}
+ .tray__lip{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:46px 46px;grid-template-areas:"title chev" "tp tp";gap:0 8px;padding:0 10px}
+ .tray__title,.tray__armed{grid-area:title}
+ .tray__chev{grid-area:chev;align-self:center}
+ .tray__transport{grid-area:tp;margin:0;justify-content:space-between;padding-top:2px;box-shadow:inset 0 2px 0 -1px var(--seam-dark),inset 0 3px 0 -1px var(--seam-light)}
+ .tray__transport .transport__state{width:auto;flex:1;min-width:0}
+ .tray__transport .transport__state small,.tray__hint,.tray__pull{display:none}
+ .tray__armed{max-width:none}
+ .tray.is-armed .tray__grip{display:none}
  .tray--editor .tray__lip{height:auto;grid-template-rows:46px auto 46px;grid-template-areas:"title close" "tabs tabs" "tp tp"}
- .tray--form .tray__lip{height:auto;grid-template-rows:46px 46px;grid-template-areas:"title close" "tp tp"}
+ .tray__tabs{grid-area:tabs;align-self:center}
+ .tray--editor .tray__transport{justify-content:flex-end;gap:6px}
+ .tray__foot .print{flex:1 1 100%}
+ .tray__filters .search{width:100%;margin:0;grid-column:1/-1}
+ .tray__hint--target{display:inline;max-width:none}
+ /* phone drawer: filters in two compact rows; the whole body scrolls, so results are never squeezed out */
+ .tray__body{overflow:auto;overscroll-behavior:contain;padding:4px 10px 10px}
+ .tray__body--ed{padding-top:6px}
+ .tray__filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+ .tray__filters .sel>.silk{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ .tray__filters>.key{justify-self:stretch}
+ .tray__filters>.key .key__cap{width:100%}
+ .tray__grid{flex:none;overflow:visible;min-height:120px}
+ /* editors and forms: a third lip row for the tabs or the scope; the body scrolls */
  .tray__close{grid-area:close;align-self:center}
  .tray--editor .tray__tabs{width:100%;margin:0;padding-bottom:6px}
  .tray--editor .transport__scope,.tray--editor .key__more{display:none}
- .tray__tabs.keybed{display:grid;grid-template-columns:1fr 1fr}.tray__tabs .key__cap{width:100%}
+ .tray__tabs.keybed{display:grid;grid-template-columns:1fr 1fr}
+ .tray__tabs .key__cap{width:100%}
  .tray__tabs .sel{width:100%}
+ /* a menu is a bottom sheet: !important beats the left/top that the opener writes inline */
+ .menu{position:fixed;left:8px!important;right:8px;bottom:8px;top:auto!important;max-width:none;min-width:0}
+ .dock__menu>.menu{position:absolute;left:0;right:auto;top:calc(100% + 8px);bottom:auto;width:min(320px,calc(100vw - 56px))}
+ .tray--form .tray__lip{height:auto;grid-template-rows:46px 46px;grid-template-areas:"title close" "tp tp"}
  .tray__body--form{padding:6px 10px 12px}
- .tray__form .form{grid-template-columns:minmax(0,1fr)}
- .tray__form .tray__foot{justify-content:stretch}.tray__form .tray__foot .key{flex:1 1 auto}.tray__form .tray__foot .key__cap{width:100%}
+ #new-provider{grid-template-columns:minmax(0,1fr)}
+ .tray__form .tray__foot{justify-content:stretch}
+ .tray__form .tray__foot .key{flex:1 1 auto}
+ .tray__form .tray__foot .key__cap{width:100%}
  .menu--tools{width:auto}
  .menu--pick{width:auto;height:min(560px,72vh)}
  .menu__search{grid-template-columns:minmax(0,1fr)}
  .det__kv{max-width:none}
- /* Колекція: the list comes first, then the data of the chosen CUT, then the analysis screen */
+  /* Колекція: the list comes first, then the data of the chosen CUT, then the analysis screen */
  .coll__ctl{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
  .coll__ctl .search{grid-column:1/-1;max-width:none}
  .coll__ctl .sel{flex-direction:column;align-items:stretch;gap:4px}
  .coll__ctl .sel select{max-width:none}
  .coll__seam{display:none}
- .coll__add{grid-column:1/-1;margin:0}.coll__add .key__cap{width:100%}
+ .coll__add{grid-column:1/-1;margin:0}
+ .coll__add .key__cap{width:100%}
  .coll__layout{display:flex;flex-direction:column}
  .coll__main{display:contents}
- .coll__ledger{order:1}.coll__pager{order:2;align-self:flex-end}.coll__layout>.screen--insp{order:3;position:static}.coll__main>.screen{order:4}
+ .coll__ledger{order:1}
+ .coll__pager{order:2;align-self:flex-end}
+ .coll__layout>.screen--insp{order:3;position:static}
+ .coll__main>.screen{order:4}
  .coll__lhead{display:none}
- .list__row.coll__row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:6px}
  .coll__row>.led{grid-row:1/3}
  .coll__score{grid-column:3;grid-row:1}
  .coll__price{grid-column:2;grid-row:2;justify-items:start;text-align:left}
  .coll__ctx{grid-column:3;grid-row:2}
- .coll__goto{display:flex!important;justify-content:flex-end;padding-top:4px}
- .coll__back{display:inline-flex!important}
+ .coll__goto{display:flex;justify-content:flex-end;padding-top:4px}
+ .coll__back{display:inline-flex}
  .coll__cart>.print{margin:0;flex-basis:100%}
- .coll__fits>.silk{flex-basis:100%}.coll__fits .key{flex:1 1 100%}.coll__fits .key__cap{width:100%}
- .g-bars__read{flex-wrap:wrap;row-gap:2px}
+ .coll__fits>.silk{flex-basis:100%}
+ .coll__fits .key{flex:1 1 100%}
+ .coll__fits .key__cap{width:100%}
  /* Історія */
  .hist__ctl{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
- .hist__grp{flex-wrap:wrap}.hist__grp .keybed{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}.hist__grp .key__cap{width:100%;padding:0 4px}
+ .hist__grp{flex-wrap:wrap}
+ .hist__grp .keybed{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}
+ .hist__grp .key__cap{width:100%;padding:0 4px}
  .hist__period{justify-items:start;text-align:left}
- .hist__head .keybed{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.hist__head .key__cap{width:100%}
+ .hist__head .keybed{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+ .hist__head .key__cap{width:100%}
  .hist__counters{grid-template-columns:repeat(2,minmax(0,1fr))}
  .counter__win b{font-size:19px}
  .hist__row{grid-template-columns:minmax(0,1fr) auto;row-gap:6px}
  .hist__bar{grid-column:1/-1;grid-row:2}
  .hist__detail{grid-column:1/-1;justify-self:start}
 }
+@media (max-width:760px) and (pointer:coarse){
+ .key__cap{min-height:38px}
+ .key--sq .key__cap{width:40px;height:38px}
+}
 
-/* ---------- 25c · COEXISTENCE with the legacy sheets (style/theme/tape/operator.css) — delete with them in C1c ---------- */
-#forge-direct{background:none;font:inherit;letter-spacing:normal;color:inherit;min-height:0}
-#forge-window{container:forge/inline-size}
-#forge-direct :is(.sel select,select.cut__think,.field__win select){appearance:none;-webkit-appearance:none}
-#forge-direct .sel select{display:block}
-:is(.key,.socket,.slide,.tgl,.cut__more,.lane__key,.tray__title,button.cut,.g-kv--btn):disabled{opacity:1}
-.device .surface:not([data-surface=profiles]){padding-top:2px}
-
-/* ---------- 26 · MOTION, FOCUS, FORCED COLOURS ---------- */
+/* ---------- 11 · MOTION, CONTRAST, FORCED COLOURS ---------- */
 ::view-transition-old(root),::view-transition-new(root){animation-duration:.5s;animation-timing-function:var(--e-io)}
 @media (prefers-reduced-motion:reduce){
  /* movement off; state labels, focus rings and values stay */
- .device *,.device *::before,.device *::after,.tray-port *,.tray-port *::before,.tray-port *::after,.menu,.menu *,.toast,.ghost,.ghost *{animation-duration:1ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:1ms!important;transition-delay:0s!important}
+ *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
  ::view-transition-old(root),::view-transition-new(root){animation:none}
+}
+@media (prefers-contrast:more){
+ button,input,select,textarea{border:1px solid #777B6E!important}
 }
 @media (forced-colors:active){
  .key__cap,.lane__key,.cut,.socket,.search,.field__win,.sel select,.slide__slot,.tray,.menu,.list__row,.bay,.keybed,.leader{border:1px solid CanvasText}

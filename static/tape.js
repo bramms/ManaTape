@@ -25,7 +25,6 @@ class ForgeHistory {
 }
 if(typeof module!=='undefined')module.exports={ForgeHistory};
 if(typeof window!=='undefined'){
- window.ForgeHistory=ForgeHistory;
  /* Motion as feedback (DESIGN «Анімація як зворотний зв’язок»): the logo reels spin on a change and back on Undo,
     lanes enter on load / profile change, a moved CUT glides, an inserted one splices in. Only transform and
     opacity animate; a background refresh never animates the tape; reduced motion turns movement off. */
@@ -41,8 +40,6 @@ if(typeof window!=='undefined'){
    const previous=frames.get(root),moving=!next||!reduced.matches&&!!previous&&previous.profile===next.profile&&(next.context===undefined||next.context===root.dataset.tapeContext)&&(previous.draft!==next.draft&&(previous.dirty||next.dirty)||previous.projection!==next.projection);
    return {frame:previous,context:root.dataset.tapeContext,clips:new Map(moving?measure(root).map(([el,r])=>[el.dataset.clipKey,r]):[]),picker:!!root.querySelector('[data-picker]'),modal:!!root.querySelector('.tray__form'),editor:!!root.querySelector('.tray__editor')};
   }
-  // CUT widths come from the design system (--cut-w); there is nothing to fit any more. Kept for old callers.
-  function fit(){}
   function move(el,frames,duration=240,delay=0){if(!el||reduced.matches)return;return el.animate(frames,{duration,delay,easing:ease,fill:'backwards'});}
   // Lanes enter: the tape in each visible groove slides in with a small stagger; lane keys stay still.
   function feed(root){
@@ -85,6 +82,6 @@ if(typeof window!=='undefined'){
    for(const [el,k] of [[brand.querySelector('.reel--a'),1],[brand.querySelector('.reel--b'),1.6]])if(el){el.style.transitionDuration=duration;el.style.transform=`rotate(${reel*k}deg)`;}
   }
   reduced.addEventListener('change',()=>{if(reduced.matches)document.getAnimations().forEach(a=>a.cancel());});
-  return {before,after,logo,fit,intent:value=>{pendingIntent=value;}};
+  return {before,after,logo,intent:value=>{pendingIntent=value;}};
  })();
 }
