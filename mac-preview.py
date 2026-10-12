@@ -38,6 +38,11 @@ def sync_commandcode(stop, args):
             # SSH carries this allowlisted snapshot only, never the original CLI payload or cookies.
             subprocess.run([*SSH, args.host, command],
                 input=json.dumps(report), text=True, capture_output=True, timeout=20, check=True)
+            if args.local_state:
+                # The Mac's own Mana Tape reads the same snapshot from its state directory.
+                local = Path(os.path.expanduser(args.local_state)) / 'commandcode-usage.json'
+                incoming = local.with_suffix('.incoming')
+                incoming.write_text(json.dumps(report)); incoming.chmod(0o600); os.replace(incoming, local)
         except Exception as error:
             # Keep the last snapshot (Forge marks it stale after 15 minutes) and keep this thread alive.
             print(f'Mana Tape: CommandCode sync: {type(error).__name__}', file=sys.stderr, flush=True)
@@ -217,11 +222,12 @@ def main():
     parser.add_argument('--remote-port', type=int)
     parser.add_argument('--port', type=int)
     parser.add_argument('--commandcode', action='store_true', default=None)
+    parser.add_argument('--local-state', dest='local_state', help='Каталог стану локальної Mana Tape для того ж знімка CodexBar')
     parser.add_argument('--no-open', action='store_true')
     args = parser.parse_args()
     config = Path(args.config)
     defaults = json.loads(config.read_text(encoding='utf-8')) if config.is_file() else {}
-    for name in ('host', 'state', 'port', 'remote_port', 'commandcode'):
+    for name in ('host', 'state', 'port', 'remote_port', 'commandcode', 'local_state'):
         if getattr(args, name) is None:
             setattr(args, name, defaults.get(name, {'port': 19423, 'remote_port': 19421, 'commandcode': False}.get(name)))
     if not args.host or not args.state or args.host.startswith('-') or not args.state.startswith('/'):
