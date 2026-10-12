@@ -118,8 +118,10 @@ test('markup helpers escape and expose slider semantics',()=>{
 function fakeDom(stored){
  const listeners={},frames=[],saved=[];
  const mkStyle=()=>({props:{},writes:0,setProperty(k,v){this.props[k]=v;this.writes++;}});
- const el=(dataset,cls=[])=>({dataset,style:mkStyle(),attrs:{},classes:new Set(cls),textContent:'',
-  classList:{add(c){this._e.classes.add(c);},remove(c){this._e.classes.delete(c);},contains(c){return this._e.classes.has(c);},toggle(){}},
+ const el=(dataset,cls=[])=>({dataset,style:mkStyle(),attrs:{},classes:new Set(cls),textContent:'',own:{},
+  addEventListener(t,f,o){(this.own[t]??=[]).push({f,o});},
+  classList:{add(...c){for(const x of c)this._e.classes.add(x);},remove(...c){for(const x of c)this._e.classes.delete(x);},contains(c){return this._e.classes.has(c);},
+   toggle(c,force){const on=force===undefined?!this._e.classes.has(c):!!force;if(on)this._e.classes.add(c);else this._e.classes.delete(c);return on;}},
   setAttribute(k,v){this.attrs[k]=String(v);},getAttribute(k){return this.attrs[k]??null;},
   closest(sel){return sel==='[data-knob]'&&this.dataset.knob?this:null;},focus(){},setPointerCapture(){},hasPointerCapture(){return true;},releasePointerCapture(){}});
  const fix=e=>{e.classList._e=e;return e;};
@@ -127,15 +129,16 @@ function fakeDom(stored){
  const encA=fix(el({knob:'hue',screenHue:'studio',screenDefault:'250'})),bright=fix(el({knob:'brightness'}));
  const outA=fix(el({screenHueOut:'studio'})),outB=fix(el({screenBrightnessOut:''}));
  const all={'[data-screen]':[screenA,screenB],'[data-knob]':[encA,bright],'[data-knob="hue"]':[encA],'[data-knob="brightness"]':[bright],'[data-screen-hue-out]':[outA],'[data-screen-brightness-out]':[outB],'.screen':[screenA,screenB],'.meter:not(.is-unknown)':[]};
- const rootEl={dataset:{theme:'dark'},style:mkStyle(),offsetWidth:0};
+ const reads={offsetWidth:0};
+ const rootEl={dataset:{theme:'dark'},style:mkStyle(),get offsetWidth(){reads.offsetWidth++;return 0;}};
  const document={documentElement:rootEl,readyState:'complete',addEventListener(t,f){(listeners[t]??=[]).push(f);},querySelectorAll(s){return all[s]||[];}};
- const ctx={document,module:{exports:{}},localStorage:{getItem(k){return k==='mana-display'?stored:null;},setItem(k,v){saved.push([k,JSON.parse(v)]);}},
+ const ctx={window:{},document,module:{exports:{}},localStorage:{getItem(k){return k==='mana-display'?stored:null;},setItem(k,v){saved.push([k,JSON.parse(v)]);}},
   requestAnimationFrame(f){frames.push(f);return frames.length;},cancelAnimationFrame(){},setTimeout:(f)=>{return 0;},clearTimeout(){},
   addEventListener(t,f){(listeners['win:'+t]??=[]).push(f);},matchMedia:()=>({matches:false}),CustomEvent:class{constructor(t,o){this.type=t;this.detail=o?.detail;}},console};
  vm.runInNewContext(fs.readFileSync(require.resolve('./static/screen.js'),'utf8'),ctx);
  const fire=(t,ev)=>{for(const f of listeners[t]||[])f({preventDefault(){},stopPropagation(){},button:0,pointerId:1,shiftKey:false,...ev});};
  const flush=()=>{const fs=frames.splice(0);for(const f of fs)f(0);return fs.length;};
- return {api:ctx.module.exports,screenA,screenB,encA,bright,outA,outB,rootEl,fire,flush,saved,frames};
+ return {api:ctx.module.exports,ctx,listeners,reads,screenA,screenB,encA,bright,outA,outB,rootEl,fire,flush,saved,frames};
 }
 
 test('browser: paints each screen element (not :root), lazily migrates, gestures write once per frame, Esc cancels',()=>{
@@ -176,4 +179,33 @@ test('browser: paints each screen element (not :root), lazily migrates, gestures
  d.fire('pointercancel',{target:d.bright});assert.equal(d.api.get().brightness,90);
  d.fire('dblclick',{target:d.encA});assert.equal(d.api.hue('studio'),250);
  assert.equal(d.rootEl.style.writes,0,'never writes custom properties on :root');
+});
+
+test('browser: window.ManaScreen, wheel only on knobs, focus by hand without a ring, warm-up without a reflow',()=>{
+ const d=fakeDom(null);
+ assert.equal(d.ctx.window.ManaScreen,d.api,'theme.js and the error screen call window.ManaScreen');
+ /* the page never gets a non-passive wheel listener; every knob does, after sync() */
+ assert.equal((d.listeners.wheel||[]).length,0,'no wheel listener on document');
+ for(const k of [d.encA,d.bright]){const w=k.own.wheel||[];assert.equal(w.length,1);assert.equal(w[0].o.passive,false);}
+ d.api.sync();assert.equal(d.encA.own.wheel.length,1,'a knob is armed once');
+ /* wheel: several notches, one write per frame */
+ const h0=d.api.hue('studio','250'),w0=d.screenA.style.writes,wheel=d.encA.own.wheel[0].f;
+ for(let i=0;i<4;i++)wheel({currentTarget:d.encA,target:d.encA,deltaY:-100,deltaX:0,shiftKey:false,preventDefault(){}});
+ assert.equal(d.frames.length,1);d.flush();
+ assert.equal(d.api.hue('studio'),wrapHue(h0+12));assert.equal(d.screenA.style.writes-w0,18);
+ /* a knob taken by the hand is marked, so CSS shows no focus ring; a key on it brings the ring back */
+ d.fire('pointerdown',{target:d.bright,clientY:100});assert.equal(d.bright.dataset.pointer,'');
+ d.fire('pointerup',{target:d.bright});
+ d.fire('keydown',{key:'ArrowUp',target:d.bright});assert.equal(d.bright.dataset.pointer,undefined);
+ /* power-on: restarts by flipping the twin keyframes, never by reading layout */
+ d.reads.offsetWidth=0;
+ d.api.boot();assert.ok(d.screenA.classes.has('is-booting'));const p1=d.screenA.classes.has('is-boot-b');
+ d.api.boot();assert.notEqual(d.screenA.classes.has('is-boot-b'),p1,'a second warm-up flips the twin');
+ assert.equal(d.reads.offsetWidth,0,'no forced reflow');
+});
+
+test('a tone next to a status hue is marked, so that status gets a pattern',()=>{
+ assert.equal(S.nearStatus(32),'bad');assert.equal(S.nearStatus(0),'bad');assert.equal(S.nearStatus(5),'bad');assert.equal(S.nearStatus(350),'');
+ assert.equal(S.nearStatus(82),'warn');assert.equal(S.nearStatus(100),'warn');
+ assert.equal(S.nearStatus(150),'');assert.equal(S.nearStatus(250),'');assert.equal(S.nearStatus(120),'');assert.equal(S.nearStatus(60),'warn');
 });

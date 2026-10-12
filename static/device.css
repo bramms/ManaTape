@@ -44,14 +44,14 @@
  /* radius scale */
  --r-xs:3px;--r-sm:5px;--r-md:8px;--r-lg:12px;--r-win:14px;--r-xl:16px;--r-body:28px;
  /* fixed sizes */
- --pad:22px;--hit:44px;--key-w:156px;--cut-w:176px;--cut-h:52px;--win-w:136px;--lip:46px;
+ --pad:22px;--hit:44px;--key-w:156px;--cut-w:176px;--cut-h:52px;--win-w:136px;--lip:46px;--ds-w:388px;
  /* motion */
  --t-press:70ms;--t-fast:140ms;--t-med:220ms;--t-slow:420ms;--t-reel:680ms;
  --e-out:cubic-bezier(.2,.75,.25,1);--e-snap:cubic-bezier(.3,1.45,.55,1);--e-io:cubic-bezier(.65,0,.35,1);
  /* emitters and identity — theme independent */
  --led-green:#2fe07a;--led-amber:#ffb428;--led-red:#ff4a3d;--led-blue:#4aa0ff;--led-orange:#ff6a26;
  --op-orange:#ef5b25;
- --pc-ds:#2f6fe0;--pc-stu:#e3a12f;--pc-cld:#7a56d0;--pc-gpu:#1c7f4e;--pc-free:#12807d;--pc-fast:#3f8f9e;--pc-x:#5f666e;--pc-p5:#a23b72;--pc-p6:#3d6e2e;--pc-p7:#8a5a12;
+ --pc-ds:#2f6fe0;--pc-stu:#e3a12f;--pc-cld:#7a56d0;--pc-gpu:#1c7f4e;--pc-free:#12807d;--pc-fast:#3f8f9e;--pc-x:#5f666e;--pc-p5:#a23b72;--pc-p6:#7b7300;--pc-p7:#8a5a12;
  --del:#C62D1F;
  --grain-light:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .29 0 0 0 0 .24 0 0 0 0 .17 .3 0 0 0 -.1'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
  --grain-dark:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.004 .7' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .09 0 0 0 -.03'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -71,7 +71,7 @@
  --cap-hi:#FDFCF9;--cap-lo:#E6E2DA;
  --seam-dark:rgba(96,82,60,.30);--seam-light:rgba(255,255,255,.95);
  --ink:#1D2024;--ink-2:#454B51;--ink-off:#74797F;--silk:#474D53;--silk-2:#4F555B;
- --focus:#1659D6;--focus-glow:rgba(22,89,214,.30);--focus-line:#225F90;--selection:#E6F0F1;--page:#D8D9D5;
+ --focus:#1659D6;--focus-glow:rgba(22,89,214,.30);--focus-line:#225F90;--selection:#E6F0F1;
  --tape-hi:#F9F4EA;--tape:#EFE7D6;--tape-lo:#E3D9C4;--tape-ink:#2A251D;--tape-ink-2:#564D3F;--tape-line:rgba(120,96,60,.07);--tape-sheen:rgba(255,255,255,.6);--splice:rgba(255,255,255,.55);
  --leader:rgba(255,255,255,.5);--leader-edge:rgba(120,104,80,.16);
  --rail:rgba(96,82,60,.17);--hb-track:rgba(96,82,60,.17);
@@ -79,6 +79,8 @@
  --alu-hi:#FFFFFF;--alu-lo:#CBC6BE;--knurl-a:#BDB8AE;--knurl-b:#F6F3EE;
  --chr-hi:#FFFFFF;--chr-mid:#C9CDD2;--chr-lo:#7D838A;--chr-dk:#3A3E44;
  --glint:rgba(255,255,255,.42);
+ --led-a:#2c2e31;--led-b:#0f1012;--led-rim:rgb(74 62 44/.12);--led-lip:rgba(255,255,255,.85);   /* LED lens, off */
+ --scroll-thumb:#AFA89B;
  --spill:.42;
  --grain:var(--grain-light);
  color-scheme:light;
@@ -98,7 +100,7 @@
  --cap-hi:#464A4F;--cap-lo:#35383C;
  --seam-dark:rgba(0,0,0,.65);--seam-light:rgba(255,255,255,.07);
  --ink:#EEEFF0;--ink-2:#BCC0C5;--ink-off:#959AA0;--silk:#AEB3B9;--silk-2:#ADB2B8;
- --focus:#6FA8FF;--focus-glow:rgba(111,168,255,.42);--focus-line:#92C3ED;--selection:#3C5360;--page:#222529;
+ --focus:#6FA8FF;--focus-glow:rgba(111,168,255,.42);--focus-line:#92C3ED;--selection:#3C5360;
  --tape-hi:#433D36;--tape:#39342E;--tape-lo:#2F2B26;--tape-ink:#F1EBE1;--tape-ink-2:#CFC5B5;--tape-line:rgba(255,235,200,.035);--tape-sheen:rgba(255,255,255,.07);--splice:rgba(255,255,255,.16);
  --leader:rgba(255,255,255,.055);--leader-edge:rgba(255,255,255,.08);
  --rail:rgba(255,255,255,.06);--hb-track:rgba(0,0,0,.45);
@@ -106,6 +108,8 @@
  --alu-hi:#8D9299;--alu-lo:#43474D;--knurl-a:#26282B;--knurl-b:#5C6066;
  --chr-hi:#E2E5E9;--chr-mid:#9A9FA6;--chr-lo:#545960;--chr-dk:#1C1E22;
  --glint:rgba(255,255,255,.07);
+ --led-a:#17181b;--led-b:#040405;--led-rim:rgb(0 0 0/.55);--led-lip:rgba(255,255,255,.17);       /* an off lens reads on graphite: a deep pit with a lit lower lip */
+ --scroll-thumb:#3A3D42;
  --spill:1;
  --grain:var(--grain-dark);
  color-scheme:dark;
@@ -129,7 +133,7 @@
    stays inside it. */
 @layer device-base{
  *,*::before,*::after{box-sizing:border-box}
- html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scrollbar-gutter:stable;font-synthesis:none;background:var(--page)}
+ html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scrollbar-gutter:stable;font-synthesis:none;background:var(--table);scrollbar-color:var(--scroll-thumb) var(--table)}
  #forge-window{display:flow-root}
  p{margin:0}
  button,a,input,select,textarea{-webkit-tap-highlight-color:transparent}
@@ -185,8 +189,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 /* the brand is a link: no underline; its logo parts are blocks */
 .brand{display:flex;align-items:center;gap:12px;flex:none;text-decoration:none;color:inherit;border-radius:var(--r-md)}
 .brand:focus-visible{outline:none;box-shadow:var(--ring)}
-.logo{position:relative;width:82px;height:44px;border-radius:10px;padding:3px;flex:none;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light))}
-.logo__glass{position:relative;width:100%;height:100%;border-radius:7px;overflow:hidden;background:radial-gradient(120% 120% at 20% 0%,#2b2e33,#0b0c0e 70%);box-shadow:inset 0 2px 5px rgba(0,0,0,.85)}
+.logo{position:relative;width:82px;height:44px;border-radius:var(--r-md);padding:3px;flex:none;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light))}
+.logo__glass{position:relative;width:100%;height:100%;border-radius:var(--r-sm);overflow:hidden;background:radial-gradient(120% 120% at 20% 0%,#2b2e33,#0b0c0e 70%);box-shadow:inset 0 2px 5px rgba(0,0,0,.85)}
 .logo__glass::after{content:"";position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,.14),rgba(255,255,255,0) 38%);pointer-events:none}
 .logo,.logo__glass,.reel{display:block}
 .reel{position:absolute;top:4px;width:30px;height:30px;transition:transform var(--t-reel) var(--e-out);will-change:transform}
@@ -211,14 +215,25 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 /* dock: the feedback line takes the free middle; the ⋯ menu drops from its key */
 .dock__msg{flex:1 1 0;min-width:120px;display:flex;align-items:center}
 .dock__msg .msg{flex:1;min-width:0}
-.boot{display:grid;justify-items:start;gap:12px;padding:24px 4px;min-height:160px}
-.boot .screen{width:min(420px,100%)}
+/* BOOT — the device before /api/state (index.html) and the connection-failure screen (app.js): the same plate,
+   brand and one black glass that prints the state; the glass keeps its default hue until screen.js paints it */
+.boot{display:grid;justify-items:start;align-content:start;gap:12px;padding:14px 4px 24px;min-height:min(420px,60vh)}
+.boot .screen{width:min(460px,100%)}
+.boot .g-msg{white-space:normal;align-items:flex-start}
+.boot .g-msg>span{white-space:normal;overflow:visible}
+.boot .g-msg::before{margin-top:4px}
+.boot__bar{display:flex;align-items:center;gap:18px;width:100%;min-height:58px}
+.boot .g-head .g-age{margin-left:auto}
+/* while it connects, the tape runs: both reels turn (the small one faster, as on a real transport) */
+.boot .reel{animation:boot-reel 2.4s linear infinite}
+.boot .reel--b{animation-duration:1.5s}
+@keyframes boot-reel{to{transform:rotate(360deg)}}
 
 /* ---------- 4 · CONTROLS — LED, key, knob, toggle, slide, selector window, fields, transport, feedback, empty, chips, list rows ---------- */
 /* LED — 8px lens set into the body; ON = emission layer + halo (opacity only) */
 .led{--c:var(--led-green);position:relative;flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;
- background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.55) 0 .8px,transparent 1.6px),radial-gradient(circle,#2c2e31,#0f1012 80%);
- box-shadow:inset 0 1px 1px rgba(0,0,0,.7),0 0 0 1.5px rgb(var(--sh)/calc(.12*var(--sha))),0 1px 0 1.5px var(--lip-hi)}
+ background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.55) 0 .8px,transparent 1.6px),radial-gradient(circle,var(--led-a),var(--led-b) 80%);
+ box-shadow:inset 0 1px 1px rgba(0,0,0,.7),0 0 0 1.5px var(--led-rim),0 1px 0 1.5px var(--led-lip)}
 .led::before,.led::after{content:"";position:absolute;border-radius:50%;opacity:0;transition:opacity var(--t-med) linear;pointer-events:none}
 .led::before{inset:0;background:radial-gradient(circle at 36% 32%,#fff 0 .9px,var(--c) 2.6px,color-mix(in srgb,var(--c) 72%,#000) 100%)}
 .led::after{inset:-7px;background:radial-gradient(closest-side,color-mix(in srgb,var(--c) 55%,transparent),transparent)}
@@ -253,12 +268,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 /* latched: pressed / expanded (a surface is open) / current surface */
 .key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page],[aria-current=true],[aria-selected=true]) .key__cap{transform:translateY(1px)}
 .key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page],[aria-current=true],[aria-selected=true]) .key__cap::before{opacity:.2}
-.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page],[aria-current=true],[aria-selected=true]) .key__cap::after{opacity:.8}
-/* disabled: the cap sits lower, legend dims to ≥ 3:1 — no opacity, still legible */
-.key:is(:disabled,[aria-disabled=true]){cursor:default}
-.key:is(:disabled,[aria-disabled=true]) .key__cap{color:var(--ink-off);transform:translateY(1px)}
-.key:is(:disabled,[aria-disabled=true]) .key__cap::before{opacity:.35}
-.key:is(:disabled,[aria-disabled=true]) svg{stroke:var(--ink-off)}
+.key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page],[aria-current=true],[aria-selected=true]) .key__cap::after{opacity:1}
+/* disabled: an etched cap flush with its socket — no cast shadow, no press travel, no LED; the legend dims to
+   ≥ 3:1 (no opacity, still legible). Rules for latched and lit states come first, so a disabled key wins. */
 .key__num{font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);padding-right:8px;margin-right:2px;box-shadow:1px 0 0 var(--seam-light),inset -1px 0 0 var(--seam-dark)}
 .key__sub{display:block;font:400 var(--fs-label)/1.05 var(--font-mono);color:var(--ink-2);margin-top:3px}
 .key__txt{display:block;text-align:left}
@@ -273,7 +285,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 /* action: the orange key (Зберегти) — lit only when it has work */
 .key--action .key__cap{color:#0b0806;background:radial-gradient(120% 140% at 72% 92%,#ff8a52 0%,transparent 70%),linear-gradient(150deg,#e2511f 0%,var(--op-orange) 70%);
  box-shadow:inset 0 1px 0 rgba(255,220,190,.75),inset 0 -1px 0 rgba(120,30,0,.4)}
-.key--action:is(:disabled,[aria-disabled=true]) .key__cap{color:var(--ink-off);background:radial-gradient(120% 140% at 72% 92%,var(--cap-hi) 0%,transparent 70%),linear-gradient(150deg,var(--cap-lo) 0%,var(--cap-hi) 78%);box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
+/* (a disabled Зберегти takes the common etched disabled cap below) */
 /* destructive: neutral cap, red LED + red legend; confirmation lives in the menu tray, not in colour */
 .key--danger .key__cap{color:var(--danger-cap)} /* the cap is lighter than the tape: its own red keeps ≥ 4.5:1 */
 .key--danger .led{--c:var(--led-red)}
@@ -285,13 +297,22 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::before,
 .key:is([aria-pressed=true],[aria-expanded=true],[aria-current=page]) .led[data-latch]::after,
 .tray__title[aria-expanded=true] .led[data-latch]::before,.tray__title[aria-expanded=true] .led[data-latch]::after{opacity:1}
+.key:is(:disabled,[aria-disabled=true]){cursor:default}
+.key:is(:disabled,[aria-disabled=true]) .key__cap,.key:is(:disabled,[aria-disabled=true]):active .key__cap{color:var(--ink-off);transform:translateY(1px);
+ background:linear-gradient(180deg,var(--pocket),var(--pocket-hi) 70%);box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.14*var(--sha))),inset 0 -1px 0 var(--bevel-hi)}
+.key:is(:disabled,[aria-disabled=true]) .key__cap::before,.key:is(:disabled,[aria-disabled=true]) .key__cap::after{opacity:0}
+.key:is(:disabled,[aria-disabled=true]) svg{stroke:var(--ink-off)}
+.key:is(:disabled,[aria-disabled=true]) .led::before,.key:is(:disabled,[aria-disabled=true]) .led::after{opacity:0}
 .key.is-spinning svg{animation:key-spin 1s linear infinite}
 @keyframes key-spin{to{transform:rotate(360deg)}}
 .key__lbl{display:inline-flex;align-items:center;gap:8px}
+/* a count printed on a key sits in its own small recessed window, right after the word */
+.key__count{display:inline-block;min-width:calc(var(--rd,2ch) + 8px);padding:3px 4px;margin-left:-2px;border-radius:var(--r-xs);text-align:center;font:700 var(--fs-label)/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink-2);
+ background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-1)}
 /* a key that is one of a choice (radio): the same latched cap as a pressed key */
 .key[aria-checked=true] .key__cap{transform:translateY(1px)}
 .key[aria-checked=true] .key__cap::before{opacity:.2}
-.key[aria-checked=true] .key__cap::after{opacity:.8}
+.key[aria-checked=true] .key__cap::after{opacity:1}
 a.key{text-decoration:none}
 /* segmented key group sharing one socket (surfaces, filters, pagination) */
 .keybed{display:inline-flex;gap:6px;padding:4px;border-radius:calc(var(--r-md) + 7px);background:linear-gradient(180deg,var(--pocket),var(--pocket-hi));box-shadow:var(--el-recess-1)}
@@ -322,7 +343,8 @@ a.key{text-decoration:none}
 .knob .knob__rot,.knob .knob__ptr{transition:transform 90ms linear}
 .knob.is-turning .knob__rot,.knob.is-turning .knob__ptr{transition:none}
 .knob:focus-visible{outline:none}
-.knob:focus-visible .knob__base::after{opacity:1}
+.knob:focus-visible:not([data-pointer]) .knob__base::after{opacity:1}   /* taken by the hand: focus without the ring */
+.knob.is-turning .knob__base::after{opacity:0}
 /* hue encoder: OP-1-like coloured cap (the screen's hue), neutral anodised knurl, white pointer */
 .enc{--k:30px}
 .enc .knob__face{background:repeating-radial-gradient(circle at 50% 50%,rgba(255,255,255,0) 0 1px,rgba(0,0,0,.05) 1px 2px),radial-gradient(circle at 36% 30%,var(--cap2,#a1e4ae),var(--cap1,#00af51) 55%,var(--cap0,#005e28) 100%)}
@@ -334,7 +356,7 @@ a.key{text-decoration:none}
    small overshoot, settle. Only transform animates; the tip is translated, never mirrored, so its highlight
    stays top-left. aria-checked=true = lever up. JS: screen.js (click, Space/Enter, ↑/↓, vertical flick). */
 .tgl{all:unset;box-sizing:border-box;position:relative;display:grid;justify-items:center;align-content:center;gap:6px;min-width:var(--hit);min-height:var(--hit);padding:0 3px;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
-.tgl__lab{font:650 var(--fs-label)/1 var(--font-sans);letter-spacing:var(--track-silk);text-transform:uppercase;color:var(--silk-2);transition:color var(--t-med);white-space:nowrap}
+.tgl__lab{font:650 var(--fs-label)/1.15 var(--font-sans);letter-spacing:var(--track-silk);text-transform:uppercase;color:var(--silk-2);transition:color var(--t-med);white-space:nowrap}
 .tgl[aria-checked=true] .tgl__lab--on,.tgl[aria-checked=false] .tgl__lab--off{color:var(--ink)}
 .tgl__body{position:relative;width:28px;height:28px}
 .tgl__body::before{/* focus ring */content:"";position:absolute;inset:-4px;border-radius:50%;opacity:0;pointer-events:none;box-shadow:0 0 0 2px var(--focus),0 0 12px 3px var(--focus-glow);transition:opacity var(--t-fast)}
@@ -406,7 +428,7 @@ a.key{text-decoration:none}
  background:linear-gradient(90deg,transparent 0 9px,rgb(var(--sh)/calc(.2*var(--sha))) 9px 10px,transparent 10px calc(100% - 10px),rgb(var(--sh)/calc(.2*var(--sha))) calc(100% - 10px) calc(100% - 9px),transparent 0),linear-gradient(180deg,var(--pocket-lo),var(--pocket));
  box-shadow:var(--el-recess-2)}
 .slide__slot::after{/* focus ring */content:"";position:absolute;inset:-4px;border-radius:10px;opacity:0;box-shadow:var(--ring);transition:opacity var(--t-fast);pointer-events:none}
-.slide__tab{position:absolute;top:3px;left:3px;width:24px;height:18px;border-radius:4px;
+.slide__tab{position:absolute;top:3px;left:3px;width:24px;height:18px;border-radius:var(--r-xs);
  background:repeating-linear-gradient(90deg,rgba(0,0,0,.12) 0 1px,rgba(255,255,255,.25) 1px 2px,transparent 2px 4px) 7px 4px/10px 10px no-repeat,linear-gradient(180deg,var(--alu-hi),var(--alu-lo));
  box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 -1px 0 rgba(0,0,0,.25),var(--el-cast-1);transition:transform 240ms var(--e-snap)}
 .slide[aria-checked=true] .slide__tab{transform:translateX(22px)}
@@ -423,7 +445,7 @@ a.key{text-decoration:none}
  background:linear-gradient(180deg,var(--cap-lo) 0%,var(--cap-hi) 26%,var(--cap-hi) 60%,var(--cap-lo) 100%);
  box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo),var(--el-cast-1)}
 .sel select:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
-.sel select:disabled{color:var(--ink-off);cursor:default}
+.sel select:disabled{color:var(--ink-off);opacity:1;cursor:default}
 .sel__chev{position:absolute;right:8px;top:8px;bottom:8px;width:24px;border-radius:5px;pointer-events:none;display:grid;place-items:center;
  background:linear-gradient(180deg,var(--pocket-lo),var(--pocket));box-shadow:inset 1px 1px 2px rgb(var(--sh)/calc(.22*var(--sha))),0 1px 0 var(--bevel-hi)}
 .sel__chev::before{content:"";border:4.5px solid transparent;border-top:5.5px solid var(--ink-2);margin-top:5px}
@@ -453,6 +475,7 @@ a.key{text-decoration:none}
 .field__note{font:400 var(--fs-label)/1.35 var(--font-mono);color:var(--ink-2)}
 .field.is-bad .field__win{box-shadow:var(--el-recess-2),inset 0 0 0 1.5px var(--danger)}
 .field.is-bad .field__note{color:var(--danger);font-weight:700}
+.field.is-bad .field__win::after{box-shadow:0 0 0 2px var(--danger),0 0 10px 2px rgb(198 45 31/.25)}
 /* form fields: a native <select> in a field window */
 .field__win select{appearance:none;-webkit-appearance:none;display:block;width:100%;min-height:36px;padding:0 36px 0 12px;border:0;border-radius:var(--r-md);background:transparent;font:400 var(--fs-data)/1 var(--font-mono);color:var(--ink);cursor:pointer}
 .field__win:has(select)::before{content:"";position:absolute;right:14px;top:50%;margin-top:-2px;border:4.5px solid transparent;border-top:5.5px solid var(--ink-2);pointer-events:none}
@@ -480,7 +503,7 @@ a.key{text-decoration:none}
 .transport__state small{font:500 var(--fs-label)/1.2 var(--font-sans);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* FEEDBACK — printed status line (reserved space), toast on a small glass */
 .msg{display:flex;align-items:center;gap:8px;min-height:20px;min-width:0;font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2);white-space:nowrap}
-.msg>span:last-child{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.msg>span:not(.led){flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .msg[data-s=bad]{color:var(--danger)}
 .msg[data-s=warn]{color:var(--warn-ink)}
 .msg[data-s=ok]{color:var(--ok-ink)}
@@ -518,12 +541,15 @@ a.key{text-decoration:none}
 /* SCREEN — window with chamfer → dark gasket (the only reflection) → black glass → raster
    Colours come from screen.js as per-element custom properties (--s-bg, --s-hi, --s-ink, --s-acc, --s-dim,
    --s-ok, --s-warn, --s-bad, their "-c" channel twins, --s-glow, --s-spill). The fallbacks below = hue 150 at 60%. */
-/* a row of screens shares one height: chins line up, the shorter glass simply has more black */
-.screens{display:flex;flex-wrap:wrap;gap:12px 18px;justify-content:space-between;padding-top:2px;align-items:stretch}
+/* a row of screens shares one height: chins line up, the shorter glass simply has more black.
+   The bank packs from the left with one gap; a MICRO screen is as wide as its windows (never the free space), and
+   only the DeepSeek screen — whose 24 h tariff is elastic — takes the rest of its row, so no row has holes. */
+.screens{display:flex;flex-wrap:wrap;gap:14px 16px;justify-content:flex-start;padding-top:2px;align-items:stretch}
 .screens__key{display:none}
 .screen{--s-bg:rgb(3 9 4);--s-hi:rgb(11 35 17);--s-ink:rgb(226 249 230);--s-ink-c:226 249 230;--s-acc:rgb(23 218 104);--s-acc-c:23 218 104;
  --s-dim:rgb(151 186 157);--s-dim-c:151 186 157;--s-ok:rgb(90 237 133);--s-ok-c:90 237 133;--s-warn:rgb(255 202 98);--s-warn-c:255 202 98;--s-bad:rgb(255 132 120);--s-bad-c:255 132 120;--s-glow:.46;--s-spill:.9;
- position:relative;isolation:isolate;display:flex;flex-direction:column;gap:4px;min-width:0}
+ position:relative;isolation:isolate;display:flex;flex-direction:column;gap:4px;min-width:0;flex:0 0 auto}
+.screens>.screen--ds{flex:1 1 var(--ds-w)}   /* --ds-w = what its chin needs (slide, Заміни, ↻, ТОН) */
 .screen__win{position:relative;border-radius:var(--r-win);padding:3px;background:linear-gradient(135deg,var(--wall-dark),var(--wall-mid) 55%,var(--wall-light));flex:1;display:flex;min-width:0}
 .screen__win::before{/* light spill on the plate: static shadow in the screen's hue; only opacity changes */content:"";position:absolute;inset:4px;z-index:-1;border-radius:12px;pointer-events:none;
  box-shadow:0 0 22px 4px rgb(var(--s-acc-c)/.30),0 10px 40px 6px rgb(var(--s-acc-c)/.16);opacity:calc(var(--spill)*var(--s-spill));transition:opacity .5s linear}
@@ -542,16 +568,25 @@ a.key{text-decoration:none}
 @keyframes boot-flicker{0%{opacity:0}7%{opacity:.85}11%{opacity:.12}19%{opacity:.75}25%{opacity:.35}42%{opacity:1}100%{opacity:1}}
 @keyframes boot-sweep{0%{opacity:0;transform:translateY(-110%)}18%{opacity:1}100%{opacity:0;transform:translateY(320%)}}
 @keyframes boot-spill{0%,30%{opacity:0}100%{opacity:calc(var(--spill)*var(--s-spill))}}
+/* identical twins: screen.js flips .is-boot-b to restart a warm-up that is still running, without a reflow */
+@keyframes boot-flicker-b{0%{opacity:0}7%{opacity:.85}11%{opacity:.12}19%{opacity:.75}25%{opacity:.35}42%{opacity:1}100%{opacity:1}}
+@keyframes boot-sweep-b{0%{opacity:0;transform:translateY(-110%)}18%{opacity:1}100%{opacity:0;transform:translateY(320%)}}
+@keyframes boot-spill-b{0%,30%{opacity:0}100%{opacity:calc(var(--spill)*var(--s-spill))}}
 .screen.is-booting .glass__content{animation:boot-flicker 720ms linear both;animation-delay:calc(var(--i,0)*120ms)}
 .screen.is-booting .glass__sweep{animation:boot-sweep 640ms var(--e-io) both;animation-delay:calc(var(--i,0)*120ms + 70ms)}
 .screen.is-booting .screen__win::before{animation:boot-spill 1100ms ease-out both;animation-delay:calc(var(--i,0)*120ms)}
+.screen.is-booting.is-boot-b .glass__content{animation-name:boot-flicker-b}
+.screen.is-booting.is-boot-b .glass__sweep{animation-name:boot-sweep-b}
+.screen.is-booting.is-boot-b .screen__win::before{animation-name:boot-spill-b}
 .screen__legend{flex:1;display:grid;gap:2px;justify-items:center;text-align:center;margin:0;color:var(--ink-2)}
 .screen__legend>span{white-space:nowrap}
 .screen--wide{width:100%}
 .screen--wide .wins{flex-wrap:wrap}
 .screen--insp .g{max-height:min(72vh,720px);overflow:auto;scrollbar-width:thin}
-/* the DeepSeek head (name, age, mode) never widens its screen: the limits and the tariff set the width, the age gives way */
-.screen--ds .g-head{width:0;min-width:100%}
+/* a head never widens its screen (the windows and the tariff set the width, so a new age text never moves the
+   bank): an age that does not fit beside the name takes the next line, the DeepSeek age gives way to the mode */
+.screens .g-head{width:0;min-width:100%;flex-wrap:wrap;row-gap:3px}
+.screens .screen--ds .g-head{flex-wrap:nowrap}
 /* ON-GLASS PRIMITIVES — emissive text: ink (numbers), acc (labels, segments), dim (secondary) */
 .g{padding:8px 12px 10px;font:400 var(--fs-label)/1.25 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink)}
 .g b,.g strong{font-weight:700}
@@ -577,13 +612,17 @@ a.key{text-decoration:none}
 /* window cells: label + big value, meter, reset + pace / forecast */
 .wins{display:flex}
 .wins--sample .win{width:auto;flex:1 1 120px}
-.win{position:relative;width:var(--win-w);padding:0 10px;min-width:0}
+.win{position:relative;width:var(--win-w);padding:0 10px;min-width:0;display:flex;flex-direction:column}
 .win:first-child{padding-left:0}
 .win:last-child{padding-right:0}
 .win+.win{background:radial-gradient(circle,var(--s-dim) 0 .7px,transparent 1px) left top/2px 4px repeat-y}
-.win__top{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
-.win__l{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.win__v{display:inline-block;min-width:4ch;text-align:right;font:700 var(--fs-value)/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink);text-shadow:0 0 8px rgb(var(--s-ink-c)/calc(var(--s-glow)*.55))}
+/* a long label wraps in its own cell: when it does not fit beside the value it takes the whole line (≤ 3 lines,
+   full text in the cell's title) and the value drops under it, right-aligned. The top row takes the slack, so the
+   meters and readings of every window still sit on one line across the bank. */
+.win__top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:0 6px;flex:1 0 auto;align-content:flex-start}
+.win__l{color:var(--s-acc);text-shadow:0 0 6px rgb(var(--s-acc-c)/var(--s-glow));min-width:0;overflow:hidden;overflow-wrap:anywhere;
+ display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3}
+.win__v{display:inline-block;flex:none;margin-left:auto;min-width:4ch;text-align:right;font:700 var(--fs-value)/1 var(--font-mono);font-variant-numeric:tabular-nums;color:var(--s-ink);text-shadow:0 0 8px rgb(var(--s-ink-c)/calc(var(--s-glow)*.55))}
 .win__row{display:flex;justify-content:space-between;gap:6px;color:var(--s-dim);margin-top:3px;white-space:nowrap}
 .win__row>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pace{display:inline-block;min-width:5ch}
@@ -601,6 +640,11 @@ a.key{text-decoration:none}
  background:repeating-linear-gradient(90deg,var(--seg-c) 0 calc(5% - 1.5px),transparent calc(5% - 1.5px) 5%)}
 .meter__lit>i::after{/* glow = blurred copy of a 9px strip (tiny layer) */content:"";position:absolute;inset:-1px 0;background:inherit;filter:blur(3px);opacity:calc(var(--s-glow)*1.4)}
 .meter.is-zero .meter__lit,.meter.is-zero .meter__lit>i{--q:0}
+/* a tone near red / amber would hide «bad» / «warn»: then the state is drawn as a pattern as well —
+   bad = split segments, warn = hollow segments (screen.js marks the screen with data-near) */
+.screen[data-near=bad] .meter[data-s=bad] .meter__lit>i{-webkit-mask:linear-gradient(180deg,#000 0 3px,transparent 3px 6px,#000 6px);mask:linear-gradient(180deg,#000 0 3px,transparent 3px 6px,#000 6px)}
+.screen[data-near=warn] .meter[data-s=warn] .meter__lit>i{-webkit-mask:linear-gradient(180deg,#000 0 1.5px,transparent 1.5px 7.5px,#000 7.5px),repeating-linear-gradient(90deg,#000 0 1.5px,transparent 1.5px calc(5% - 3px),#000 calc(5% - 3px) 5%);
+ mask:linear-gradient(180deg,#000 0 1.5px,transparent 1.5px 7.5px,#000 7.5px),repeating-linear-gradient(90deg,#000 0 1.5px,transparent 1.5px calc(5% - 3px),#000 calc(5% - 3px) 5%)}
 .meter__pace{position:absolute;top:-4px;bottom:-3px;left:calc(var(--m,0)*100%);width:2px;margin-left:-1px;border-radius:1px;background:var(--s-ink);box-shadow:0 0 4px rgb(var(--s-ink-c)/.7)}
 .meter__pace::before{content:"";position:absolute;left:50%;top:-1px;margin-left:-3px;border:3px solid transparent;border-top:3.5px solid var(--s-ink)}
 .meter__scale{display:block;height:4px;margin-top:3px;opacity:.75;background:linear-gradient(90deg,transparent calc(100% - 1px),var(--s-dim) 0),repeating-linear-gradient(90deg,var(--s-dim) 0 1px,transparent 1px 25%)}
@@ -612,7 +656,8 @@ a.key{text-decoration:none}
 .meter.is-stale .meter__lit>i::after,.meter.is-stale .meter__pace{display:none}
 /* tariff 24 h: favourable = low solid bars in the hue; peak = tall hatched bars in bad (height = price, hatch = peak) */
 .tariff{flex:1;min-width:0;width:196px;display:grid;grid-template-rows:auto 1fr auto;gap:5px}
-.tariff__head{display:flex;justify-content:space-between;gap:8px;white-space:nowrap;color:var(--s-ink)}
+.tariff__head{display:flex;justify-content:space-between;gap:8px;white-space:nowrap;color:var(--s-ink);min-width:0}
+.tariff__head>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .tariff__head b{display:inline-block;min-width:7ch;color:var(--s-acc);text-shadow:0 0 7px rgb(var(--s-acc-c)/var(--s-glow))}
 .tariff__head .g-hint{align-self:center}
 .tariff__dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--s-acc);box-shadow:0 0 6px rgb(var(--s-acc-c)/.9);margin-right:6px;vertical-align:1px}
@@ -717,7 +762,12 @@ a.key{text-decoration:none}
  background:linear-gradient(var(--silk),var(--silk)) left bottom/1.5px 9px no-repeat,repeating-linear-gradient(90deg,var(--rail) 0 1px,transparent 1px 22px) left bottom/100% 4px no-repeat}
 .ruler__cols span:first-child{color:var(--ink)}
 .lanes{display:flex;flex-direction:column;gap:6px}
-.lane{display:grid;grid-template-columns:var(--key-w) minmax(0,1fr);gap:10px;position:relative}
+/* a lane off screen is not styled, laid out or painted (content-visibility); its remembered height keeps the scroll
+   bar honest. overflow-clip-margin lets the raised shadows, LED halos and focus rings of its keys and CUTs paint
+   16px past the lane, so the containment never clips them. */
+.lane{display:grid;grid-template-columns:var(--key-w) minmax(0,1fr);gap:10px;position:relative;
+ content-visibility:auto;contain-intrinsic-block-size:auto 62px;overflow-clip-margin:16px}
+.lane--inherit{contain-intrinsic-block-size:auto 46px}
 /* lane key: printed key-label — index, native role id, LED (green own CUTS · blue agent's own list · off = OMP default) */
 .lane__key{all:unset;box-sizing:border-box;position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;min-height:44px;padding:0 12px;border-radius:var(--r-md);cursor:pointer;
  background:radial-gradient(120% 140% at 72% 92%,var(--cap-hi) 0%,transparent 70%),linear-gradient(150deg,var(--cap-lo),var(--cap-hi) 78%);box-shadow:var(--el-raised-1)}
@@ -746,7 +796,9 @@ a.key{text-decoration:none}
  background:linear-gradient(180deg,var(--seam-dark) 0 1px,var(--seam-light) 1px 2px,transparent 2px) top/100% 2px no-repeat;font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
 .legend .seam--v{height:14px;align-self:center;margin:0 2px}
 .legend .stamp--repl{padding:1px 3px}
-.lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-width:0;max-width:100%}
+.lg>.tag{flex:none}
+.lg--name{white-space:normal;overflow-wrap:anywhere}
 .lg__sw{display:inline-block;width:22px;height:4px;border-radius:2px;background:var(--hb-track);position:relative;overflow:hidden}
 .lg__sw i{position:absolute;inset:0}
 .lg__inh{display:inline-block;width:22px;height:12px;border-radius:3px;outline:1.5px dashed var(--ink-2);outline-offset:-3px}
@@ -775,14 +827,23 @@ a.key{text-decoration:none}
 .cut--free.cut--more .cut__name{padding-right:40px}
 .cut--free.cut--more .cut__meta{padding-right:26px}
 .cut__meta{display:flex;align-items:center;gap:6px;margin-top:4px;min-width:0;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);white-space:nowrap}
-.cut__think{min-width:0;overflow:hidden;text-overflow:ellipsis}
-/* thinking as a small detented selector on the tape (24px hit, 20px visible: the transparent border is part of the target) */
-/* the caret shows under the hand or the focus; the padding stays, so hovering never relayouts the tape */
-select.cut__think{appearance:none;-webkit-appearance:none;height:24px;margin:-2px 0;padding:0 16px 0 5px;border:2px solid transparent;border-radius:6px;background-clip:padding-box;cursor:pointer;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(-45deg,transparent 50%,currentColor 50%),linear-gradient(180deg,rgb(var(--sh)/calc(.07*var(--sha))),rgb(var(--sh)/calc(.03*var(--sha))));background-position:calc(100% - 9px) 7px,calc(100% - 5px) 7px,0 0;background-repeat:no-repeat;box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.14*var(--sha)));padding-right:13px;background-size:0 0,0 0,100% 100%}
+.cut__think{min-width:0;overflow:hidden;text-overflow:ellipsis}   /* drawer CUTs print thinking as plain text */
+/* THINKING KEY on a lane or editor CUT: a small raised tab of the ⋯ key's material (24px hit, 20px visible: the
+   transparent border is part of the target) that opens the shared Thinking menu. Its value never collapses to «h…»
+   (stamps live in the corners, the alias gives way). The caret shows under the hand, the focus or while its menu is
+   open; its room is reserved, so hovering never relayouts the tape. Open / pressed = sunk cap; disabled = etched. */
+button.cut__think{all:unset;box-sizing:border-box;position:relative;flex:none;display:inline-flex;align-items:center;height:24px;margin:-2px 0;padding:0 13px 0 5px;
+ border:2px solid transparent;border-radius:var(--r-sm);background-clip:padding-box;cursor:pointer;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);white-space:nowrap;
+ background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(-45deg,transparent 50%,currentColor 50%),linear-gradient(150deg,rgb(var(--sh)/calc(.04*var(--sha))),rgb(255 255 255/.25));
+ background-position:calc(100% - 9px) 7px,calc(100% - 5px) 7px,0 0;background-size:0 0,0 0,100% 100%;background-repeat:no-repeat;
+ box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
 @media (hover:hover){
- select.cut__think:hover{background-size:4px 4px,4px 4px,100% 100%}
+ button.cut__think:hover:not(:disabled){background-size:4px 4px,4px 4px,100% 100%;color:var(--tape-ink)}
 }
-select.cut__think:focus-visible{background-size:4px 4px,4px 4px,100% 100%;outline:2px solid var(--focus);outline-offset:0}
+button.cut__think:focus-visible{outline:none;background-size:4px 4px,4px 4px,100% 100%;box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo),var(--ring)}
+button.cut__think:is(:active,[aria-expanded=true]):not(:disabled){background-size:4px 4px,4px 4px,100% 100%;color:var(--tape-ink);box-shadow:var(--el-pressed)}
+button.cut__think[aria-expanded=true]:focus-visible{box-shadow:var(--el-pressed),var(--ring)}
+button.cut__think:disabled{cursor:default;color:color-mix(in srgb,var(--tape-ink-2) 72%,var(--tape));background-image:none;box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.1*var(--sha)))}
 /* ⋯ : a permanent small key (24px), never hover-only */
 .cut__more{all:unset;position:absolute;top:4px;right:4px;width:24px;height:22px;border-radius:5px;display:grid;place-items:center;cursor:pointer;color:var(--tape-ink-2);font:700 13px/1 var(--font-mono);
  background:linear-gradient(150deg,rgb(var(--sh)/calc(.04*var(--sha))),rgb(255 255 255/.25));box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
@@ -801,25 +862,26 @@ select.cut__think:focus-visible{background-size:4px 4px,4px 4px,100% 100%;outlin
 .tag[data-p=free]{--pc:var(--pc-free)}
 .cut[data-p=stu] .tag{color:#1a1a1a}
 /* HEALTH glyph (colour is never alone: ● △ ∅ ? ◆) and bar in a gutter at the bottom */
-.hs{flex:none;width:11px;text-align:center;font:700 var(--fs-label)/1 var(--font-mono);transition:opacity var(--t-med)}
+.hs{flex:none;width:11px;text-align:center;font:700 var(--fs-label)/1 var(--font-mono)}
 .hs--ok{color:var(--ok-ink)}
 .hs--low{color:var(--warn-ink)}
 .hs--zero{color:var(--danger)}
 .hs--unk{color:var(--tape-ink-2)}
 .hs--gpu{color:var(--ok-ink)}
 /* HEALTH: unavailable (provider off / expired / DELETED) is neither unknown nor exhausted */
-.hs--off{color:var(--ink-off)}
-.cut__hb{position:absolute;left:13px;right:10px;bottom:5px;height:4px;border-radius:2px;background:var(--hb-track);box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.18*var(--sha)));overflow:hidden;transition:opacity var(--t-med)}
-.cut__hb i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(var(--hp,1));transition:transform var(--t-med) var(--e-out) calc(var(--li,0)*22ms);border-radius:2px}
+.hs--off{color:var(--tape-ink-2)}
+/* HEALTH bar. Switching HEALTH on grows the bars once (~220 ms, transform only); switching it off is instant.
+   Lanes off screen are skipped by content-visibility, so only the visible bars ever animate. */
+.cut__hb{position:absolute;left:13px;right:10px;bottom:5px;height:4px;border-radius:2px;background:var(--hb-track);box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.18*var(--sha)));overflow:hidden}
+.cut__hb i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(var(--hp,1));transition:transform var(--t-med) var(--e-out);border-radius:2px}
 .hb--ok i{background:#2e9a57}
 .hb--low i{background:#e0950f}
 .hb--gpu i{background:repeating-linear-gradient(90deg,#1c7f4e 0 5px,#36b673 5px 7px)}
 .hb--zero i{background:repeating-linear-gradient(90deg,#d23a2a 0 4px,transparent 4px 7px)}
 .hb--unk i{background:radial-gradient(circle,var(--tape-ink-2) 0 1px,transparent 1.3px) left center/6px 4px repeat-x;opacity:.7}
 .hb--off i{background:repeating-linear-gradient(135deg,var(--tape-ink-2) 0 1px,transparent 1px 4px);opacity:.55}
-.health-off .cut__hb{opacity:0}
-.health-off .cut__hb i{transform:scaleX(0);transition-delay:0s}
-.health-off .hs{opacity:0}
+.health-off .cut__hb,.health-off .hs{visibility:hidden}
+.health-off .cut__hb i{transform:scaleX(0);transition:none}
 .health-off .lg--h{display:none}
 .health-off .lg--off{display:inline-flex}
 /* stamps: FREE (kept when HEALTH is off; never for an unknown tariff), DELETED (solid red), заміна ⇄, поточний */
@@ -827,11 +889,25 @@ select.cut__think:focus-visible{background-size:4px 4px,4px 4px,100% 100%;outlin
 .cut .stamp--free{position:absolute;top:5px;right:6px;transform:rotate(-3deg);opacity:.92}
 .cut--more:not(.cut--free) .stamp--free{right:32px}
 .stamp--del{color:#fff;background:var(--del);box-shadow:none}
-.cut .stamp--del{margin-left:auto}
 .stamp--repl{color:var(--warn-ink)}
 .stamp--skip{color:var(--warn-ink)}
+/* the corners carry the stamps, so the meta row never loses thinking to them:
+   DELETED top right (solid, like FREE; the ⋯ key moves to the bottom right, as on a FREE CUT),
+   ⇄ (DeepSeek replacement, glyph only, word in the title) beside it, «пропуск» on the top edge of a numbered CUT */
+.cut .stamp--del{position:absolute;top:5px;right:6px;transform:rotate(-3deg)}
+.cut--deleted .cut__name{padding-right:66px}
+.cut--deleted .cut__more{top:auto;bottom:9px}
+.cut--deleted.cut--more .cut__meta{padding-right:26px}
 .cut__repl{display:none}
-.cut.is-replaced .cut__repl{display:inline-block}
+.cut.is-replaced .cut__repl{display:block;position:absolute;top:5px;right:6px;padding:2px 3px}
+.cut.is-replaced .cut__name{padding-right:26px}
+.cut--more.is-replaced .cut__repl{right:32px}
+.cut--more.is-replaced .cut__name{padding-right:52px}
+.cut--free.is-replaced .cut__repl{right:46px}
+.cut--free.is-replaced .cut__name{padding-right:66px}
+.cut--deleted.is-replaced .cut__repl{right:70px}
+.cut--deleted.is-replaced .cut__name{padding-right:90px}
+.cut .stamp--skip{position:absolute;top:-8px;right:30px;background:var(--tape-hi);z-index:1}
 .cut--deleted{box-shadow:var(--el-raised-1),inset 0 0 0 1.5px var(--danger),inset 0 0 0 3px rgba(198,45,31,.12)}
 /* splice: a short diagonal piece of adhesive tape across each join */
 .cut+.cut::after{content:"";position:absolute;left:-6px;top:-1px;bottom:-1px;width:8px;pointer-events:none;transform:skewX(-14deg);border-radius:1px;
@@ -877,17 +953,18 @@ button.cut__name.cut__name--split{display:flex}
 .ghost.is-up .ghost__sh{opacity:1}
 /* LEADER, SOCKET, FOLD, PATCH */
 /* inherited lane: a thin translucent leader tape with print — not a CUT */
-.leader{position:relative;z-index:1;flex:none;display:flex;align-items:center;gap:10px;height:26px;padding:0 14px 0 12px;border-radius:2px;
+.leader{position:relative;z-index:1;flex:none;display:flex;align-items:center;gap:10px;height:26px;padding:0 14px 0 12px;border-radius:var(--r-xs);
  background:linear-gradient(180deg,var(--leader),transparent 160%);box-shadow:inset 0 0 0 1px var(--leader-edge);font:400 var(--fs-label)/1 var(--font-mono);color:var(--ink-2);white-space:nowrap}
 .leader b{font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
 .leader small{font:400 var(--fs-label)/1 var(--font-mono);color:var(--silk-2)}
 .leader+.key.patch,.leader+.lane__note{margin-left:8px}
 /* socket: recessed jack for a new CUT; stays pinned to the right edge of a long lane */
 .socket{all:unset;box-sizing:border-box;position:sticky;right:0;z-index:1;flex:none;display:inline-flex;align-items:center;gap:8px;height:42px;min-width:44px;padding:0 14px 0 10px;margin-left:8px;border-radius:var(--r-md);cursor:pointer;
- background:linear-gradient(180deg,var(--pocket-lo),var(--pocket));box-shadow:var(--el-recess-2),-10px 0 12px -4px var(--groove),14px 0 0 2px var(--groove);font:650 var(--fs-label)/1 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
+ background:linear-gradient(180deg,var(--pocket-lo),var(--pocket));font:650 var(--fs-label)/1 var(--font-sans);
+ box-shadow:var(--el-recess-2),-10px 0 12px -4px var(--groove),14px -8px 0 4px var(--groove-hi),14px 8px 0 4px var(--groove);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
 .lane--inherit .socket{height:34px}
 .lane__label{display:grid;gap:2px;min-width:0}
-.lane__sub{font:400 var(--fs-hint)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane__sub{font:400 var(--fs-label)/1.1 var(--font-mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lane__key[aria-current=true]{box-shadow:var(--el-pressed),inset 0 1px 0 var(--bevel-hi)}
 .lane__key:focus-visible,.socket:focus-visible,.cut__more:focus-visible,button.cut__name:focus-visible,button.cut:focus-visible,.tray__title:focus-visible,.leader:focus-visible{outline:none}
 .lane__tools{display:flex;gap:6px;margin-left:auto;flex:none;padding-left:10px}
@@ -932,7 +1009,7 @@ button.cut__name.cut__name--split{display:flex}
    overwritten by a temporarily small window. During a drag out of it, .is-retracted slides it down to its lip.
    The lip carries the transport permanently (Undo / Redo / state / Зберегти). JS writes: port left/width/height,
    tray height, spacer height — one write per frame while resizing. */
-.tray-port{--lip:46px;position:fixed;z-index:40;left:18px;width:calc(100% - 36px);bottom:0;height:380px;pointer-events:none;overflow:hidden}
+.tray-port{--lip:46px;position:fixed;z-index:40;left:18px;width:calc(100% - 36px);bottom:0;height:380px;pointer-events:none;overflow:clip}   /* clip: not a scroll container, focus can never scroll a closed drawer up */
 .tray{position:absolute;left:0;right:0;bottom:0;height:340px;pointer-events:auto;display:flex;flex-direction:column;border-radius:var(--r-xl) var(--r-xl) 0 0;
  transform:translateY(calc(100% - var(--lip)));transition:transform var(--t-slow) var(--e-out);will-change:transform;
  background:var(--grain),linear-gradient(180deg,var(--body-hi),var(--body) 30%,var(--body-lo));
@@ -949,11 +1026,13 @@ button.cut__name.cut__name--split{display:flex}
 .tray__grip::before{content:"";width:64px;height:6px;border-radius:3px;background:repeating-linear-gradient(90deg,rgb(var(--sh)/calc(.28*var(--sha))) 0 1px,var(--bevel-hi) 1px 2px,transparent 2px 4px);box-shadow:inset 0 1px 1px rgb(var(--sh)/calc(.18*var(--sha)))}
 .tray__grip::after{/* 44px tall touch target over a 14px visual */content:"";position:absolute;left:0;right:0;top:-6px;height:30px}
 .tray__grip:focus-visible::before{box-shadow:var(--ring)}
-.tray__pull{position:absolute;left:50%;top:22px;margin-left:-44px;width:88px;height:12px;border-radius:6px;pointer-events:none;background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-2)}
-.tray__title{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;min-width:0;height:100%;border-radius:8px}
+.tray__pull{position:absolute;left:50%;top:22px;margin-left:-44px;width:88px;height:12px;border-radius:var(--r-sm);pointer-events:none;background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi));box-shadow:var(--el-recess-2)}
+/* the title reaches up to the centred grip (120px wide); its hint gives way only there */
+.tray__title{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;min-width:0;max-width:calc(50% - 72px);height:100%;border-radius:var(--r-md)}
 .tray__title:focus-visible{box-shadow:inset 0 0 0 2px var(--focus),inset 0 0 10px var(--focus-glow)}
 .tray__count{flex:none;font:700 var(--fs-label)/1 var(--font-mono);color:var(--ink-2)}
-.tray__hint{font:500 var(--fs-label)/1.2 var(--font-sans);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(50% - 320px)}
+.tray__title>.silk{flex:none}
+.tray__hint{flex:0 1 auto;min-width:0;font:500 var(--fs-label)/1.2 var(--font-sans);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tray__chev{flex:none;width:30px;height:30px;display:grid;place-items:center;transition:transform var(--t-slow) var(--e-out);pointer-events:none}
 .tray__chev::before{content:"";border:5px solid transparent;border-bottom:6px solid var(--ink-2);margin-bottom:6px}
 .tray.is-open .tray__chev{transform:rotate(180deg)}
@@ -976,7 +1055,7 @@ button.cut__name.cut__name--split{display:flex}
 .tray__filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .tray__filters .search{margin-left:auto;width:340px}
 .tray__grid{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cut-w),1fr));gap:10px 8px;align-content:start;padding:8px 8px 10px;border-radius:var(--r-lg);
- background:var(--grain),linear-gradient(180deg,var(--pocket-hi),var(--pocket));box-shadow:var(--el-bay);scrollbar-width:thin;overscroll-behavior:contain}
+ background:var(--grain),linear-gradient(180deg,var(--pocket-hi),var(--pocket));box-shadow:var(--el-bay);scrollbar-width:thin;scrollbar-color:var(--scroll-thumb) var(--pocket);overscroll-behavior:contain}
 .tray__grid .cut{margin:0;width:auto}
 .tray__grid.is-empty{align-content:center}
 .tray__foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -1012,6 +1091,7 @@ button.cut__name.cut__name--split{display:flex}
 .tray__grid .cut+.cut::after{display:none}
 .tray__grid .socket{position:relative;right:auto;margin:0;height:var(--cut-h);justify-content:center;box-shadow:var(--el-recess-2)}
 .tray__foot .key{flex:none}
+.tray__foot .seam--v{height:30px;align-self:center;margin:0 2px}   /* sets a destructive key (the last one) apart */
 
 /* ---------- 8 · MENUS AND FORMS — menu trays, form / confirm / model-data faces of the drawer ---------- */
 /* MENU TRAY — a small plate that slides out of its key, keys in a recessed bed (⋯, CUT tools, quick pick) */
@@ -1037,6 +1117,8 @@ button.cut__name.cut__name--split{display:flex}
 .menu__row .sel{width:100%}
 .menu__row .sel>.silk{width:72px}
 .menu .key--menu .key__cap{gap:9px}
+/* the chosen item of a radio menu (Thinking) stays latched down in its bed */
+.menu .key--menu[aria-checked=true] .key__cap{background:linear-gradient(180deg,var(--pocket-lo),var(--pocket-hi) 80%);box-shadow:inset 0 1px 0 rgb(var(--sh)/calc(.08*var(--sha)))}
 .menu__search{display:grid;grid-template-columns:minmax(0,1fr) 168px;gap:8px;padding:0 2px 6px}
 .menu__search .search{width:auto}
 .menu__search .sel>.silk{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -1050,21 +1132,24 @@ button.cut__name.cut__name--split{display:flex}
 .dock__menu>summary::-webkit-details-marker{display:none}
 .dock__menu[open]>summary .key__cap{transform:translateY(1px)}
 .dock__menu[open]>summary .key__cap::before{opacity:.2}
-.dock__menu[open]>summary .key__cap::after{opacity:.8}
+.dock__menu[open]>summary .key__cap::after{opacity:1}
 .dock__menu>.menu{top:calc(100% + 8px);left:0;width:240px}
 /* menus: CUT tools and the quick pick open at their key, fixed to the window (a sheet on phones) */
 [data-picker].menu{position:fixed}
-/* forms in the drawer: recessed windows, keys at the foot, the device body inert behind */
+/* forms in the drawer: recessed windows, keys at the foot, the device body inert behind.
+   Every dialog is one measured column: text, fields and the key row share its left and right edges
+   («Скасувати» first, the action last, flush with the right edge of the text). */
 .tray--form .tray__lip{gap:12px}
 .tray--form .tray__title{flex:1}
 .tray--form .tray__transport[inert]{pointer-events:none}
 .tray__body--form{display:block;overflow:auto;overscroll-behavior:contain;padding:8px 18px 18px}
-.tray__form{display:grid;gap:12px;max-width:760px;align-content:start}
-.tray__form--wide{max-width:none}
-.tray__form>.print{margin:0;max-width:78ch}
+.tray__form{display:grid;gap:12px;width:100%;max-width:640px;align-content:start}
+.tray__form--wide{max-width:1080px}
+.tray__form>.print{margin:0}
+.tray__form .form--one .field{max-width:none}
 .tray__form .form{align-items:start}
 .tray__form .tray__foot{grid-column:1/-1;padding-top:6px;justify-content:flex-end}
-.tray__form .tray__foot .print{max-width:60ch}
+.tray__form .tray__foot .print{min-width:0}
 .tray__grow{flex:1}
 .tray__form .msg{white-space:normal;min-height:24px}
 /* the provider form: name · ID / address · format / authorisation · key · term / list · model IDs */
@@ -1118,7 +1203,7 @@ button.cut__name.cut__name--split{display:flex}
 .coll__main{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
 .coll__layout>.screen--insp{position:sticky;top:12px}
 .coll__ledger{display:grid;gap:4px;min-width:0}
-.coll__lhead,.coll__row{grid-template-columns:auto minmax(0,1fr) 72px 150px 132px}
+.coll__lhead,.coll__row{grid-template-columns:auto minmax(0,1fr) 80px 150px 132px}
 .coll__lhead{display:grid;gap:12px;padding:0 14px 0 14px;font:650 var(--fs-label)/1.2 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silk)}
 .coll__lhead>span:first-child{grid-column:1/3;padding-left:20px}
 .coll__lhead>span:not(:first-child){text-align:right}
@@ -1159,7 +1244,7 @@ button.cut__name.cut__name--split{display:flex}
 .hist__bar{height:9px}
 .hist__val{font:700 var(--fs-data)/1 var(--font-mono);color:var(--ink)}
 .hist__val small{font-weight:400;color:var(--ink-2)}
-.hist__detail{justify-self:end;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.hist__detail{justify-self:end;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-size:var(--fs-label)}
 .hist__change{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:baseline;min-height:38px;padding:8px 12px;font:400 var(--fs-label)/1.3 var(--font-mono);color:var(--ink-2)}
 .hist__change b{font:700 var(--fs-data)/1.2 var(--font-mono);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hist__sign{font:700 var(--fs-data)/1 var(--font-mono);color:var(--danger);width:1ch}
@@ -1177,12 +1262,10 @@ button.cut__name.cut__name--split{display:flex}
  :root{--win-w:122px;--pad:18px}
 }
 @media (max-width:1300px){
- :root{--win-w:118px;--cut-w:168px}
+ :root{--win-w:118px;--cut-w:168px;--ds-w:356px}
  .plate{gap:12px}
  .transport__state{width:112px}
  .transport__state small{display:none}
- .screens{column-gap:12px}
- .tariff{width:164px}
  .tariff__head .g-hint{display:none}
  .screen--ds .screen__chin{gap:6px}
  .screen--ds .enc-wrap{gap:6px}
@@ -1204,6 +1287,14 @@ button.cut__name.cut__name--split{display:flex}
  #new-provider .field{grid-column:span 1}
  #new-provider [data-field=url],#new-provider [data-field=models]{grid-column:1/-1}
 }
+@media (min-width:761px) and (max-width:980px){
+ /* an editor's lip in two rows: title · transport · × / tabs or scope — the × and the title always fit */
+ .tray--editor .tray__lip{display:grid;grid-template-columns:minmax(0,1fr) auto auto;grid-template-rows:var(--lip) auto;grid-template-areas:"title tp close" "tabs tabs tabs";height:auto;gap:0 10px;padding-bottom:8px}
+ .tray--editor .tray__title,.tray--editor .tray__armed{grid-area:title;max-width:none}
+ .tray--editor .tray__tabs{grid-area:tabs;justify-self:start;margin:0}
+ .tray--editor .tray__transport{grid-area:tp;margin:0}
+ .tray--editor .tray__close{grid-area:close;align-self:center}
+}
 @media (max-width:760px){
  :root{--pad:12px;--key-w:100%;--cut-w:100%;--win-w:auto}
  .desk{background:var(--table)}
@@ -1223,12 +1314,17 @@ button.cut__name.cut__name--split{display:flex}
  .dock .sel{width:100%;flex:1 1 100%;min-width:0}
  .dock__ctx{display:none}
  .dock__msg{flex-basis:100%;order:5}
+ /* the reserved status row prints the context note while there is no message: no hollow pocket */
+ .dock:has(.dock__msg .msg>span:only-child:empty) .dock__msg{flex:0 0 0;min-width:0;margin-right:-10px}
+ .dock:has(.dock__msg .msg>span:only-child:empty) .dock__ctx{display:block;order:6;flex:1 1 100%;min-width:0;min-height:32px;text-align:left}
+ .dock__msg .msg{min-height:32px}   /* the same reserved height as the two-line note: a message never moves the pult */
  .strip>.status .status__row--sub .status__note{display:inline}
  .sel>.silk{width:74px}
  .list__row.coll__row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:6px}
  .screens{flex-direction:column;align-items:stretch}
- .screen{width:100%}
+ .screen,.screens>.screen--ds{width:100%;flex:none}
  .wins{display:grid;grid-template-columns:1fr 1fr;gap:10px 0}
+ .screen--ds .wins{grid-template-columns:minmax(0,1fr)}   /* the DeepSeek 5 h window uses the whole glass */
  .win,.win:first-child,.win:last-child{width:auto;padding:0 10px}
  .win:nth-child(odd){padding-left:0;background:none}
  .g-split{flex-direction:column}
@@ -1243,7 +1339,8 @@ button.cut__name.cut__name--split{display:flex}
  .deck{padding:8px 8px 0}
  .deck__tools .search{width:100%;margin:0}
  .ruler{display:none}
- .lane{grid-template-columns:minmax(0,1fr);gap:6px}
+ .lane{grid-template-columns:minmax(0,1fr);gap:6px;contain-intrinsic-block-size:auto 240px}
+ .lane--inherit{contain-intrinsic-block-size:auto 110px}
  .lane__groove{flex-direction:column;align-items:stretch;padding:6px;gap:6px;overflow:visible}
  .lane__groove::before{left:50%;right:auto;top:8px;bottom:8px;width:1px;height:auto;background:repeating-linear-gradient(180deg,var(--rail) 0 5px,transparent 5px 9px)}
  /* phone CUT: 56px base; a long name wraps and grows the CUT only when needed */
@@ -1283,16 +1380,18 @@ button.cut__name.cut__name--split{display:flex}
  .tray__tabs{grid-area:tabs;align-self:center}
  .tray--editor .tray__transport{justify-content:flex-end;gap:6px}
  .tray__foot .print{flex:1 1 100%}
- .tray__filters .search{width:100%;margin:0;grid-column:1/-1}
  .tray__hint--target{display:inline;max-width:none}
- /* phone drawer: filters in two compact rows; the whole body scrolls, so results are never squeezed out */
- .tray__body{overflow:auto;overscroll-behavior:contain;padding:4px 10px 10px}
+ /* phone drawer: the filters are two compact rows in reading order (Провайдер · FREE CUTS / Запас · пошук);
+    the results take the rest of the drawer and scroll on their own, so CUTS are visible the moment it opens */
+ .tray__body{overflow:auto;overscroll-behavior:contain;padding:4px 10px 10px;gap:8px}
  .tray__body--ed{padding-top:6px}
- .tray__filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+ .tray__filters{display:flex;flex-wrap:wrap;gap:6px}
+ .tray__filters>:nth-child(1){flex:1 1 50%;min-width:0}
+ .tray__filters>:nth-child(2){flex:none}
+ .tray__filters>:nth-child(3){flex:1 1 40%;min-width:0}
+ .tray__filters>:nth-child(4),.tray__filters .search{flex:1 1 50%;width:auto;min-width:0;margin:0}
  .tray__filters .sel>.silk{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
- .tray__filters>.key{justify-self:stretch}
- .tray__filters>.key .key__cap{width:100%}
- .tray__grid{flex:none;overflow:visible;min-height:120px}
+ .tray__grid{flex:1 1 auto;min-height:132px;overflow:auto}
  /* editors and forms: a third lip row for the tabs or the scope; the body scrolls */
  .tray__close{grid-area:close;align-self:center}
  .tray--editor .tray__tabs{width:100%;margin:0;padding-bottom:6px}
@@ -1307,6 +1406,7 @@ button.cut__name.cut__name--split{display:flex}
  .tray__body--form{padding:6px 10px 12px}
  #new-provider{grid-template-columns:minmax(0,1fr)}
  .tray__form .tray__foot{justify-content:stretch}
+ .tray__form .tray__foot :is(.tray__grow,.seam--v){display:none}
  .tray__form .tray__foot .key{flex:1 1 auto}
  .tray__form .tray__foot .key__cap{width:100%}
  .menu--tools{width:auto}
@@ -1342,7 +1442,7 @@ button.cut__name.cut__name--split{display:flex}
  .hist__ctl{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
  .hist__grp{flex-wrap:wrap}
  .hist__grp .keybed{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}
- .hist__grp .key__cap{width:100%;padding:0 4px}
+ .hist__grp .key__cap{width:100%;min-width:0;padding:0 6px}
  .hist__period{justify-items:start;text-align:left}
  .hist__head .keybed{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
  .hist__head .key__cap{width:100%}
@@ -1352,8 +1452,13 @@ button.cut__name.cut__name--split{display:flex}
  .hist__bar{grid-column:1/-1;grid-row:2}
  .hist__detail{grid-column:1/-1;justify-self:start}
 }
+@media (max-width:420px){
+ /* Історія signal keys: a 2 × 2 bed, so a cap never shrinks below its word and its LED */
+ .hist__grp .keybed{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 @media (max-width:760px) and (pointer:coarse){
  .key__cap{min-height:38px}
+ button.cut__think{height:32px;border-width:6px 2px;margin:-6px 0}   /* a bigger target, the same 20px tab */
  .key--sq .key__cap{width:40px;height:38px}
 }
 

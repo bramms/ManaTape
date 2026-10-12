@@ -78,6 +78,9 @@ const ManaScreen=(()=>{
   v['--s-glow']=String(p.glow);v['--s-spill']=String(p.spill);return v;
  }
  const capVars=p=>({'--cap0':css(p.cap0),'--cap1':css(p.cap1),'--cap2':css(p.cap2)});
+ /* a tone this close to a status hue makes that status read as ordinary accent: the CSS then adds a pattern */
+ const hueGap=(a,b)=>{const d=Math.abs(wrapHue(a)-wrapHue(b))%360;return Math.min(d,360-d);};
+ function nearStatus(hue){return hueGap(hue,STATUS_HUE.bad)<30?'bad':hueGap(hue,STATUS_HUE.warn)<25?'warn':'';}
 
  /* ---------- persistence + migration ---------- */
  /* v2: {v:2, brightness:0–100, screens:{[id]:{hue:0–359}}}
@@ -150,7 +153,7 @@ const ManaScreen=(()=>{
  const hueText=v=>String(wrapHue(v)).padStart(3,'0')+'°';
 
  const pure={KEY,VERSION,DEFAULT_BRIGHTNESS,DEFAULT_HUE,STATUS_HUE,THRESHOLD,
-  oklch,toOklch,contrast,palette,screenVars,capVars,wrapHue,clampBrightness,
+  oklch,toOklch,contrast,palette,screenVars,capVars,nearStatus,wrapHue,clampBrightness,
   migrate,normalise,legacyHue,legacyBrightness,brightnessKnobHTML,hueEncoderHTML,hueText};
  if(typeof document==='undefined')return pure;
 
@@ -173,6 +176,7 @@ const ManaScreen=(()=>{
   const h=hueOf(id,el.dataset.screenDefault),k=h+'|'+state.brightness;
   if(el.__manaScreen===k)return;el.__manaScreen=k;
   const v=screenVars(palette(h,state.brightness));for(const n in v)el.style.setProperty(n,v[n]);
+  const near=nearStatus(h);if((el.dataset.near||'')!==near){if(near)el.dataset.near=near;else delete el.dataset.near;}
  }
  function renderHue(k){
   const id=k.dataset.screenHue,h=hueOf(id,k.dataset.screenDefault);
@@ -190,7 +194,7 @@ const ManaScreen=(()=>{
  /* call after every render that may have created screens or knobs */
  function sync(scope=document){
   for(const el of scope.querySelectorAll('[data-screen]'))paint(el);
-  for(const k of scope.querySelectorAll('[data-knob]'))renderKnob(k);
+  for(const k of scope.querySelectorAll('[data-knob]')){renderKnob(k);armWheel(k);}
  }
  const value=k=>k.dataset.knob==='hue'?hueOf(k.dataset.screenHue,k.dataset.screenDefault):state.brightness;
  function setValue(k,v){
@@ -222,9 +226,11 @@ const ManaScreen=(()=>{
   try{if(x.k.hasPointerCapture(x.id))x.k.releasePointerCapture(x.id);}catch{}
   if(!cancel&&value(x.k)!==x.v0)persist();
  }
+ /* a knob taken by the hand gets the focus (arrows keep working) but no ring: the ring is for the keyboard.
+    data-pointer marks that focus; the next key on the knob or a blur clears it. */
  document.addEventListener('pointerdown',e=>{
   const k=e.target.closest&&e.target.closest('[data-knob]');if(!k||g||e.button!==0)return;
-  e.preventDefault();k.focus({preventScroll:true});
+  e.preventDefault();k.dataset.pointer='';k.focus({preventScroll:true,focusVisible:false});
   try{k.setPointerCapture(e.pointerId);}catch{}
   g={k,id:e.pointerId,y0:e.clientY,v0:value(k),next:null,raf:0};k.classList.add('is-turning');
   root.dataset.displayTuning='true';   /* app.js interactionBusy(): no background re-render under the hand */
@@ -241,6 +247,7 @@ const ManaScreen=(()=>{
  document.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&g){e.preventDefault();e.stopPropagation();endGesture(true);return;}
   const k=e.target.closest&&e.target.closest('[data-knob]');if(!k)return;
+  if(e.key!=='Shift')delete k.dataset.pointer;
   const hue=k.dataset.knob==='hue',v=value(k),step=e.shiftKey?10:1;let n=null;
   if(e.key==='ArrowUp'||e.key==='ArrowRight')n=v+step;else if(e.key==='ArrowDown'||e.key==='ArrowLeft')n=v-step;
   else if(e.key==='PageUp')n=v+10;else if(e.key==='PageDown')n=v-10;
@@ -248,35 +255,46 @@ const ManaScreen=(()=>{
   if(n===null)return;
   e.preventDefault();if(setValue(k,n))persistSoon();
  },true);
+ document.addEventListener('focusout',e=>{const k=e.target.closest&&e.target.closest('[data-knob]');if(k)delete k.dataset.pointer;});
+ /* wheel: a non-passive listener on the knobs themselves, never on document, so scrolling the page stays on the
+    compositor. sync() arms every knob after a render; pointerover is the backstop for a knob it has not seen. */
  let wheel=null;
- document.addEventListener('wheel',e=>{
-  const k=e.target.closest&&e.target.closest('[data-knob]');if(!k)return;
+ function onWheel(e){
+  const k=e.currentTarget;
   e.preventDefault();
   const d=Math.sign(-e.deltaY||e.deltaX)*(e.shiftKey?10:(k.dataset.knob==='hue'?3:2));if(!d)return;
   if(!wheel||wheel.k!==k)wheel={k,v:value(k),raf:0};
   wheel.v+=d;
   if(!wheel.raf)wheel.raf=raf(()=>{const w=wheel;if(!w)return;w.raf=0;if(setValue(w.k,w.v))persistSoon();w.v=value(w.k);});
- },{passive:false});
+ }
+ function armWheel(k){if(k.__manaWheel)return;k.__manaWheel=true;k.addEventListener('wheel',onWheel,{passive:false});}
+ document.addEventListener('pointerover',e=>{const k=e.target.closest&&e.target.closest('[data-knob]');if(k)armWheel(k);},{passive:true});
  document.addEventListener('dblclick',e=>{const k=e.target.closest&&e.target.closest('[data-knob]');if(k&&setValue(k,defaultOf(k)))persist();});
  addEventListener('storage',e=>{if(e.key!==KEY)return;endGesture(true);state=readStore();for(const el of document.querySelectorAll('[data-screen]'))el.__manaScreen=null;sync();});
 
  /* ---------- analog toggle (.tgl, role=switch) ----------
     click / Space / Enter flip it; ↑ = on, ↓ = off; a vertical flick of 8px flips it too.
-    The lever animates first; 'mana:toggle' {checked, settled:Promise} fires at once, so a theme switch can wait for the
-    lever to sit in its stop before cross-fading (no half-flipped lever in the View Transition snapshot). */
+    The lever animates first; 'mana:toggle' {checked, contact:Promise, settled:Promise} fires at once. contact resolves
+    when the lever strikes its stop (≈ 80% of the 210 ms throw, only the overshoot is left), settled when it rests,
+    so a theme switch can start its cross-fade at the strike, never with a half-flipped lever in the snapshot.
+    The two directions are different keyframes, so a reverse flip restarts the throw without a forced reflow. */
+ const STRIKE=170;
  function toggle(el,on){
   const want=String(!!on);
-  if(!el||el.getAttribute('aria-checked')===want)return Promise.resolve(false);
-  el.setAttribute('aria-checked',want);el.classList.remove('is-flip');
-  if(reduced())return Promise.resolve(true);
-  void el.offsetWidth;el.classList.add('is-flip');
-  return new Promise(res=>{
-   let t=0;const done=()=>{clearTimeout(t);el.removeEventListener('animationend',end);el.classList.remove('is-flip');res(true);};
+  if(!el||el.getAttribute('aria-checked')===want)return Object.assign(Promise.resolve(false),{contact:Promise.resolve(false)});
+  el.setAttribute('aria-checked',want);
+  if(reduced()){el.classList.remove('is-flip');return Object.assign(Promise.resolve(true),{contact:Promise.resolve(true)});}
+  clearTimeout(el.__manaFlip);el.removeEventListener('animationend',el.__manaFlipEnd||(()=>{}));
+  el.classList.add('is-flip');
+  const contact=new Promise(res=>setTimeout(()=>res(true),STRIKE));
+  const settled=new Promise(res=>{
+   const done=()=>{clearTimeout(el.__manaFlip);el.removeEventListener('animationend',end);el.classList.remove('is-flip');res(true);};
    const end=ev=>{if(ev.target.classList&&ev.target.classList.contains('tgl__tip'))done();};
-   el.addEventListener('animationend',end);t=setTimeout(done,320);
+   el.__manaFlipEnd=end;el.addEventListener('animationend',end);el.__manaFlip=setTimeout(done,320);
   });
+  return Object.assign(settled,{contact});
  }
- function flip(el,on){const settled=toggle(el,on);el.dispatchEvent(new CustomEvent('mana:toggle',{bubbles:true,detail:{checked:!!on,settled}}));return settled;}
+ function flip(el,on){const settled=toggle(el,on);el.dispatchEvent(new CustomEvent('mana:toggle',{bubbles:true,detail:{checked:!!on,settled,contact:settled.contact}}));return settled;}
  let tg=null,swallowClick=null;
  document.addEventListener('pointerdown',e=>{const t=e.target.closest&&e.target.closest('.tgl');if(!t||e.button!==0||t.disabled)return;tg={t,id:e.pointerId,y:e.clientY,moved:false};try{t.setPointerCapture(e.pointerId);}catch{}});
  document.addEventListener('pointermove',e=>{if(!tg||e.pointerId!==tg.id)return;const dy=e.clientY-tg.y;if(Math.abs(dy)>=8){tg.moved=true;tg.y=e.clientY;const on=dy<0;if(tg.t.getAttribute('aria-checked')!==String(on))flip(tg.t,on);}});
@@ -288,16 +306,19 @@ const ManaScreen=(()=>{
  },true);
  document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.closest('.tgl');if(!t||(e.key!=='ArrowUp'&&e.key!=='ArrowDown'))return;e.preventDefault();const on=e.key==='ArrowUp';if(t.getAttribute('aria-checked')!==String(on))flip(t,on);});
 
- /* ---------- power-on of the glass (light switch, first paint) ---------- */
+ /* ---------- power-on of the glass (light switch, first paint) ----------
+    No forced reflow: a screen still warming up gets the other twin of each boot keyframe (.is-boot-b flips), and a
+    changed animation-name restarts the animation at the next style update. Theme switches call this inside the
+    View Transition update, so the warm-up costs no style or layout pass of its own. */
+ let bootParity=false,bootOff=0,bootFill=0;
  function boot(scope=document){
   if(reduced())return;
   const screens=[...scope.querySelectorAll('.screen')],meters=[...scope.querySelectorAll('.meter:not(.is-unknown)')];
-  screens.forEach((s,i)=>{s.style.setProperty('--i',i);s.classList.remove('is-booting');});
+  bootParity=!bootParity;clearTimeout(bootOff);clearTimeout(bootFill);
+  screens.forEach((s,i)=>{s.style.setProperty('--i',i);s.classList.toggle('is-boot-b',bootParity);s.classList.add('is-booting');});
   for(const m of meters)m.classList.add('is-zero');
-  void root.offsetWidth;
-  for(const s of screens)s.classList.add('is-booting');
-  setTimeout(()=>{for(const m of meters)m.classList.remove('is-zero');},260);
-  setTimeout(()=>{for(const s of screens)s.classList.remove('is-booting');},1800);
+  bootFill=setTimeout(()=>{for(const m of meters)m.classList.remove('is-zero');},260);
+  bootOff=setTimeout(()=>{for(const s of screens)s.classList.remove('is-booting','is-boot-b');},1800);
  }
 
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>sync());else sync();
@@ -307,4 +328,6 @@ const ManaScreen=(()=>{
   setHue(id,h){const k={dataset:{knob:'hue',screenHue:id}};if(setValue(k,h))persist();},
   setBrightness(v){if(setValue({dataset:{knob:'brightness'}},v))persist();}};
 })();
+/* a top-level const is not a property of window: theme.js and the app's error screen call window.ManaScreen */
+if(typeof window!=='undefined')window.ManaScreen=ManaScreen;
 if(typeof module!=='undefined')module.exports=ManaScreen;
