@@ -264,7 +264,35 @@ def commandcode_view(reports, external=None, now=None):
     else:
         limits[at] = merged
     reports[n] = {**reports[n], 'limits': limits}
+    if cap:
+        reports = same_plan_months(reports, n, cap)
     return reports
+
+
+def plan_signature(report):
+    """A CommandCode plan is identified by its 5 h and weekly caps in plan units (e.g. 14 and 35)."""
+    caps = {str(l.get('id', '')).rsplit(':', 1)[-1]: (l.get('balance') or {}).get('limit') for l in report.get('limits') or []}
+    return (caps.get('5h'), caps.get('7d')) if finite_number(caps.get('5h')) and finite_number(caps.get('7d')) else None
+
+
+def same_plan_months(reports, n, cap):
+    """Accounts on the same plan as the one CodexBar measured share its monthly cap: their % is the balance over that
+    cap, marked as an estimate. Reset times stay unknown — they are per account."""
+    plan = plan_signature(reports[n])
+    if plan is None:
+        return reports
+    out = list(reports)
+    for m, report in enumerate(reports):
+        if m == n or report.get('provider') != 'commandcode' or plan_signature(report) != plan:
+            continue
+        limits = list(report['limits'])
+        for i, limit in enumerate(limits):
+            balance = limit.get('balance') or {}
+            if limit.get('window') == 'Місяць' and not finite_number(limit.get('remaining')) and finite_number(balance.get('remaining')):
+                limits[i] = {**limit, 'remaining': round(max(0, min(100, balance['remaining'] * 100 / cap)), 1),
+                             'balance': {**balance, 'limit': cap, 'estimated': True}, 'planEstimate': True}
+        out[m] = {**report, 'limits': limits}
+    return out
 
 
 class Insights:

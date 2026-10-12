@@ -633,8 +633,17 @@ unrelated: {keep: true}
         self.assertEqual(month['resets'], (now - 60) * 1000 + 7e8)
         self.assertEqual(month['balance'], {'remaining': 3.68, 'unit': 'credits', 'limit': 70, 'estimated': True})
         other = reports[1]['limits'][2]
-        self.assertEqual((other['label'], other['window'], other['remaining'], other['resets']), ('Місяць', 'Місяць', None, None))
-        self.assertEqual(other['balance'], {'remaining': 70, 'unit': 'credits'}, 'no cap is invented for an unmeasured account')
+        # Same plan (5 h 14, week 35): the measured account's monthly cap applies, as an estimate, without a reset time.
+        self.assertEqual((other['label'], other['window'], other['remaining'], other['resets'], other['planEstimate']),
+                         ('Місяць', 'Місяць', 100.0, None, True))
+        self.assertEqual(other['balance'], {'remaining': 70, 'unit': 'credits', 'limit': 70, 'estimated': True})
+        bigger = json.loads(json.dumps(fresh))
+        for limit in bigger['limits']:
+            if limit.get('balance') and 'limit' in limit['balance']:
+                limit['balance']['limit'] *= 2
+        other = commandcode_view([used, bigger], self.codexbar(now - 60), now)[1]['limits'][2]
+        self.assertEqual((other['remaining'], other['balance']), (None, {'remaining': 70, 'unit': 'credits'}),
+                         'a different plan gets no borrowed cap')
         self.assertNotIn('Credit balance', json.dumps(reports, ensure_ascii=False))
         self.assertEqual([l['remaining'] for l in reports[0]['limits'][:2]], [95.1, 77.5], 'OMP keeps its own 5 h and week')
         # Within ±0.2 pt on both windows still matches; the 5-hour window alone does not.
@@ -664,7 +673,7 @@ unrelated: {keep: true}
         self.app.insights.data['usage'] = {'at': now, 'reports': native, 'error': ''}
         reports = self.app.insights.snapshot()['usage']['reports']
         self.assertEqual([r['provider'] for r in reports], ['commandcode', 'commandcode'], 'CodexBar adds no third account')
-        self.assertEqual([r['limits'][2]['remaining'] for r in reports], [5.3, None])
+        self.assertEqual([r['limits'][2]['remaining'] for r in reports], [5.3, 100.0], 'same plan: the second month is an estimate')
         self.assertEqual(self.app.insights.data['usage']['reports'][0]['limits'][2]['label'], 'Credit balance', 'stored data stays native')
         self.app.insights.data['usage']['reports'] = []
         alone = self.app.insights.snapshot()['usage']['reports']

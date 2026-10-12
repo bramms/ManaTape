@@ -1758,14 +1758,14 @@
   const b=l.balance;if(!b||!Number.isFinite(b.remaining))return null;
   const cc=r.provider==='commandcode',unit=cc?'од.':b.unit==='credits'?'кред.':b.unit||'';
   const text=(b.limit>0?num(b.remaining)+' з '+(b.estimated?'~':'')+num(b.limit):'залишок '+num(b.remaining))+(unit?' '+unit:'');
-  return {text,note:[b.estimated?'~ — ліміт оцінено з % CodexBar і залишку OMP':'',cc?'одиниці плану CommandCode (в API — credits), не куплені кредити':''].filter(Boolean).join(' · ')};
+  return {text,note:[b.estimated?'~ — ліміт оцінено з % CodexBar і залишку OMP (для інших акаунтів того ж плану — так само)':'',cc?'одиниці плану CommandCode (в API — credits), не куплені кредити':''].filter(Boolean).join(' · ')};
  }
  function winCell(l,r,name){
   const q=op.pace(l,r),left=l.remaining,label=limitLabel(l),reset=`<span data-reset="${Number(l.resets)||0}"></span>`,amount=planAmount(l,r);
   const sub=amount?`<span class="win__sub">${esc(amount.text)}</span>`:'';
   // A balance with no % is a measurement too: the amount stands, only the percentage (and so the pace) is unknown.
   const why=left==null&&amount?['% невідомий: '+(r.provider==='commandcode'?'OMP дає лише залишок; % місяця додає CodexBar на Mac, коли його 5 год і тиждень збігаються з цим акаунтом':'провайдер дає лише залишок')]:[opPaceText(q),opForecast(q)];
-  const title=esc([label,amount?.text,...why,resetTitle(l.resets),l.source&&'% і скидання — '+l.source,q.estimated&&'Лінійна оцінка за тривалістю вікна',amount?.note].filter(Boolean).join(' · '));
+  const title=esc([label,amount?.text,...why,resetTitle(l.resets),l.source&&'% і скидання — '+l.source,l.planEstimate&&'% оцінено за тим самим планом, що й акаунт з CodexBar; скидання невідоме',q.estimated&&'Лінійна оцінка за тривалістю вікна',amount?.note].filter(Boolean).join(' · '));
   if(left==null)return `<div class="win" title="${title}"><div class="win__top"><span class="win__l">${esc(label)}</span><b class="win__v">—</b>${sub}</div><div class="meter is-unknown" role="img" aria-label="${esc(name+' '+label)}: ${amount?'% невідомий, '+esc(amount.text):'немає виміру'}"><span class="meter__unlit"></span></div><span class="meter__scale"></span><div class="win__row">${reset}</div><div class="win__row"><span class="pace is-even">?</span><span>${amount?'% невідомий':'немає виміру'}</span></div></div>`;
   const stale=r.stale,s=left<10?'bad':left<25?'warn':'',delta=q.delta||0,pace=q.kind==='unknown'?['is-even','?']:q.kind==='empty'?['is-minus','∅']:delta>2?['is-minus','−'+Math.round(delta)+'%']:delta< -2?['is-plus','+'+Math.round(-delta)+'%']:['is-even','±'+Math.round(Math.abs(delta))+'%'];
   const forecast=stale?'≈ —':q.kind==='unknown'?'':q.kind==='empty'?'∅':q.lasts?'до ↻':q.eta>Date.now()?'≈'+microDuration(q.eta):'≈вич.',marker=!stale&&q.expected!=null?`;--m:${+((100-q.expected)/100).toFixed(3)}`:'';
