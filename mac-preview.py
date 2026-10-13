@@ -243,20 +243,47 @@ def main():
     server.daemon_threads = True
     server.token, server.tunnel_port, server.remote_port = token, tunnel_port, args.remote_port
     server.upstream = Upstream(tunnel_port)
-    tunnel = subprocess.Popen([*SSH, '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30',
-        '-N', '-L', f'127.0.0.1:{tunnel_port}:127.0.0.1:{args.remote_port}', args.host])
-    stop = threading.Event()
-    try:
+
+    def open_tunnel():
+        process = subprocess.Popen([*SSH, '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30',
+            '-N', '-L', f'127.0.0.1:{tunnel_port}:127.0.0.1:{args.remote_port}', args.host])
         for _ in range(50):
-            if tunnel.poll() is not None:
-                raise RuntimeError('SSH tunnel could not start')
+            if process.poll() is not None:
+                return process, False
             try:
                 with socket.create_connection(('127.0.0.1', tunnel_port), timeout=.2):
-                    break
+                    return process, True
             except OSError:
                 time.sleep(.2)
-        else:
-            raise RuntimeError('SSH tunnel timed out')
+        return process, False
+
+    def watch_tunnel():
+        """A network drop ends the SSH process while this proxy keeps listening (every request would be 502):
+        reopen the tunnel with growing pauses and drop the pooled connections that went through the dead one."""
+        pause = 2
+        while not stop.wait(5):
+            if current['tunnel'].poll() is None:
+                pause = 2
+                continue
+            print('Mana Tape: SSH tunnel closed; reconnecting', file=sys.stderr, flush=True)
+            server.upstream.close()
+            while not stop.is_set():
+                process, ready = open_tunnel()
+                current['tunnel'] = process
+                if ready:
+                    print('Mana Tape: SSH tunnel restored', file=sys.stderr, flush=True)
+                    break
+                process.terminate()
+                stop.wait(pause)
+                pause = min(pause * 2, 60)
+
+    stop = threading.Event()
+    tunnel, ready = open_tunnel()
+    current = {'tunnel': tunnel}
+    try:
+        if not ready:
+            raise RuntimeError('SSH tunnel could not start' if tunnel.poll() is not None else 'SSH tunnel timed out')
+        threading.Thread(target=watch_tunnel, daemon=True).start()
         url = f'http://127.0.0.1:{args.port}'
         print(f'Mana Tape: {url} (сервер через SSH; залиш це вікно відкритим)', flush=True)
         if args.commandcode:
@@ -270,6 +297,7 @@ def main():
         stop.set()
         server.server_close()
         server.upstream.close()
+        tunnel = current['tunnel']
         tunnel.terminate()
         try:
             tunnel.wait(timeout=5)
