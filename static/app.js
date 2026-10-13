@@ -26,8 +26,8 @@
  clearTimeout(bootSlow);
 
  const labels=source.ui?.roleLabels||{};
- const providerNames={'opencode-free':'OpenCode Free','commandcode':'CommandCode','opencode-go':'OpenCode Go','openai-codex':'Codex','google-antigravity':'Antigravity','anthropic':'Anthropic','deepseek':'DeepSeek API',...(source.ui?.providerLabels||{})};
- const codes={'opencode-free':'FREE','openrouter':'OR','commandcode':'CC','opencode-go':'GO','openai-codex':'CX','google-antigravity':'AG','anthropic':'AN','deepseek':'DS',...(source.ui?.providerCodes||{})};
+ const providerNames={'commandcode':'CommandCode','opencode-go':'OpenCode Go','openai-codex':'Codex','google-antigravity':'Antigravity','anthropic':'Anthropic','deepseek':'DeepSeek API',...(source.ui?.providerLabels||{})};
+ const codes={'openrouter':'OR','commandcode':'CC','opencode-go':'GO','openai-codex':'CX','google-antigravity':'AG','anthropic':'AN','deepseek':'DS',...(source.ui?.providerCodes||{})};
  // A provider's tag prints its own code; without one, a code derived from the id that no other provider shares
  // (colour is never the only carrier): the first four letters, else segment initials with the last segment
  // («demo-studio» → DSTU), else a numbered one. The set is fixed per snapshot (dataVersion).

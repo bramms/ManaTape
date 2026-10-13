@@ -36,7 +36,7 @@ def local_links(text):
 def check(root):
     root = root.resolve()
     index, log = root / "docs/index.md", root / "docs/log.md"
-    files = sorted({*root.glob("*.md"), *(root / "docs").rglob("*.md"), *(root / "integrations").rglob("*.md")})
+    files = sorted({*root.glob("*.md"), *(root / "docs").rglob("*.md")})
     files = [path for path in files if not any(part.startswith(".") or part in SKIP for part in path.relative_to(root).parts)]
     errors, indexed = [], set()
     concepts = {path for path in files if path.is_relative_to(root / "docs") and path not in (index, log)}

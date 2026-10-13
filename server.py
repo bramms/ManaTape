@@ -59,6 +59,8 @@ PUBLIC_MODEL_LISTS = {
     'openrouter': 'https://openrouter.ai/api/v1/models?output_modalities=all',
     'kilo': 'https://api.kilo.ai/api/gateway/models',
 }
+# Top-level files OMP discovers in an extensions directory; the catalog refresh loads the agent's own explicitly.
+EXTENSION_SUFFIXES = ('.js', '.ts')
 
 
 def public_listing(url):
@@ -1851,7 +1853,15 @@ class Forge:
             if key[0] is not None:
                 con = sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=5)
                 try:
-                    for provider_key, stamp, authority, raw in con.execute('SELECT provider_id, updated_at, authoritative, models FROM model_cache ORDER BY updated_at').fetchall():
+                    try:
+                        found = con.execute('SELECT m.provider_id, m.updated_at, m.authoritative, m.models, r.payload_updated_at, r.updated_at, r.authoritative '
+                            'FROM model_cache m LEFT JOIN model_cache_refresh r ON r.provider_id = m.provider_id').fetchall()
+                    except sqlite3.OperationalError:  # An OMP without refresh records.
+                        found = [(*row, None, None, None) for row in con.execute('SELECT provider_id, updated_at, authoritative, models FROM model_cache').fetchall()]
+                    # A refresh that returns the same payload only updates its refresh record (OMP 18).
+                    found = [(key, refreshed, refreshed_authority, raw) if refreshed is not None and payload == stamp and refreshed_authority is not None
+                             else (key, stamp, authority, raw) for key, stamp, authority, raw, payload, refreshed, refreshed_authority in found]
+                    for provider_key, stamp, authority, raw in sorted(found, key=lambda row: row[1]):
                         provider = provider_key.split(':', 1)[0]
                         stamps[provider] = {'at': stamp / 1000, 'authoritative': bool(authority)}
                         models = json.loads(raw)
@@ -2194,35 +2204,31 @@ class Forge:
             if changed or self.managed != previous_meta:
                 self.persist()
 
-    def free_bridge_routes(self, native):
-        """A fresh, complete bridge snapshot proves absence without inference.
+    def installed_extensions(self):
+        """Extension files the owner installed in `<agent>/extensions`, resolved, in name order.
 
-        Excluded rows still exist upstream. Partial discovery or an offline
-        extension cache must never turn a configured CUT into DELETED.
+        The same top-level files OMP itself discovers there (`*.js`, `*.ts`): a regular file, or a
+        symlink placed there that resolves to one. Hidden names, directories and broken links are skipped.
         """
-        if self.demo or not (self.agent / 'extensions' / 'opencode-free.js').is_file():
-            return None
-        home = Path(self.native_env.get('OMP_FREE_HOME') or Path.home() / '.config/omp-free-bridge').expanduser()
         try:
-            snapshot = json.loads((home / 'catalog.json').read_text(encoding='utf-8'))
-            checked, expires = snapshot['checked_at'], snapshot['expires_at']
-            if (snapshot.get('schema') != 1 or snapshot.get('notes') != []
-                    or type(checked) not in (int, float) or type(expires) not in (int, float)
-                    or not checked <= time.time() < expires or not 0 < expires - checked <= 900):
-                return None
-            models, excluded = snapshot['models'], snapshot['excluded']
-            if not isinstance(models, list) or not isinstance(excluded, list):
-                return None
-            if any(not isinstance(m, dict) or not isinstance(m.get('id'), str)
-                   or not m['id'] or m.get('lane') not in ('zen', 'go') for m in models + excluded):
-                return None
-            prefix = 'opencode-free/'
-            allowed = {prefix + m['id'] for m in models}
-            if allowed != {m['provider'] + '/' + m['id'] for m in native if m['provider'] == 'opencode-free'}:
-                return None
-            return allowed | {prefix + m['id'] for m in excluded}
-        except (OSError, ValueError, TypeError, KeyError):
-            return None
+            entries = sorted(os.scandir(self.agent / 'extensions'), key=lambda entry: entry.name)
+        except OSError:
+            return []
+        found = []
+        for entry in entries:
+            if entry.name.startswith('.') or not entry.name.endswith(EXTENSION_SUFFIXES):
+                continue
+            try:
+                if not (entry.is_symlink() or entry.is_file(follow_symlinks=False)):
+                    continue
+                target = Path(entry.path).resolve(strict=True)
+                if not target.is_file():
+                    continue
+            except (OSError, RuntimeError):
+                continue
+            if str(target) not in found:
+                found.append(str(target))
+        return found
 
     def withdrawn_routes(self, native):
         """Per gateway: withdrawn FREE routes, or None when the public list proves nothing."""
@@ -2250,21 +2256,22 @@ class Forge:
                 prior = set(self.state['available'])
                 cached_before, before_stamps = self.cached(fresh=True)
                 known_before = set(self.state.get('known', set(cached_before) | set(self.state['catalog'])))
-            # No prompt, no inference, no project extensions or active sessions touched.
+            # No prompt, no inference, no project extensions or active sessions touched. Discovery stays
+            # off; the extensions installed in the agent directory load explicitly.
             command = [self.omp, 'models', 'refresh', '--kind', 'all', '--json', '--no-extensions']
-            # Discovery stays disabled; load only this explicitly installed bridge.
-            extension = self.agent / 'extensions' / 'opencode-free.js'
-            if not self.demo and extension.is_file():
-                command += ['-e', str(extension)]
+            if not self.demo:
+                for path in self.installed_extensions():
+                    command += ['-e', path]
             run = subprocess.run(command,
                 cwd=self.state_dir, env=self.native_env, capture_output=True, timeout=120)
             if run.returncode or b'models.yml validation failed' in run.stderr:
                 raise Problem('OMP не оновив каталог. Попередні дані збережено.')
+            # An extension that failed to load leaves the catalogue partial: it proves no absence.
+            complete = b'Failed to load extension' not in run.stderr
             data = json.loads(run.stdout)
             native = data['models']
             if not isinstance(native, list):
                 raise ValueError('models')
-            bridge_routes = self.free_bridge_routes(native)
             withdrawn = self.withdrawn_routes(native)
             with self.lock:
                 cache, stamps = self.cached(fresh=True)
@@ -2293,19 +2300,30 @@ class Forge:
                         if r not in was_missing:
                             changes.append({'kind': 'missing', 'route': r, 'at': start})
                         old[r].update(status='missing', withdrawn=True)
+                listed = {r.split('/', 1)[0] for r in seen}
+                def fresh(pid):
+                    stamp = stamps[pid]
+                    return (stamp['authoritative'] and stamp['at'] >= start - 2
+                            and stamp['at'] > before_stamps.get(pid, {}).get('at', 0))
+                # This run reached the providers: OMP refreshed some discovery authoritatively. Offline, it did not.
+                online = any(fresh(pid) for pid in stamps)
+                # Providers without OMP discovery or a public list (models.yml, an installed extension): a complete
+                # online refresh that still lists the provider proves which routes it no longer has.
+                proven = {pid for pid in listed if pid not in stamps and pid not in PUBLIC_MODEL_LISTS} if complete and online else set()
                 candidates = set(prior)
-                if bridge_routes is not None:
-                    configured = set(self.refs()) | {raw_route(r) for members in self.pools().values() for r in members}
-                    candidates.update(r for r in set(old) | set(cached_before) | configured if r.startswith('opencode-free/'))
+                if proven:
+                    # Earlier and configured routes too, so an absence missed before does not stay `present`.
+                    try:
+                        configured = set(self.registry_refs())
+                    except Exception as error:
+                        log_failure('refresh references', error)
+                        configured = set()
+                    configured |= {raw_route(r) for members in self.pools().values() for r in members}
+                    candidates.update(r for r in set(old) | configured if r.split('/', 1)[0] in proven)
                 for r in candidates - seen:
                     pid = r.split('/', 1)[0]
-                    stamp = stamps.get(pid, {})
-                    # Absence only counts after fresh authoritative discovery; failures retain cache.
-                    removed = (r not in bridge_routes if pid == 'opencode-free' and bridge_routes is not None else
-                        stamp.get('authoritative') and stamp.get('at', 0) >= start - 2
-                            and stamp.get('at', 0) > before_stamps.get(pid, {}).get('at', 0)
-                            and any(r.startswith(pid + '/') for r in seen))
-                    if removed:
+                    # Otherwise OMP's own discovery decides: absence counts only after its fresh authoritative fetch.
+                    if pid in proven or (pid in stamps and pid in listed and fresh(pid)):
                         if old.get(r, {}).get('status') != 'missing':
                             changes.append({'kind': 'missing', 'route': r, 'at': start})
                         old.setdefault(r, dict(cached_before.get(r, {'provider': pid, 'id': r.split('/', 1)[1], 'source': 'reference'})))['status'] = 'missing'

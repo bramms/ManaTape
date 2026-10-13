@@ -4,7 +4,7 @@ const op=require('./static/operator-core.js');
 const now=Date.UTC(2026,8,19,12),report={at:now/1000,limits:[]};
 test('CUT labels preserve Contributor, versions and namespaces when catalog names omit them',()=>{
  const cases=[
-  ['big-pickle','[FREE] Big Pickle','[FREE] Big Pickle'],
+  ['sample-model','[FREE] Sample Model','[FREE] Sample Model'],
   ['muse-spark-1.3-contributor-free','Muse Spark 1.3 (Free)','muse-spark-1.3-contributor-free'],
   ['muse-spark-1.3','Muse Spark','muse-spark-1.3'],
   ['lab/model-v2','Model v2','lab/model-v2'],
@@ -105,8 +105,8 @@ test('track drops copy across tracks, retain thinking, and reorder within a trac
  assert.deepEqual(op.transferCut(source,source,0,3,true),['p/b:low','p/c','p/a:high']);
  assert.deepEqual(op.transferCut(source,['p/a:low','p/x'],0,2,false),['p/x','p/a:high']);
 });
-test('bracketed FREE editions include Big Pickle but never unknown or paid costs',()=>{
- const m={id:'big-pickle',name:'[FREE] Big Pickle',cost:{input:0,output:0}};
+test('bracketed FREE editions are FREE but never with unknown or paid costs',()=>{
+ const m={id:'sample-model',name:'[FREE] Sample Model',cost:{input:0,output:0}};
  assert.equal(op.isFreeModel(m),true);
  assert.equal(op.isFreeModel({...m,cost:{}}),false);
  assert.equal(op.isFreeModel({...m,cost:{input:0,output:1}}),false);

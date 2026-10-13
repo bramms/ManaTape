@@ -53,11 +53,11 @@ class ProfileModesTest(unittest.TestCase):
             with self.subTest(boolean_price=key):
                 self.assertFalse(is_free_model({**model, 'cost': {**model['cost'], key: False}}))
 
-    def test_bridge_free_label_is_accepted_by_shared_pools(self):
+    def test_bracketed_free_label_is_accepted_by_shared_pools(self):
         from profile_modes import validate_pools, is_free_model
-        model = {'id': 'big-pickle', 'name': '[FREE] Big Pickle', 'cost': {'input': 0, 'output': 0}}
-        pools = {'free-good': ['opencode-free/big-pickle'], 'free-fast': []}
-        self.assertEqual(validate_pools(pools, {'opencode-free/big-pickle': model}), pools)
+        model = {'id': 'sample-model', 'name': '[FREE] Sample Model', 'cost': {'input': 0, 'output': 0}}
+        pools = {'free-good': ['ext-free/sample-model'], 'free-fast': []}
+        self.assertEqual(validate_pools(pools, {'ext-free/sample-model': model}), pools)
         self.assertFalse(is_free_model({**model, 'cost': {'input': 0, 'output': 1}}))
         self.assertFalse(is_free_model({**model, 'cost': {}}))
 

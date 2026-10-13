@@ -23,23 +23,45 @@ from server import (Forge, Handler, Problem, ThreadingHTTPServer, PUBLIC_MODEL_L
 
 
 class ForgeTest(unittest.TestCase):
-    def test_refresh_loads_only_installed_free_bridge_and_hides_its_token(self):
-        extension = self.agent / 'extensions' / 'opencode-free.js'
-        extension.parent.mkdir()
-        extension.write_text('// fixture, never executed')
-        model = {'provider': 'opencode-free', 'id': 'big-pickle', 'name': '[FREE] Big Pickle',
+    def test_refresh_loads_installed_agent_extensions_and_hides_their_tokens(self):
+        folder = self.agent / 'extensions'
+        folder.mkdir()
+        (folder / 'b-ext.js').write_text('// fixture, never executed')
+        (folder / 'a-ext.ts').write_text('// fixture')
+        shared = self.root / 'shared/real.js'
+        shared.parent.mkdir()
+        shared.write_text('// fixture')
+        (folder / 'c-link.js').symlink_to(shared)
+        (folder / 'd-same.js').symlink_to(folder / 'b-ext.js')  # the same file loads once
+        (folder / 'broken.js').symlink_to(self.root / 'missing.js')
+        (folder / 'dir.js').mkdir()
+        (folder / 'dirlink.js').symlink_to(self.root / 'shared')
+        for name in ('.hidden.js', 'notes.md', 'module.mjs'):
+            (folder / name).write_text('// not an extension OMP discovers')
+        (self.project / '.omp/extensions').mkdir()
+        (self.project / '.omp/extensions/project.js').write_text('// project extensions never run')
+        model = {'provider': 'ext-free', 'id': 'sample', 'name': '[FREE] Sample',
                  'cost': {'input': 0, 'output': 0}, 'apiKey': 'LOCAL-SECRET'}
         class Result:
             returncode, stderr = 0, b''
             stdout = json.dumps({'models': [model]}).encode()
+        loaded = [str(p.resolve()) for p in (folder / 'a-ext.ts', folder / 'b-ext.js', shared)]
         with patch('server.subprocess.run', return_value=Result()) as run:
             self.app.refresh()
-            self.assertEqual(run.call_args.args[0][-3:], ['--no-extensions', '-e', str(extension)])
-            self.assertIn('opencode-free/big-pickle', self.app.state['available'])
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--no-extensions'):],
+                             ['--no-extensions'] + [arg for path in loaded for arg in ('-e', path)])
+            self.assertIn('ext-free/sample', self.app.state['available'])
             self.assertNotIn('LOCAL-SECRET', json.dumps(self.app.snapshot()))
             self.app.demo = True
             self.app.refresh()
             self.assertNotIn('-e', run.call_args.args[0])
+            self.app.demo = False
+            for path in folder.iterdir():
+                path.unlink() if path.is_symlink() or path.is_file() else path.rmdir()
+            folder.rmdir()
+            self.app.refresh()
+            self.assertEqual(run.call_args.args[0][-1], '--no-extensions')
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -69,7 +91,6 @@ unrelated: {keep: true}
         (self.project / '.omp/presets/high.yml').write_text('# overlay\nmodelRoles:\n  task: demo/two:high\n')
         (self.agent / 'models.yml').write_text('providers: {}\n')
         self.app = Forge(self.project, self.agent, self.root/'state', '/does-not-exist')
-        self.app.native_env['OMP_FREE_HOME'] = str(self.root / 'free-bridge')
 
     def tearDown(self):
         self.temp.cleanup()
@@ -310,60 +331,78 @@ unrelated: {keep: true}
         self.assertEqual(self.app.state['catalog']['demo/one']['status'],'missing')
         self.assertEqual(self.app.state['changes'][0]['kind'],'missing')
 
-    def test_free_bridge_deleted_routes_require_complete_fresh_evidence(self):
-        extension = self.agent / 'extensions/opencode-free.js'
-        extension.parent.mkdir()
-        extension.write_text('// fixture')
-        home = self.root / 'free-bridge'
-        home.mkdir()
-        missing = 'opencode-free/old-free'
-        never_seen = 'opencode-free/configured-free'
-        self.app.mode_state['pools'] = {'free-good': [never_seen], 'free-fast': []}
+    def omp_cache(self, *providers):
+        """A synthetic OMP 18 discovery cache: payload rows plus their refresh records, both from long ago."""
+        c = sqlite3.connect(self.agent / 'models.db')
+        c.execute('create table model_cache(provider_id TEXT,updated_at INTEGER,authoritative INTEGER,models TEXT)')
+        c.execute('create table model_cache_refresh(provider_id TEXT,payload_updated_at INTEGER,updated_at INTEGER,authoritative INTEGER)')
+        for pid in providers:
+            c.execute('insert into model_cache values(?,?,?,?)', (pid, 1, 1, '[]'))
+            c.execute('insert into model_cache_refresh values(?,?,?,?)', (pid, 1, 1, 1))
+        c.commit(); c.close()
+
+    def omp_refresh(self, models, returncode=0, stderr=b'', online=True):
+        """Run the catalog refresh against a fake OMP; online, it refreshes its discovery cache with the same payload."""
+        class Result:
+            pass
+        Result.returncode, Result.stderr, Result.stdout = returncode, stderr, json.dumps({'models': models}).encode()
+        def run(*args, **kwargs):
+            if online:
+                c = sqlite3.connect(self.agent / 'models.db')
+                c.execute('update model_cache_refresh set updated_at=?', (int(time.time() * 1000),))
+                c.commit(); c.close()
+            return Result()
+        with patch('server.subprocess.run', side_effect=run), patch('server.public_listing', side_effect=OSError('offline')):
+            self.app.refresh()
+
+    def test_complete_refresh_deletes_absent_routes_of_a_listed_provider_without_discovery(self):
+        self.omp_cache('cached')
+        gone, never_seen = 'ext-free/old', 'ext-free/configured'
+        self.app.mode_state['pools'] = {'free-good': [never_seen + ':high'], 'free-fast': []}
         original_config = self.app.path('standard').read_bytes()
         original_modes = copy.deepcopy(self.app.mode_state)
-        now = time.time()
-        fresh = {'schema': 1, 'checked_at': now, 'expires_at': now + 900,
-                 'models': [{'lane': 'zen', 'id': 'new-free'}], 'excluded': [], 'notes': []}
-        class Result:
-            returncode, stderr = 0, b''
-            stdout = b'{"models":[{"provider":"opencode-free","id":"new-free"}]}'
+        listed = [{'provider': 'ext-free', 'id': 'new'}, {'provider': 'cached', 'id': 'x'}]
         cases = [
-            ('fresh', fresh, True),
-            ('expired', {**fresh, 'checked_at': now-1800, 'expires_at': now-900}, False),
-            ('partial', {**fresh, 'notes': ['zen: listing unavailable; lane disabled']}, False),
-            ('excluded', {**fresh, 'excluded': [{'lane': 'zen', 'id': 'old-free'},
-                                              {'lane': 'zen', 'id': 'configured-free'}]}, False),
-            ('mismatched', {**fresh, 'models': []}, False),
-            ('malformed', {**fresh, 'models': [None]}, False),
+            ('complete online refresh lists the provider', dict(models=listed), True),
+            ('offline: no discovery was refreshed', dict(models=listed, online=False), False),
+            ('provider missing entirely', dict(models=listed[1:]), False),
+            ('empty catalog', dict(models=[]), False),
+            ('refresh failed', dict(models=listed, returncode=1), False),
+            ('an extension failed to load', dict(models=listed, stderr=b'Failed to load extension: x.js: boom'), False),
         ]
-        for name, snapshot, removed in cases:
+        for name, run, deleted in cases:
             with self.subTest(name=name):
-                (home / 'catalog.json').write_text(json.dumps(snapshot))
-                self.app.state.update(catalog={missing: {'provider': 'opencode-free', 'id': 'old-free', 'status': 'present'}},
-                                      available=[], changes=[])
-                with patch('server.subprocess.run', return_value=Result()):
-                    self.app.refresh()
-                self.assertFalse(self.app.state['error'])
-                self.assertEqual(self.app.state['catalog'][missing]['status'], 'missing' if removed else 'present')
-                self.assertEqual(self.app.state['catalog'].get(never_seen, {}).get('status'), 'missing' if removed else None)
+                self.app.state.update(catalog={gone: {'provider': 'ext-free', 'id': 'old', 'status': 'present'}},
+                                      available=[gone], changes=[], error='')
+                self.omp_refresh(**run)
+                catalog = self.app.state['catalog']
+                self.assertEqual((catalog[gone]['status'], catalog.get(never_seen, {}).get('status')),
+                                 ('missing', 'missing') if deleted else ('present', None))
+                self.assertEqual(sorted(c['route'] for c in self.app.state['changes'] if c['kind'] == 'missing'),
+                                 sorted([gone, never_seen]) if deleted else [])
+                self.assertEqual(bool(self.app.state['error']), run.get('returncode', 0) != 0)
                 self.assertEqual(self.app.path('standard').read_bytes(), original_config)
                 self.assertEqual(self.app.mode_state, original_modes)
-        # A complete empty catalog is different from a failed discovery.
-        (home / 'catalog.json').write_text(json.dumps({**fresh, 'models': []}))
-        Result.stdout = b'{"models":[]}'
-        with patch('server.subprocess.run', return_value=Result()):
-            self.app.refresh()
-        self.assertEqual(self.app.state['catalog'][missing]['status'], 'missing')
+        # Once DELETED, a repeated refresh records nothing new; a returning route is present again.
+        self.omp_refresh(listed)
         changes = len(self.app.state['changes'])
-        with patch('server.subprocess.run', return_value=Result()):
-            self.app.refresh()
+        self.omp_refresh(listed)
         self.assertEqual(len(self.app.state['changes']), changes)
-        # Returning exact IDs clear DELETED on the next successful refresh.
-        (home / 'catalog.json').write_text(json.dumps({**fresh, 'models': [{'lane': 'zen', 'id': 'old-free'}]}))
-        Result.stdout = b'{"models":[{"provider":"opencode-free","id":"old-free"}]}'
-        with patch('server.subprocess.run', return_value=Result()):
-            self.app.refresh()
-        self.assertEqual(self.app.state['catalog'][missing]['status'], 'present')
+        self.omp_refresh(listed + [{'provider': 'ext-free', 'id': 'old'}])
+        self.assertEqual(self.app.state['catalog'][gone]['status'], 'present')
+
+    def test_discovered_or_public_list_provider_needs_its_own_evidence_for_deleted(self):
+        self.omp_cache('cached')
+        for route, online, deleted in (('cached/old', True, True), ('cached/old', False, False), ('openrouter/old', True, False)):
+            with self.subTest(route=route, online=online):
+                pid = route.split('/')[0]
+                self.app.state.update(catalog={route: {'provider': pid, 'id': 'old', 'status': 'present'}},
+                                      available=[route], changes=[])
+                # An unchanged payload with a fresh refresh record is fresh discovery; OpenRouter's public list is unreachable.
+                self.omp_refresh([{'provider': pid, 'id': 'new'}, {'provider': 'cached', 'id': 'x'}], online=online)
+                self.assertEqual(self.app.state['catalog'][route]['status'], 'missing' if deleted else 'present')
+                self.assertEqual([c['route'] for c in self.app.state['changes'] if c['kind'] == 'missing'],
+                                 [route] if deleted else [])
 
     def test_withdrawn_free_routes_need_a_listing_that_still_offers_free_models(self):
         native = [{'provider': 'gw', 'id': i, 'cost': {'input': c, 'output': c}} for i, c in

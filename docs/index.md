@@ -27,4 +27,4 @@ Mana Tape — самостійний український пульт для п
 - [Нотатки версій](../CHANGELOG.md) — Можливості та межі кожного випуску.
 - [Журнал знань](log.md) — Зміни концепції та документації; детальний журнал коду лишається в Git.
 
-Вхід для агентів — [AGENTS.md](../AGENTS.md), для користувача — [README](../README.md). Дивіться також [розробку](../CONTRIBUTING.md), [безпеку](../SECURITY.md) та [необов’язковий OpenCode Free](../integrations/opencode-free/README.md).
+Вхід для агентів — [AGENTS.md](../AGENTS.md), для користувача — [README](../README.md). Дивіться також [розробку](../CONTRIBUTING.md) та [безпеку](../SECURITY.md).

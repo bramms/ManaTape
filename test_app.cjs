@@ -1358,12 +1358,12 @@ test('QA1 B1: edge autoscroll waits for an armed, dwelled pointer; a sideways mo
 });
 
 test('QA1 B11 / QA3 P2-7: provider codes never collide and slots go to the providers on the tape first',()=>{
- const context={codes:{'opencode-free':'FREE'},catalog:[],source:{providers:[{id:'demo-studio',used:['x']},{id:'demo-cloud',used:['x']},{id:'demo-free'},{id:'mystery-lab',connected:true},{id:'zz-local'}]},
+ const context={codes:{'ext-free':'XF'},catalog:[],source:{providers:[{id:'demo-studio',used:['x']},{id:'demo-cloud',used:['x']},{id:'demo-free'},{id:'mystery-lab',connected:true},{id:'zz-local'}]},
   dataVersion:1,isLocal:id=>id==='zz-local',priceInfo:m=>({kind:m.free?'free':'paid'})};
  runInNewContext(['providerCode','assignCodes','providerSlot','assignSlots'].map(appFunction).join('\n'),context);
  const codes=['demo-studio','demo-cloud','demo-free','mystery-lab'].map(id=>context.providerCode(id));
  assert.deepEqual(codes,['DSTU','DCLO','DFRE','MYST']);assert.equal(new Set(codes).size,codes.length);
- assert.equal(context.providerCode('opencode-free'),'FREE','an explicit code wins');
+ assert.equal(context.providerCode('ext-free'),'XF','an explicit code wins');
  context.codes['demo-studio']='STU';context.dataVersion=2;
  assert.equal(context.providerSlot('demo-studio'),'stu','its own token');assert.equal(context.providerSlot('zz-local'),'gpu');
  const slots=['demo-cloud','demo-free','mystery-lab'].map(id=>context.providerSlot(id));

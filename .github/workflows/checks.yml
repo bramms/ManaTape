@@ -17,8 +17,3 @@ jobs:
         with:
           node-version: '22'
       - run: make install test check
-      - name: OpenCode Free — offline
-        working-directory: integrations/opencode-free
-        run: |
-          python3 -m unittest discover -s tests -p 'test_*.py'
-          node --test tests/extension.test.mjs
