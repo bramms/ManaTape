@@ -376,8 +376,10 @@ unrelated: {keep: true}
                                       available=[gone], changes=[], error='')
                 self.omp_refresh(**run)
                 catalog = self.app.state['catalog']
-                self.assertEqual((catalog[gone]['status'], catalog.get(never_seen, {}).get('status')),
-                                 ('missing', 'missing') if deleted else ('present', None))
+                # A provider gone from a complete online refresh drops its unused routes instead of marking them.
+                pruned = name == 'provider missing entirely'
+                self.assertEqual((catalog.get(gone, {}).get('status'), catalog.get(never_seen, {}).get('status')),
+                                 ('missing', 'missing') if deleted else (None, None) if pruned else ('present', None))
                 self.assertEqual(sorted(c['route'] for c in self.app.state['changes'] if c['kind'] == 'missing'),
                                  sorted([gone, never_seen]) if deleted else [])
                 self.assertEqual(bool(self.app.state['error']), run.get('returncode', 0) != 0)
@@ -390,6 +392,24 @@ unrelated: {keep: true}
         self.assertEqual(len(self.app.state['changes']), changes)
         self.omp_refresh(listed + [{'provider': 'ext-free', 'id': 'old'}])
         self.assertEqual(self.app.state['catalog'][gone]['status'], 'present')
+
+    def test_a_provider_gone_entirely_keeps_only_routes_still_in_use(self):
+        self.omp_cache('cached')
+        self.app.mode_state['pools'] = {'free-good': ['gone/pooled:high'], 'free-fast': []}
+        self.app.state['favs'] = ['gone/starred']
+        self.app.state.update(catalog={r: {'provider': 'gone', 'id': r.split('/')[1], 'status': 'present'}
+                                       for r in ('gone/unused', 'gone/pooled', 'gone/starred')},
+                              available=['gone/unused', 'gone/pooled', 'gone/starred'], changes=[], error='')
+        self.omp_refresh([{'provider': 'cached', 'id': 'x'}], online=False)
+        self.assertIn('gone/unused', self.app.state['catalog'], 'offline proves nothing')
+        self.omp_refresh([{'provider': 'cached', 'id': 'x'}])
+        catalog = self.app.state['catalog']
+        self.assertNotIn('gone/unused', catalog)
+        self.assertEqual({r: catalog[r]['status'] for r in ('gone/pooled', 'gone/starred')},
+                         {'gone/pooled': 'present', 'gone/starred': 'present'}, 'a route in use keeps its last status')
+        self.omp_refresh([{'provider': 'cached', 'id': 'x'}, {'provider': 'gone', 'id': 'unused'}])
+        self.assertEqual(self.app.state['catalog']['gone/unused']['status'], 'present')
+        self.assertFalse([c for c in self.app.state['changes'] if c['kind'] == 'new'], 'a returning route is not new')
 
     def test_discovered_or_public_list_provider_needs_its_own_evidence_for_deleted(self):
         self.omp_cache('cached')

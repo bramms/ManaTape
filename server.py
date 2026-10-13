@@ -2327,6 +2327,19 @@ class Forge:
                         if old.get(r, {}).get('status') != 'missing':
                             changes.append({'kind': 'missing', 'route': r, 'at': start})
                         old.setdefault(r, dict(cached_before.get(r, {'provider': pid, 'id': r.split('/', 1)[1], 'source': 'reference'})))['status'] = 'missing'
+                if complete and online and seen:
+                    # A provider OMP no longer lists at all (in a refresh that listed something) leaves nothing to show for routes nobody uses; a route
+                    # still named by a config, preset, pool or favourite stays with its last status.
+                    try:
+                        used = {raw_route(r) for r in self.registry_refs()}
+                        used |= {raw_route(r) for members in self.pools().values() for r in members}
+                        used |= {raw_route(r) for r in self.state.get('favs', []) if isinstance(r, str)}
+                    except Exception as error:
+                        log_failure('refresh references', error)
+                        used = None
+                    if used is not None:
+                        for r in [r for r in old if r not in seen and r.split('/', 1)[0] not in listed and r not in used]:
+                            del old[r]
                 self.state['available'] = sorted(seen)
                 self.state['known'] = sorted(known_before | set(cache) | seen)
                 self.state['changes'] = (self.state['changes'] + changes)[-500:]
