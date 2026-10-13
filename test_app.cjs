@@ -499,7 +499,7 @@ test('DELETED is explicit on configured CUTs and never inferred from quotas or m
  ]);
  const context={catalogMap,state:{},split:r=>({raw:r.replace(/:high$/,''),provider:'p',id:r.slice(2).replace(/:high$/,''),effort:''}),providerName:()=> 'Provider',providerCode:()=> 'P',providerSlot:()=>'stu',esc:s=>s,
   cutTitle:r=>r,freeRoute:r=>/free/.test(r)&&catalogMap.get(r)?.status!=='missing',healthMarks:()=>({glyph:'',bar:'',text:''}),routeWarning:()=>false,isLocal:()=>false,poolName:()=>undefined};
- runInNewContext(['deletedCut','nameParts','nameSpace','drawerCut'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1],context);
+ runInNewContext(['deletedCut','nameParts','nameSpace','namePrinted','drawerCut'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1],context);
  for(const r of ['p/gone:free']){
   const cut=context.drawerCut(catalogMap.get(r));
   assert.match(cut,/class="cut cut--deleted"/);assert.match(cut,/class="stamp stamp--del">DELETED</);
@@ -1148,20 +1148,42 @@ test('CUT names keep their distinguishing tail when they are truncated',()=>{
 // Stage C1b: names that tell routes apart, editors and forms in the drawer, the collection as the editor's source,
 // Колекція's cached sort, the provider form's own field checks, «Прийняти файл» in the reel menu.
 test('QA3 P1-5: a CUT name never prints a stub of the shared namespace; the family and the distinguishing tail stay',()=>{
- const context={esc:s=>String(s)};runInNewContext(['nameParts','nameSpace'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1]+'\nthis.nameMarkup=nameMarkup;',context);
+ const context={esc:s=>String(s)};runInNewContext(['nameParts','nameSpace','namePrinted'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1]+'\nthis.nameMarkup=nameMarkup;',context);
  assert.deepEqual(Array.from(context.nameSpace('DEMO · Aurora')),['DEMO ·','Aurora']);
  assert.deepEqual(Array.from(context.nameSpace('qwen/qwen3-coder')),['qwen/','qwen3-coder']);
  assert.deepEqual(Array.from(context.nameSpace('Anthropic: Claude Sonnet')),['Anthropic:','Claude Sonnet']);
  assert.deepEqual(Array.from(context.nameSpace('deepseek-demo')),['','deepseek-demo'],'no separator, no namespace');
  assert.deepEqual(Array.from(context.nameSpace('DEMO · ab')),['','DEMO · ab'],'a too short family keeps the whole head');
  const aurora=context.nameMarkup('DEMO · Aurora 01 Free'),swift=context.nameMarkup('DEMO · Swift 01 Free');
- assert.equal(aurora,'<span class="cut__head">Aurora</span><span class="cut__tail"> 01 Free</span>','one rule at every width: no namespace stub');
- assert.equal(swift,'<span class="cut__head">Swift</span><span class="cut__tail"> 01 Free</span>');
- assert.equal(context.nameMarkup('Anthropic: Claude Sonnet'),'<span class="cut__head">Claude Sonnet</span>');
- assert.equal(context.nameMarkup('DEMO · ab'),'<span class="cut__head">DEMO · ab</span>','a too short family keeps the whole name');
+ assert.equal(aurora,'<span class="cut__head"><span class="cut__run">Aurora</span></span><span class="cut__tail"> 01 Free</span>','one rule at every width: no namespace stub');
+ assert.equal(swift,'<span class="cut__head"><span class="cut__run">Swift</span></span><span class="cut__tail"> 01 Free</span>');
+ assert.equal(context.nameMarkup('Anthropic: Claude Sonnet'),'<span class="cut__head"><span class="cut__run">Claude Sonnet</span></span>');
+ assert.equal(context.nameMarkup('DEMO · ab'),'<span class="cut__head"><span class="cut__run">DEMO · ab</span></span>','a too short family keeps the whole name');
+ assert.deepEqual(Array.from(context.nameSpace('[ZEN FREE] Claude Haiku')),['[ZEN FREE]','Claude Haiku'],'a bracketed provider prefix is a namespace');
+ assert.deepEqual(Array.from(context.nameSpace('[ZEN] ab')),['','[ZEN] ab']);
  assert.doesNotMatch(source,/class="cut__ns"/,'no surface prints the namespace separately');
  const css=readFileSync(require.resolve('./static/device.css'),'utf8');
  assert.match(css,/\.cut__tail\{flex:none/,'the distinguishing tail never shrinks');
+});
+
+test('a CUT with the FREE stamp does not repeat FREE or the provider in its printed name; the full name stays in the tooltip',()=>{
+ const context={esc:s=>String(s)};runInNewContext(['nameParts','nameSpace','namePrinted'].map(appFunction).join('\n')+'\n'+source.match(/\n (const nameMarkup=[^\n]*)/)[1]+'\nthis.nameMarkup=nameMarkup;',context);
+ const shown=(n,free)=>context.nameMarkup(n,free).replace(/<[^>]+>/g,'');
+ assert.equal(shown('[ZEN FREE] Claude Haiku 4.5 Free',true),'Claude Haiku 4.5','prefix and FREE tail go, the version is the tail');
+ assert.equal(context.nameMarkup('[ZEN FREE] Claude Haiku 4.5 Free',true),'<span class="cut__head"><span class="cut__run">Claude Haiku</span></span><span class="cut__tail"> 4.5</span>');
+ assert.equal(shown('muse-spark-1.3-contributor-free',true),'muse-spark-1.3-contributor');
+ assert.equal(shown('qwen3-coder:free',true),'qwen3-coder');
+ assert.equal(shown('kilo-auto/free',true),'kilo-auto','never just «free» after the namespace');
+ assert.equal(shown('Gemini 3 Flash (free)',true),'Gemini 3 Flash');
+ assert.equal(shown('DEMO · Aurora 01 Free',false),'Aurora 01 Free','without the stamp the word Free stays');
+ assert.equal(shown('Free',true),'Free','a name that is only the marker keeps it');
+ assert.equal(shown('Freedom 2',true),'Freedom 2');
+ assert.match(source,/nameMarkup\(title,free\)/,'lane and drawer CUTs pass the stamp');
+ for(const m of source.matchAll(/<span class="cut__meta">[^\n]*?<\/span>\$\{free\?/g))assert.fail('FREE is printed in the meta row, not after it: '+m[0].slice(0,80));
+ const css=readFileSync(require.resolve('./static/device.css'),'utf8');
+ assert.doesNotMatch(css,/\.cut \.stamp--free\{position:absolute/,'FREE no longer takes the name row');
+ assert.match(css,/\.cut__head\.is-run>\.cut__run\{[^}]*animation/,'a cut name runs like a device display');
+ assert.match(source,/prefers-reduced-motion: reduce/,'no marquee when motion is off');
 });
 
 test('an open editor narrows the collection to what its list accepts; a tap appends, a duplicate is refused',()=>{

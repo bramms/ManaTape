@@ -687,8 +687,12 @@
  // One rule on every CUT: the shared namespace («DEMO · », «org/», «Vendor: ») is never printed (the provider tag
  // and the tooltip carry it), so «DEMO · Aurora 01 Free» and «DEMO · Swift 01 Free» read «Aurora 01 Free» /
  // «Swift 01 Free» at any width — never a 1–4 letter stub of the namespace. The family then takes the ellipsis.
- function nameSpace(head){const text=String(head),m=text.match(/^(.{1,24}?(?: · | — | – |: |\/))(?=\S)/u);return m&&text.length-m[1].length>=3?[m[1].trimEnd(),text.slice(m[1].length)]:['',text];}
- const nameMarkup=name=>{const [head,tail]=nameParts(name),[,family]=nameSpace(head);return `<span class="cut__head">${esc(family)}</span>${tail?`<span class="cut__tail">${esc(tail)}</span>`:''}`;};
+ // A bracketed provider prefix («[ZEN FREE] ») is a namespace too: the provider tag already prints it.
+ function nameSpace(head){const text=String(head),m=text.match(/^(.{1,24}?(?: · | — | – |: |\/)|\[[^\]\n]{1,24}\] +)(?=\S)/u);return m&&text.length-m[1].length>=3?[m[1].trimEnd(),text.slice(m[1].length)]:['',text];}
+ // A CUT that carries the FREE stamp does not print the marker again («… Free», «-free», «:free», «/free», «(free)»): the
+ // tail then is the version that tells the routes apart. The tooltip and the accessible name keep the full name.
+ function namePrinted(name,free){const text=String(name),bare=free?text.replace(/(?:\s*[([]free[)\]]|[\s:_/-]+free)$/i,''):text;return bare.length>=3?bare:text;}
+ const nameMarkup=(name,free)=>{const [head,tail]=nameParts(namePrinted(name,free)),[,family]=nameSpace(head);return `<span class="cut__head"><span class="cut__run">${esc(family)}</span></span>${tail?`<span class="cut__tail">${esc(tail)}</span>`:''}`;};
  function freeRoute(route){const m=catalogMap.get(split(route).raw);return !!m&&priceInfo(m).kind==='free';}
  function laneIndex(role,group){const keys=group==='vibe'?workers():roleKeys;return Math.max(0,keys.indexOf(role));}
  // One CUT on every surface: lane, editors, drawer. A lane CUT is a container whose name is the <button data-edit>.
@@ -704,9 +708,9 @@
   const tip=[alias+title+' · '+provider,r,health.text,...notes].filter(Boolean).join('\n');
   const label=`Змінити CUT ${i+1}, ${group==='pool'?poolNames[role]:role}: ${alias}${title} · ${provider}${m.effort?' · thinking '+m.effort:''}${free?' · FREE':''}${inherited?' · '+INHERIT_NOTE[inherited]:''}${deleted?' · DELETED — відсутній у провайдера':''}${replacement?' · заміна DeepSeek':''}${skipped.length?' · пропущено':''}${health.text?' · '+health.text:''}`;
   // A fixed CUT is printed tape: its name is not a key, its thinking is printed, it is no drop target.
-  const name=fixed?`<span class="cut__name cut__name--split" title="${esc(tip)}">${nameMarkup(title)}</span>`:`<button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title)}</button>`;
+  const name=fixed?`<span class="cut__name cut__name--split" title="${esc(tip)}">${nameMarkup(title,free)}</span>`:`<button type="button" class="cut__name cut__name--split" data-edit="${esc(role)}" data-index="${i}" data-group="${group}" title="${esc(tip)}" aria-label="${esc(label)}">${nameMarkup(title,free)}</button>`;
   const think=fixed?(group!=='vibe'&&roleInfo(role)?.thinking===false?'':`<span class="cut__think">${esc(m.effort||'типово')}</span>`):thinkSelect(m,role,i,group,`Thinking: ${group==='pool'?poolNames[role]:role}, CUT ${i+1}`);
-  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-route="${esc(r)}" data-clip-key="${clipKey(role,r,i,group)}"${fixed?'':` data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"`}${inherited?` data-inherited="${inherited}"`:''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}${sourceTab(role,i,group,inherited)}<span class="cut__edge"></span>${name}<span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${think}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl" title="заміна DeepSeek" aria-hidden="true">⇄</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${more}${health.bar}</div>`;
+  return `<div class="${classes}"${sequence?' role="listitem"':''} data-p="${providerSlot(m.provider)}" data-route="${esc(r)}" data-clip-key="${clipKey(role,r,i,group)}"${fixed?'':` data-node-role="${esc(role)}" data-index="${i}" data-group="${group}"`}${inherited?` data-inherited="${inherited}"`:''} style="--li:${laneIndex(role,group)}">${sequence?`<span class="cut__ord" aria-hidden="true">${String(i+1).padStart(2,'0')}</span>`:''}${sourceTab(role,i,group,inherited)}<span class="cut__edge"></span>${name}<span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b>${think}${alias?`<span class="cut__alias">${esc(alias.replace(/ · $/,''))}</span>`:''}<span class="stamp stamp--repl cut__repl" title="заміна DeepSeek" aria-hidden="true">⇄</span>${skipped.length?'<span class="stamp stamp--skip">пропуск</span>':''}${warn?'<span class="hs hs--low" aria-hidden="true">!</span>':''}${deleted?'<span class="stamp stamp--del">DELETED</span>':''}${free?'<span class="stamp stamp--free">FREE</span>':''}</span>${more}${health.bar}</div>`;
  }
  function stepCount(){
   if(renderCache?.steps!=null)return renderCache.steps;
@@ -1101,7 +1105,7 @@
  function markTarget(d,target){if(target===d.target)return;d.target?.classList.remove('is-hot','is-drop');d.target=target;target?.classList.add(target.matches('.socket')?'is-hot':'is-drop');}
  // What the ghost shows: the CUT itself, or for a pool key / a picker row the same CUT the lane would get.
  function ghostCut(d){
-  if(d.node.matches('.cut'))return d.node.cloneNode(true);
+  if(d.node.matches('.cut')){const copy=d.node.cloneNode(true);copy.querySelector('.cut__head.is-run')?.classList.remove('is-run');return copy;}
   const t=document.createElement('template'),name=poolName(d.key||'');
   if(name)t.innerHTML=`<div class="cut cut--pool${name==='free-fast'?' cut--pool-fast':''}"><span class="cut__edge"></span><span class="cut__name">${poolNames[name]}</span><span class="cut__meta"><span class="stack${name==='free-fast'?' stack--fast':''}"></span><span>${source.freePools?.[name]?.length||0} CUTS · спільний</span></span></div>`;
   else{const route=d.route||d.key,m=split(route);t.innerHTML=drawerCut(catalogMap.get(m.raw)||{...m,name:m.id});}
@@ -1173,6 +1177,17 @@
   }
   render();pickerFocus(focus);
  }
+// LCD marquee: a CUT name the tape cuts with an ellipsis runs to its end and back under the hand or the focus, like
+ // a device display (transform only, measured once on entry). Motion off or a name that fits: nothing moves.
+ const calmMotion=matchMedia('(prefers-reduced-motion: reduce)');
+ function nameRun(e){
+  const cut=e.target instanceof Element&&e.target.closest('.cut');if(!cut||cut.contains(e.relatedTarget))return;
+  const head=cut.querySelector('.cut__head');if(!head)return;
+  if(e.type==='pointerout'||e.type==='focusout'){if(!cut.matches(e.type==='pointerout'?':focus-visible,:has(:focus-visible)':':hover'))head.classList.remove('is-run');return;}
+  const d=head.scrollWidth-head.clientWidth;if(calmMotion.matches||d<2||head.classList.contains('is-run'))return;
+  head.style.setProperty('--run',-d+'px');head.style.setProperty('--run-t',Math.max(2.4,d/22).toFixed(2)+'s');head.classList.add('is-run');
+ }
+ for(const type of ['pointerover','pointerout','focusin','focusout'])root.addEventListener(type,nameRun);
  function cutDrop(d){
   if(!d.target){render();return;}
   const t=d.target.dataset,target={role:t.nodeRole||t.edit,index:Number(t.index),group:t.group||'role'};
@@ -1974,7 +1989,7 @@
   const note=pick?.current?'поточний CUT':pick?.used?'на доріжці':'',warn=routeWarning(route)?'потребує уваги':'';
   const think=pick?[note,warn].filter(Boolean).join(' · ')||(m.reasoning===false?'без thinking':isLocal(m.provider)?'локально':provider):m.reasoning===false?'без thinking':isLocal(m.provider)?'локально':'типово';
   const attrs=pick?`data-pick="${esc(route)}" data-cut-route="${esc(route)}" aria-pressed="${!!pick.current}"`:`data-cut="${esc(route)}" aria-pressed="${armed}"`;
-  return `<button type="button" class="cut${free?' cut--free':''}${deleted?' cut--deleted':''}${armed?' is-armed':''}${pick?.current?' is-current':''}" data-p="${providerSlot(m.provider)}" ${attrs} aria-label="${esc(title+' · '+provider+(free?' · FREE':'')+(note?' · '+note:'')+' · '+route+(health.text?' · '+health.text:''))}" title="${esc([title+' · '+provider,route,health.text].filter(Boolean).join('\n'))}"><span class="cut__edge"></span><span class="cut__name cut__name--split">${nameMarkup(title)}</span><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b><span class="cut__think">${esc(think)}</span>${deleted?'<span class="stamp stamp--del">DELETED</span>':''}</span>${free?'<span class="stamp stamp--free">FREE</span>':''}${health.bar}</button>`;
+  return `<button type="button" class="cut${free?' cut--free':''}${deleted?' cut--deleted':''}${armed?' is-armed':''}${pick?.current?' is-current':''}" data-p="${providerSlot(m.provider)}" ${attrs} aria-label="${esc(title+' · '+provider+(free?' · FREE':'')+(note?' · '+note:'')+' · '+route+(health.text?' · '+health.text:''))}" title="${esc([title+' · '+provider,route,health.text].filter(Boolean).join('\n'))}"><span class="cut__edge"></span><span class="cut__name cut__name--split">${nameMarkup(title,free)}</span><span class="cut__meta">${health.glyph}<b class="tag" data-p="${providerSlot(m.provider)}">${esc(providerCode(m.provider))}</b><span class="cut__think">${esc(think)}</span>${deleted?'<span class="stamp stamp--del">DELETED</span>':''}${free?'<span class="stamp stamp--free">FREE</span>':''}</span>${health.bar}</button>`;
  }
  // No model at all (Колекція), or none reachable to place (the drawer): the empty state says so and offers the
  // provider form instead of blaming the filters.

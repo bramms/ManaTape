@@ -920,11 +920,13 @@ a.key{text-decoration:none}
 .cut__name--split{display:flex;min-width:0}
 .cut__head{min-width:1.5ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto}
 .cut__tail{flex:none;white-space:pre}
-.cut--free .cut__name{padding-right:40px}
+/* LCD marquee: under the hand or the focus a cut name runs to its end and back (transform only; no ellipsis while
+   it runs). Only a name that does not fit runs; motion off stops it with every other animation. */
+.cut__head.is-run{text-overflow:clip}
+.cut__head.is-run>.cut__run{display:inline-block;will-change:transform;animation:cut-run var(--run-t,3s) var(--e-io) .35s infinite alternate}
+@keyframes cut-run{0%,12%{transform:none}88%,100%{transform:translateX(var(--run,0))}}
 .cut--more .cut__name{padding-right:26px}
-.cut--free.cut--more .cut__name{padding-right:40px}
-.cut--free.cut--more .cut__meta{padding-right:26px}
-.cut__meta{display:flex;align-items:center;gap:6px;margin-top:4px;min-width:0;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);white-space:nowrap}
+.cut__meta{display:flex;align-items:center;gap:4px;margin-top:4px;min-width:0;font:400 var(--fs-label)/1 var(--font-mono);color:var(--tape-ink-2);white-space:nowrap}
 .cut__think{min-width:0;overflow:hidden;text-overflow:ellipsis}   /* drawer CUTs print thinking as plain text */
 /* THINKING KEY on a lane or editor CUT: a small raised tab of the ⋯ key's material (24px hit, 20px visible: the
    transparent border is part of the target) that opens the shared Thinking menu. Its value never collapses to «h…»
@@ -948,7 +950,6 @@ button.cut__think:disabled{cursor:default;color:color-mix(in srgb,var(--tape-ink
 .cut__more:active{box-shadow:var(--el-pressed)}
 .cut__more:focus-visible{box-shadow:var(--ring)}
 .cut__more[aria-expanded=true]{box-shadow:var(--el-pressed);color:var(--tape-ink)}
-.cut--free .cut__more{top:auto;bottom:9px}
 /* order number for ordered lists (replacements, pools) */
 .cut__ord{position:absolute;left:8px;top:-8px;min-width:22px;height:15px;padding:0 4px;border-radius:8px;display:grid;place-items:center;font:700 var(--fs-label)/1 var(--font-mono);color:var(--tape-hi);background:var(--tape-ink-2);font-variant-numeric:tabular-nums}
 /* provider chip — text colour pre-checked (≥ 4.7:1) */
@@ -984,8 +985,10 @@ button.cut__think:disabled{cursor:default;color:color-mix(in srgb,var(--tape-ink
 .health-off .lg--off{display:inline-flex}
 /* stamps: FREE (kept when HEALTH is off; never for an unknown tariff), DELETED (solid red), заміна ⇄, поточний */
 .stamp{display:inline-block;font:700 var(--fs-label)/1 var(--font-mono);letter-spacing:.04em;padding:2px 4px;border-radius:var(--r-xs);color:var(--ok-ink);box-shadow:inset 0 0 0 1.5px currentColor;white-space:nowrap}
-.cut .stamp--free{position:absolute;top:5px;right:6px;transform:rotate(-3deg);opacity:.92}
-.cut--more:not(.cut--free) .stamp--free{right:32px}
+/* FREE closes the meta row, so the name keeps the full width: a compact stamp that may take the CUT's right margin,
+   where the corner stamp used to sit, so the thinking key and the provider tag never give way to it */
+.cut .stamp--free{flex:none;margin-left:auto;padding:1px 3px;font-size:10px;letter-spacing:0;transform:rotate(-3deg);opacity:.92}
+.cut--free .cut__meta{margin-right:-6px}
 .stamp--del{color:#fff;background:var(--del);box-shadow:none}
 .stamp--repl{color:var(--warn-ink)}
 .stamp--skip{color:var(--warn-ink)}
@@ -1001,8 +1004,6 @@ button.cut__think:disabled{cursor:default;color:color-mix(in srgb,var(--tape-ink
 .cut.is-replaced .cut__name{padding-right:26px}
 .cut--more.is-replaced .cut__repl{right:32px}
 .cut--more.is-replaced .cut__name{padding-right:52px}
-.cut--free.is-replaced .cut__repl{right:46px}
-.cut--free.is-replaced .cut__name{padding-right:66px}
 .cut--deleted.is-replaced .cut__repl{right:70px}
 .cut--deleted.is-replaced .cut__name{padding-right:90px}
 .cut .stamp--skip{position:absolute;top:-8px;right:30px;background:var(--tape-hi);z-index:1}
