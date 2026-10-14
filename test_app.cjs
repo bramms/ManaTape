@@ -259,6 +259,19 @@ test('every CommandCode account shows 5 год, Тиждень and Місяць;
  for(const h of html){assert.doesNotMatch(h,/Credit balance|5-hour|Weekly/);assert.doesNotMatch(visible(h),/кредит|credits|кр\./,'plan units are «од.» on the glass');}
 });
 
+test('every Antigravity account shows Gemini first, then the shared Claude & GPT pool, each 5 год before the week',()=>{
+ const lim=(fam,label,win,ms)=>({id:'google-antigravity:'+fam+':default:'+win,label,window:win,durationMs:ms,remaining:50});
+ const g5=lim('google','Gemini','5 Hour',18e6),gw=lim('google','Gemini','Weekly',6048e5),c5=lim('anthropic','Claude & GPT (shared)','5 Hour',18e6),cw=lim('anthropic','Claude & GPT (shared)','Weekly',6048e5);
+ const reports=[{provider:'google-antigravity',account:1,at:1,limits:[cw,g5,gw,c5]},{provider:'google-antigravity',account:2,at:1,limits:[g5,gw,cw,c5]},{provider:'other',account:3,at:1,limits:[cw,g5]}];
+ const context={source:{insights:{usage:{reports}}},myProviderIds:()=>new Set()};runInNewContext(appFunction('usageReports'),context);
+ const ids=r=>Array.from(r.limits,l=>l.label+' '+l.window),shown=context.usageReports();
+ const order=['Gemini 5 Hour','Gemini Weekly','Claude & GPT (shared) 5 Hour','Claude & GPT (shared) Weekly'];
+ assert.deepEqual(ids(shown[0]),order,'the order OMP reports in does not move the cells');
+ assert.deepEqual(ids(shown[1]),order);
+ assert.deepEqual(ids(shown[2]),['Claude & GPT (shared) Weekly','Gemini 5 Hour'],'other providers keep their order');
+ assert.equal(reports[0].limits[0],cw,'the snapshot itself is not changed');
+});
+
 test('quota screens stay compact, keep complete family labels and give each account a stable screen and its own ТОН encoder',()=>{
  const ManaScreen=require('./static/screen.js');
  let reports=[{provider:'google-antigravity',account:4,limits:['Anthropic','Claude','Google','OpenAI'].map(label=>({label:label+' 7 day',window:'7 day',remaining:50}))},

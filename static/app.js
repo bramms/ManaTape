@@ -1529,6 +1529,10 @@
    r.limits=[['primary','5 год',/5.*(hour|год)/i],['secondary','Тиждень',/week|тиж|7.*day/i],['tertiary','Місяць',/month|місяц/i]].map(([id,label,pattern])=>{
     const at=rest.findIndex(l=>pattern.test(l.window+' '+l.label));return at<0?{id,label,window:'',remaining:null}:rest.splice(at,1)[0];}).concat(rest);
   }
+  // OMP reports Antigravity's windows in any order; every account shows Gemini first, then the other families,
+  // and in each family the shorter window (5 год) before the longer one (Тиждень).
+  const gemini=l=>/:google:|gemini/i.test(l.id+' '+l.label)?0:1;
+  for(const r of reports.filter(r=>r.provider==='google-antigravity'))r.limits.sort((a,b)=>gemini(a)-gemini(b)||String(a.label).localeCompare(String(b.label))||(a.durationMs??Infinity)-(b.durationMs??Infinity));
   return reports;
  }
 
