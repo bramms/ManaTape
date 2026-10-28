@@ -589,12 +589,14 @@
   return g&&!Object.hasOwn(own.retry.fallbackChains,'default')?'global':'default';
  }
  // One lane edit written into this file's own layer. A project writes only what differs from what it inherits (a
- // value it already holds stays its own); a котушка holds only the primary.
+ // value it already holds stays its own); a котушка holds only the primary. The first CUT on an empty lane is the
+ // whole lane: it does not bring the `default` reserves along (owner's decision 2026-10-28).
  function oldSetChain(role,list,group='role'){
   if(group==='vibe'){writeAgent(role,agentFromResolved(role,list));return;}
   const own=p(),L=eff(own),configured=!!L.modelRoles[role],tail=list.slice(1),before=roleFallbacks(role);
   if(Object.hasOwn(own.modelRoles,role)||list[0]!==L.modelRoles[role])own.modelRoles[role]=list[0];
   if((configured||tail.length)&&JSON.stringify(tail)!==JSON.stringify(before))own.retry.fallbackChains[role]=tail;
+  else if(!configured&&list.length&&before.length&&!Object.hasOwn(L.retry.fallbackChains,role)&&!presetLike()){own.retry.fallbackChains[role]=[];chainNotes.push(role+' не бере резерви default');}
  }
  // An agent edit never rewrites a role: every @role keeps its place among the agent's own CUTS.
  function agentFromResolved(worker,list){

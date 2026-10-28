@@ -423,14 +423,16 @@ test('CUTS resize starts at the visible edge, commits locally, and Escape restor
 test('built-in roles stay visible with empty assignments without changing drafts',()=>{
  const builtinRoles=[{id:'default'},{id:'smol'},{id:'image',kinds:['image'],thinking:false,defaultFallbacks:false}];
  const profile={modelRoles:{},retry:{fallbackChains:{default:['p/chat']}},task:{agentModelOverrides:{}}},before=JSON.stringify(profile);
- const context=roleContext({builtinRoles,p:()=>profile});
+ const context=roleContext({builtinRoles,p:()=>profile,chainNotes:[]});
  runInNewContext(['knownRoleKeys','baseChain','oldSetChain'].map(appFunction).join('\n'),context);
  assert.deepEqual(Array.from(context.knownRoleKeys(profile)),['default','smol','image']);
  assert.deepEqual(Array.from(context.baseChain('smol')),[],'an implicit primary is not the first default fallback');
  assert.equal(JSON.stringify(profile),before,'render metadata must not create assignments');
  context.oldSetChain('smol',['p/fast']);
  assert.deepEqual(profile.modelRoles,{smol:'p/fast'});
- assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'smol'),'first assignment preserves OMP fallback defaults');
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.smol),[],'the first CUT on an empty lane is the whole lane: no default reserves');
+ assert.deepEqual(Array.from(context.baseChain('smol')),['p/fast']);
+ delete profile.retry.fallbackChains.smol;
  context.oldSetChain('smol',['p/other',...context.roleFallbacks('smol')]);assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'smol'),'replacing only a primary preserves implicit fallback defaults');
  delete profile.modelRoles.smol;profile.retry.fallbackChains.smol=['p/spare'];context.oldSetChain('smol',['p/new']);assert.deepEqual(profile.retry.fallbackChains.smol,['p/spare']);
  context.oldSetChain('image',['p/image']);
@@ -1593,6 +1595,25 @@ function layerContext(own,extra={}){
  if(!Object.hasOwn(extra,'globalLayer'))context.globalLayer=structuredClone(GLOBAL);
  return {context,profile};
 }
+
+test('the first CUT on an empty lane brings no default reserves along; a lane that is set keeps its inheritance',()=>{
+ // Standard: default has reserves, plan is empty.
+ let {context,profile}=layerContext({modelRoles:{default:'p/def'},retry:{fallbackChains:{default:['p/d1','p/d2']}}},{globalLayer:null});
+ assert.ok(context.setChain('plan',['p/plan']));
+ assert.deepEqual(Array.from(context.chain('plan')),['p/plan'],'not p/plan + the whole default tail');
+ assert.deepEqual(Array.from(profile.retry.fallbackChains.plan),[]);assert.match(context.state.opFeedback,/plan не бере резерви default/);
+ // A further drop adds one CUT, nothing is copied from default.
+ assert.ok(context.setChain('plan',['p/plan','p/x']));assert.deepEqual(Array.from(profile.retry.fallbackChains.plan),['p/x']);
+ // A role that already inherits default keeps doing so when only its primary changes.
+ profile.modelRoles.smol='p/s';assert.ok(context.setChain('smol',['p/s2','p/d1','p/d2']));assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'smol'));
+ // A project: an empty lane in both files does not take the Global default reserves either.
+ ({context,profile}=layerContext({}));
+ assert.ok(context.setChain('plan',['p/plan']));
+ assert.deepEqual(Array.from(context.chain('plan')),['p/plan']);assert.deepEqual(Array.from(profile.retry.fallbackChains.plan),[]);
+ // A котушка holds primaries only: it never gets a reserves list.
+ ({context,profile}=layerContext({modelRoles:{default:'p/def'},retry:{fallbackChains:{default:['p/d1']}}},{globalLayer:null,state:{profile:'preset:night',syncVibe:false,opFeedback:''}}));
+ assert.ok(context.setChain('plan',['p/plan']));assert.ok(!Object.hasOwn(profile.retry.fallbackChains,'plan'));
+});
 
 test('layers: a project lane reads the Global value per key and an edit writes only what differs into the project',()=>{
  const {context,profile}=layerContext({modelRoles:{task:'p/task'},retry:{fallbackChains:{task:['p/t1']}},disabledProviders:undefined});
