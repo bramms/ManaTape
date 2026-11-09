@@ -188,7 +188,7 @@ unrelated: {keep: true}
         with self.assertRaises(Problem):
             self.app.path('Standard')
 
-    def test_commandcode_telemetry_strips_identity_and_tracks_staleness(self):
+    def test_commandcode_telemetry_strips_identity(self):
         from insights import commandcode_report
         payload = [{'provider':'commandcode','usage':{'updatedAt':'2026-09-19T08:58:05Z',
             'identity':{'accountEmail':'private@example.test'},'loginMethod':'private balance',
@@ -198,14 +198,8 @@ unrelated: {keep: true}
         self.assertEqual([l['remaining'] for l in report['limits']],[94.4,33.1,22.9])
         self.assertNotIn('private',json.dumps(report))
         self.assertNotIn('identity',report)
-        (self.app.state_dir/'commandcode-usage.json').write_text(json.dumps(report))
-        with patch('insights.time.time',return_value=report['at']+60):
-            self.assertFalse(self.app.insights.snapshot()['usage']['reports'][-1]['stale'])
-        with patch('insights.time.time',return_value=report['at']+901):
-            self.assertTrue(self.app.insights.snapshot()['usage']['reports'][-1]['stale'])
         with self.assertRaises(ValueError):
             commandcode_report([{'provider':'commandcode','error':'No session'}])
-        self.assertEqual(self.app.insights.data['usage']['reports'],[])
 
     def test_key_never_in_snapshot_or_registry(self):
         keydir = self.agent/'forge-keys'
@@ -745,7 +739,7 @@ unrelated: {keep: true}
         self.assertEqual([plan_cap(3.68, 5.3), plan_cap(70, 100), plan_cap(54.25, 77.5), plan_cap(150, 50)], [70, 70, 70, 300])
         self.assertEqual([plan_cap(0.5, 0.7), plan_cap(0, 50), plan_cap(3, None), plan_cap(3, 101)], [None] * 4)
 
-    def test_snapshot_merges_codexbar_into_native_commandcode_and_keeps_it_alone_otherwise(self):
+    def test_snapshot_uses_codexbar_only_to_enrich_omp_commandcode(self):
         now = time.time()
         native = [self.commandcode_native(1, 0.686, 7.875, 3.68, now - 120), self.commandcode_native(2, 0, 0, 70, now - 120)]
         (self.app.state_dir / 'commandcode-usage.json').write_text(json.dumps(self.codexbar(now - 30)))
@@ -754,9 +748,12 @@ unrelated: {keep: true}
         self.assertEqual([r['provider'] for r in reports], ['commandcode', 'commandcode'], 'CodexBar adds no third account')
         self.assertEqual([r['limits'][2]['remaining'] for r in reports], [5.3, 100.0], 'same plan: the second month is an estimate')
         self.assertEqual(self.app.insights.data['usage']['reports'][0]['limits'][2]['label'], 'Credit balance', 'stored data stays native')
-        self.app.insights.data['usage']['reports'] = []
-        alone = self.app.insights.snapshot()['usage']['reports']
-        self.assertEqual([(r['source'], r['stale']) for r in alone], [('CodexBar · Mac', False)])
+        other = {'provider': 'openai-codex', 'account': 1, 'at': now, 'limits': []}
+        self.app.insights.data['usage']['reports'] = [other]
+        for age in (30, 901):
+            with self.subTest(codexbar_age=age):
+                (self.app.state_dir / 'commandcode-usage.json').write_text(json.dumps(self.codexbar(now - age)))
+                self.assertEqual(self.app.insights.snapshot()['usage']['reports'], [other])
 
     def test_failure_log_names_type_and_place_but_no_message(self):
         try:

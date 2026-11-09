@@ -257,6 +257,8 @@ test('every CommandCode account shows 5 год, Тиждень and Місяць;
  assert.match(fresh[2],/title="Місяць · залишок 70 од\. · % невідомий: OMP дає лише залишок/);
  assert.match(fresh[1],/<b class="win__v">—<\/b><\/div>[^]*немає виміру/,'an unreported week stays «немає виміру» without an amount');
  for(const h of html){assert.doesNotMatch(h,/Credit balance|5-hour|Weekly/);assert.doesNotMatch(visible(h),/кредит|credits|кр\./,'plan units are «од.» on the glass');}
+ context.source.insights.usage.reports=[reports[2]];
+ assert.deepEqual(Array.from(context.usageScreens().rows,r=>r.provider),['other'],'a configured CommandCode provider without an OMP report gets no screen');
 });
 
 test('every Antigravity account shows Gemini first, then the shared Claude & GPT pool, each 5 год before the week',()=>{

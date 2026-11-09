@@ -321,21 +321,19 @@ class Insights:
         usage = self.data['usage']
         # Snapshots stored before merge_shared existed still carry the duplicates.
         reports = [{**r, 'limits': merge_shared(r.get('limits') or [])} for r in usage['reports']]
-        external, now = None, time.time()
-        # The Mac launcher pushes CodexBar's snapshot into the state directory it was configured with.
-        for folder in dict.fromkeys((app.state_dir, self.app.state_dir)):
-            try:
-                found = json.loads((folder / 'commandcode-usage.json').read_text(encoding='utf-8'))
-                if found.get('provider') == 'commandcode' and found.get('limits'):
-                    external = {**found, 'stale': now - found['at'] > FRESH}
-                    break
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
         if any(r['provider'] == 'commandcode' for r in reports):
-            # OMP's own accounts stand; CodexBar only completes the month of the account it measured.
-            reports = commandcode_view(reports, external, now)
-        elif external:
-            reports.append(external)
+            # Read CodexBar only to complete the month of an account reported by OMP.
+            external = None
+            for folder in dict.fromkeys((app.state_dir, self.app.state_dir)):
+                try:
+                    found = json.loads((folder / 'commandcode-usage.json').read_text(encoding='utf-8'))
+                    if (isinstance(found, dict) and found.get('provider') == 'commandcode'
+                            and found.get('limits') and finite_number(found.get('at'))):
+                        external = found
+                        break
+                except (OSError, ValueError):
+                    pass
+            reports = commandcode_view(reports, external)
         benchmarks = {**self.data.get('benchmarks', {}), 'weights': app.ui.get('benchmarkWeights', WEIGHTS), 'weightsAA': app.ui.get('benchmarkWeightsAA', AA_WEIGHTS)}
         return {**self.data, 'benchmarks': benchmarks, 'usage': {**usage, 'reports': reports}}
 

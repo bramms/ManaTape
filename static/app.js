@@ -1525,7 +1525,6 @@
  // insights.commandcode_month); a window OMP did not measure for that account stays its own «немає виміру» cell.
  function usageReports(){
   const reports=(source.insights?.usage?.reports||[]).map(r=>({...r,stale:!!r.stale||!r.at||Date.now()/1000-r.at>900,limits:[...r.limits]}));
-  if(!reports.some(r=>r.provider==='commandcode')&&myProviderIds().has('commandcode'))reports.push({provider:'commandcode',at:0,source:'CodexBar · Mac',limits:[]});
   for(const r of reports.filter(r=>r.provider==='commandcode')){
    const rest=[...r.limits];
    r.limits=[['primary','5 год',/5.*(hour|год)/i],['secondary','Тиждень',/week|тиж|7.*day/i],['tertiary','Місяць',/month|місяц/i]].map(([id,label,pattern])=>{
