@@ -193,8 +193,12 @@ def usage_report(report, account):
     fetched = report.get('fetchedAt', 0)
     if not finite_number(fetched):
         raise ValueError('fetchedAt')
+    metadata = report.get('metadata') or {}
+    # Only the account's e-mail crosses into the panel (so two accounts of one provider can be told apart); the rest
+    # of OMP's metadata (account and org ids) stays out.
+    email = metadata.get('email')
     return {'provider': report['provider'], 'account': account, 'at': fetched / 1000,
-        'plan': (report.get('metadata') or {}).get('planType', ''), 'limits': limits}
+        'plan': metadata.get('planType', ''), 'email': email.strip() if isinstance(email, str) else '', 'limits': limits}
 
 
 # CodexBar and OMP read the same CommandCode account when its 5 h and weekly remaining agree this closely (points).
@@ -353,7 +357,7 @@ class Insights:
             now, changed = time.time(), False
             if now - self.data['usage'].get('at', 0) >= (20 if force else 300):
                 try:
-                    native = self.native(['usage', '--json', '--redact'], 60)
+                    native = self.native(['usage', '--json'], 60)
                     reports, skipped = [], 0
                     for n, report in enumerate(native.get('reports', [])):
                         try:

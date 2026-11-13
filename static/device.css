@@ -659,6 +659,9 @@ a.key{text-decoration:none}
 .g-name{font:700 var(--fs-data)/1 var(--font-mono);color:var(--s-ink);text-shadow:0 0 7px rgb(var(--s-ink-c)/calc(var(--s-glow)*.6));overflow:hidden;text-overflow:ellipsis;min-width:0}
 .g-age{color:var(--s-dim)}
 .g-age.is-stale{color:var(--s-warn)}
+/* The account's e-mail beside the provider name: tells two accounts of one provider apart. */
+.g-who{color:var(--s-acc);min-width:0;overflow:hidden;text-overflow:ellipsis}
+.screens .g-head .g-who{flex:0 1 auto;max-width:100%}
 .g-mode{color:var(--s-acc);text-shadow:0 0 7px rgb(var(--s-acc-c)/var(--s-glow))}
 .g-head .strip__grow,.g-grow{flex:1}
 .g-head__sel{overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -727,7 +730,7 @@ a.key{text-decoration:none}
 .tariff__head>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .tariff__head b{display:inline-block;min-width:7ch;color:var(--s-acc);text-shadow:0 0 7px rgb(var(--s-acc-c)/var(--s-glow))}
 .tariff__head .g-hint{align-self:center}
-.tariff__dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--s-acc);box-shadow:0 0 6px rgb(var(--s-acc-c)/.9);margin-right:6px;vertical-align:1px}
+.tariff__dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--s-ok);box-shadow:0 0 6px rgb(var(--s-ok-c)/.9);margin-right:6px;vertical-align:1px}
 .tariff__dot.is-peak{background:var(--s-bad);box-shadow:0 0 6px rgb(var(--s-bad-c)/.9)}
 .tariff__plot{position:relative;height:34px;margin-top:4px}
 .tariff__bars{position:absolute;inset:0}

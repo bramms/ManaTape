@@ -694,6 +694,14 @@ unrelated: {keep: true}
             {'id': 'z', 'label': 'Z', 'amount': {'used': 3, 'limit': 0}}]}, 1)
         self.assertEqual([l.get('balance') for l in odd['limits']], [None] * 4, 'no absolute reading, no amount')
 
+    def test_usage_report_keeps_only_the_account_email_from_metadata(self):
+        from insights import usage_report
+        report = usage_report({'provider': 'openai-codex', 'fetchedAt': 1000, 'limits': [],
+            'metadata': {'email': ' a@example.com ', 'accountId': 'secret-id', 'orgId': 'org', 'planType': 'plus'}}, 1)
+        self.assertEqual((report['email'], report['plan']), ('a@example.com', 'plus'))
+        self.assertNotIn('secret-id', repr(report))
+        self.assertEqual(usage_report({'provider': 'p', 'fetchedAt': 1, 'limits': []}, 1)['email'], '')
+
     def test_codexbar_month_joins_only_the_account_it_measured(self):
         from insights import commandcode_view
         now = 1791824900

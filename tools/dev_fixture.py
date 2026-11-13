@@ -130,7 +130,8 @@ def seed_showcase():
             limits.append(dict(id=str(i), label=['5 год', 'Тиждень', 'Місяць', 'Доба'][i],
                                window=['5 год', 'Тиждень', 'Місяць', 'Доба'][i], durationMs=duration,
                                remaining=left, starts=now*1000-duration*.35, resets=now*1000+duration*.65, models=[]))
-        reports.append(dict(provider=pid, account=1, at=now, plan='DEMO · вигадані ліміти', source='DEMO', limits=limits))
+        reports.append(dict(provider=pid, account=1, at=now, plan='DEMO · вигадані ліміти', source='DEMO', limits=limits,
+                            email=pid.replace('demo-', '')+'@example.com'))
     reports += commandcode_demo(state, now)
     hour = int(now // 3600)*3600000
     series = [dict(timestamp=hour-(47-i)*3600000, requests=8+(i*7)%37, tokens=2500+(i*1307)%28000,
@@ -169,7 +170,7 @@ def commandcode_demo(state, now):
             return {'id': 'commandcode:' + key, 'label': label + ' limit', 'status': 'ok',
                     'window': {'id': key, 'label': label, 'durationMs': ms, 'resetsAt': int(now * 1000 + ms * left)},
                     'amount': {'used': used, 'limit': cap, 'usedFraction': used / cap, 'unit': 'credits'}}
-        report = usage_report({'provider': 'commandcode', 'fetchedAt': now * 1000, 'limits': [
+        report = usage_report({'provider': 'commandcode', 'fetchedAt': now * 1000, 'metadata': {'email': f'writer{n}@example.com'}, 'limits': [
             window('5h', '5-hour', 14, used_5h, 18000000, .45), window('7d', 'Weekly', 35, used_week, 604800000, .6),
             {'id': 'commandcode:balance', 'label': 'Credit balance', 'amount': {'remaining': balance, 'unit': 'credits'}}]}, n)
         return {**report, 'plan': 'DEMO · вигадані ліміти', 'source': 'DEMO'}
